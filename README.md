@@ -10,8 +10,18 @@ The `eris` package implements:
 - deterministic encoding to an in-memory block set; and
 - verified decoding from an in-memory block set.
 
-The package does not implement storage, file or stream I/O, networking,
-random-secret generation, or ERIS extensions.
+The `eris/fs` package implements ERIS-FS version 1:
+
+- canonical deterministic CBOR index encoding and strict decoding;
+- low-level index, ERIS reader, and abstract block storage APIs;
+- regular, executable, symbolic-link, and nested-image entries;
+- host-independent builders that accept `io.Reader` values and abstract block
+  stores;
+- a high-level read-only `FileSystem` interface based on `io/fs`; and
+- verified random-access file reads through `io.ReaderAt` and `io.Seeker`.
+
+The core `eris` package does not implement storage, file or stream I/O,
+networking, random-secret generation, or ERIS extensions.
 
 ```go
 secret := eris.Secret{} // The null convergence secret.
@@ -22,6 +32,37 @@ if err != nil {
 
 decoded, err := eris.Decode(capability, blocks)
 ```
+
+Build and open an ERIS-FS image without host file-system access:
+
+```go
+blocks := make(eris.BlockSet)
+builder := erisfs.NewBuilder(blocks, eris.Secret{})
+if err := builder.AddFile("docs/readme", strings.NewReader("hello"), false); err != nil {
+	return err
+}
+
+capability, err := builder.Finish()
+if err != nil {
+	return err
+}
+image, err := erisfs.OpenFS(capability, blocks)
+if err != nil {
+	return err
+}
+file, err := image.OpenFile("docs/readme") // io.ReaderAt and io.Seeker
+if err != nil {
+	return err
+}
+defer file.Close()
+```
+
+Use `Index`, `EncodeIndex`, `DecodeIndex`, and `NewReader` for low-level
+ERIS-FS plumbing. Use `Builder`, `OpenFS`, and `FileSystem` for the high-level
+file-system API.
+
+`OpenFS` and `DecodeIndex` limit each decoded index to 64 MiB. Use
+`OpenFSWithLimit` or `DecodeIndexWithLimit` to select another application limit.
 
 Callers that need stronger resistance to confirmation attacks must generate a
 cryptographically secure, unique `eris.Secret` outside this package. ERIS does

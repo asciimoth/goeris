@@ -96,6 +96,29 @@ type Pair struct {
 // Encode owns the slices in the set. Decode does not modify them.
 type BlockSet map[Reference][]byte
 
+// GetBlock returns a copy of the encrypted block for ref. It lets BlockSet be
+// used as a storage abstraction by packages that must not access host storage.
+func (s BlockSet) GetBlock(ref Reference) ([]byte, error) {
+	block, ok := s[ref]
+	if !ok {
+		return nil, ErrMissingBlock
+	}
+	return append([]byte(nil), block...), nil
+}
+
+// PutBlock stores a copy of an encrypted block. The reference is verified
+// before the map is changed.
+func (s BlockSet) PutBlock(ref Reference, block []byte) error {
+	if s == nil {
+		return ErrMissingBlock
+	}
+	if err := VerifyBlock(block, ref); err != nil {
+		return err
+	}
+	s[ref] = append([]byte(nil), block...)
+	return nil
+}
+
 var base32Encoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 // String returns the unpadded Base32 encoding of r.

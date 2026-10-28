@@ -35,6 +35,36 @@ func TestBlockSize(t *testing.T) {
 	}
 }
 
+func TestBlockSetStorage(t *testing.T) {
+	t.Parallel()
+	node := make([]byte, BlockSize1KiB)
+	block, pair, _ := EncryptNode(node, Secret{}, 0)
+	blocks := make(BlockSet)
+	if err := blocks.PutBlock(pair.Reference, block); err != nil {
+		t.Fatal(err)
+	}
+	block[0] ^= 1
+	got, err := blocks.GetBlock(pair.Reference)
+	if err != nil || got[0] == block[0] {
+		t.Fatal("block set did not copy input")
+	}
+	got[0] ^= 1
+	again, _ := blocks.GetBlock(pair.Reference)
+	if got[0] == again[0] {
+		t.Fatal("block set did not copy output")
+	}
+	if _, err = blocks.GetBlock(Reference{1}); !errors.Is(err, ErrMissingBlock) {
+		t.Fatalf("missing error = %v", err)
+	}
+	if err = (BlockSet(nil)).PutBlock(pair.Reference, again); !errors.Is(err, ErrMissingBlock) {
+		t.Fatalf("nil set error = %v", err)
+	}
+	again[0] ^= 1
+	if err = blocks.PutBlock(pair.Reference, again); !errors.Is(err, ErrInvalidBlock) {
+		t.Fatalf("invalid block error = %v", err)
+	}
+}
+
 func TestReferenceEncoding(t *testing.T) {
 	t.Parallel()
 
