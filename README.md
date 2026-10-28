@@ -10,6 +10,13 @@ The `eris` package implements:
 - deterministic encoding to an in-memory block set; and
 - verified decoding from an in-memory block set.
 
+The `eris/cbor` package implements the ERIS CBOR transport format:
+
+- deterministic tagged, untagged, and self-described arrays;
+- tagged and untagged CBOR sequences;
+- definite-length and indefinite-length decoding; and
+- typed blocks, references, verified block maps, and read capabilities.
+
 The `eris/fs` package implements ERIS-FS version 1:
 
 - canonical deterministic CBOR index encoding and strict decoding;
