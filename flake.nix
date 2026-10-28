@@ -54,7 +54,7 @@
               description = "Run govulncheck";
               pass_filenames = false;
               entry = let script = pkgs.writeShellScript "govulncheckhook" ''
-                just vulncheck
+                govulncheck ./...
               ''; in builtins.toString script;
               stages = [ "pre-commit" ];
             };
