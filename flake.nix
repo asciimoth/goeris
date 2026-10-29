@@ -2,10 +2,7 @@
   description = "ERIS tools";
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    flake-utils = {
-      url = "github:numtide/flake-utils";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    flake-utils.url = "github:numtide/flake-utils";
     pre-commit-hooks = {
       url = "github:cachix/pre-commit-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -87,7 +84,7 @@
       devShells.default = pkgs.mkShell {
         inherit (checks.pre-commit-check) shellHook;
         buildInputs = with pkgs; [
-          go
+          go_1_26
           golangci-lint
           gopls
           govulncheck

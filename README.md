@@ -40,6 +40,17 @@ interface lets applications supply standard DNS, DNS over HTTPS, or an in-memory
 implementation. Resolver implementations must follow CNAME chains, as
 `*net.Resolver` does for TXT lookups.
 
+The `eris/http` package implements ERIS over HTTP:
+
+- low-level RFC 2169 N2R URL and request construction;
+- a chainable HTTP handler for encrypted blocks and decoded content;
+- abstract block retrieval with no storage implementation; and
+- a client that uses a caller-supplied HTTP request executor.
+
+The HTTP package does not create or configure a network client or server.
+Applications supply the HTTP request executor, block source, handler chain, and
+server registration.
+
 The core `eris` package does not implement storage, file or stream I/O,
 networking, random-secret generation, or ERIS extensions.
 
