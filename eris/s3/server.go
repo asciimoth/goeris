@@ -1,0 +1,204 @@
+package s3
+
+import (
+	"bytes"
+	"context"
+	"encoding/xml"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/asciimoth/eris-tools/eris"
+)
+
+// BlockSource reads encrypted ERIS blocks. It must be safe for concurrent use.
+type BlockSource interface {
+	GetBlock(ref eris.Reference) ([]byte, error)
+}
+
+// ContextBlockSource reads encrypted ERIS blocks with cancellation and
+// deadline support. Handler uses this interface when Blocks implements it.
+type ContextBlockSource interface {
+	GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error)
+}
+
+// BlockSink writes encrypted ERIS blocks. It must be safe for concurrent use.
+type BlockSink interface {
+	PutBlock(ref eris.Reference, block []byte) error
+}
+
+// ContextBlockSink writes encrypted ERIS blocks with cancellation and deadline
+// support. Handler uses this interface when Blocks implements it.
+type ContextBlockSink interface {
+	PutBlockContext(ctx context.Context, ref eris.Reference, block []byte) error
+}
+
+// RequestAuthenticator authenticates a complete request body and returns an
+// identity. Implementations must be safe for concurrent use.
+type RequestAuthenticator interface {
+	Authenticate(request *http.Request, payload []byte) (identity string, err error)
+}
+
+// RequestAuthenticatorFunc adapts a function to RequestAuthenticator.
+type RequestAuthenticatorFunc func(*http.Request, []byte) (string, error)
+
+// Authenticate implements RequestAuthenticator.
+func (function RequestAuthenticatorFunc) Authenticate(request *http.Request, payload []byte) (string, error) {
+	return function(request, payload)
+}
+
+// Authorizer decides whether identity can use method for a block. A nil
+// Authorizer permits every authenticated write.
+type Authorizer func(ctx context.Context, identity, method, bucket string, ref eris.Reference) bool
+
+// Handler serves one fixed bucket. GET and HEAD are public. PUT requires Auth,
+// public-read, and a Blocks value that also implements BlockSink or
+// ContextBlockSink. ReadOnly rejects PUT before authentication.
+type Handler struct {
+	Blocks    BlockSource
+	Bucket    string
+	ReadOnly  bool
+	Auth      RequestAuthenticator
+	Authorize Authorizer
+}
+
+// ServeHTTP implements http.Handler.
+func (handler Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if handler.Blocks == nil || !validBucket(handler.Bucket) {
+		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The handler configuration is invalid.")
+		return
+	}
+	if request.URL.RawQuery != "" {
+		writeS3Error(writer, http.StatusBadRequest, "InvalidRequest", "Query parameters are not supported.")
+		return
+	}
+	ref, ok := handler.reference(request.URL.Path)
+	if !ok {
+		writeS3Error(writer, http.StatusNotFound, "NoSuchKey", "The specified key does not exist.")
+		return
+	}
+	switch request.Method {
+	case http.MethodGet, http.MethodHead:
+		handler.get(writer, request, ref)
+	case http.MethodPut:
+		if handler.ReadOnly {
+			writer.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+			writeS3Error(writer, http.StatusMethodNotAllowed, "MethodNotAllowed", ErrReadOnly.Error())
+			return
+		}
+		handler.put(writer, request, ref)
+	default:
+		allow := http.MethodGet + ", " + http.MethodHead
+		if !handler.ReadOnly {
+			allow += ", " + http.MethodPut
+		}
+		writer.Header().Set("Allow", allow)
+		writeS3Error(writer, http.StatusMethodNotAllowed, "MethodNotAllowed", "The specified method is not allowed.")
+	}
+}
+
+func (handler Handler) reference(path string) (eris.Reference, bool) {
+	prefix := "/" + handler.Bucket + "/"
+	if !strings.HasPrefix(path, prefix) || strings.Contains(path[len(prefix):], "/") {
+		return eris.Reference{}, false
+	}
+	ref, err := eris.ParseReference(path[len(prefix):])
+	return ref, err == nil
+}
+
+func (handler Handler) get(writer http.ResponseWriter, request *http.Request, ref eris.Reference) {
+	block, err := handler.getBlock(request.Context(), ref)
+	if err != nil {
+		if errors.Is(err, eris.ErrMissingBlock) {
+			writeS3Error(writer, http.StatusNotFound, "NoSuchKey", "The specified key does not exist.")
+		} else {
+			writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store could not read the block.")
+		}
+		return
+	}
+	if err := eris.VerifyBlock(block, ref); err != nil {
+		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The stored block is invalid.")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/octet-stream")
+	writer.Header().Set("Cache-Control", "max-age=31536000, immutable")
+	http.ServeContent(writer, request, ref.String(), time.Time{}, bytes.NewReader(block))
+}
+
+func (handler Handler) put(writer http.ResponseWriter, request *http.Request, ref eris.Reference) {
+	if request.Body == nil {
+		writeS3Error(writer, http.StatusBadRequest, "InvalidRequest", "The request body is missing.")
+		return
+	}
+	limit := int64(eris.BlockSize32KiB) + 1
+	block, err := io.ReadAll(io.LimitReader(request.Body, limit))
+	if err != nil {
+		writeS3Error(writer, http.StatusBadRequest, "InvalidRequest", "The request body could not be read.")
+		return
+	}
+	if int64(len(block)) == limit {
+		writeS3Error(writer, http.StatusRequestEntityTooLarge, "EntityTooLarge", "The block is too large.")
+		return
+	}
+	if handler.Auth == nil {
+		writeS3Error(writer, http.StatusUnauthorized, "AccessDenied", "Write authentication is required.")
+		return
+	}
+	identity, err := handler.Auth.Authenticate(request, block)
+	if err != nil {
+		writeS3Error(writer, http.StatusForbidden, "SignatureDoesNotMatch", "The request signature is invalid.")
+		return
+	}
+	if handler.Authorize != nil && !handler.Authorize(request.Context(), identity, request.Method, handler.Bucket, ref) {
+		writeS3Error(writer, http.StatusForbidden, "AccessDenied", "The identity cannot write this block.")
+		return
+	}
+	if request.Header.Get("x-amz-acl") != "public-read" {
+		writeS3Error(writer, http.StatusBadRequest, "InvalidArgument", "x-amz-acl must be public-read.")
+		return
+	}
+	if err := eris.VerifyBlock(block, ref); err != nil {
+		writeS3Error(writer, http.StatusBadRequest, "BadDigest", "The block does not match its key.")
+		return
+	}
+	_, sinkOK := handler.Blocks.(BlockSink)
+	_, contextSinkOK := handler.Blocks.(ContextBlockSink)
+	if !sinkOK && !contextSinkOK {
+		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store is not writable.")
+		return
+	}
+	if err := handler.putBlock(request.Context(), ref, block); err != nil {
+		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store could not write the block.")
+		return
+	}
+	writer.WriteHeader(http.StatusOK)
+}
+
+func (handler Handler) getBlock(ctx context.Context, ref eris.Reference) ([]byte, error) {
+	if source, ok := handler.Blocks.(ContextBlockSource); ok {
+		return source.GetBlockContext(ctx, ref)
+	}
+	return handler.Blocks.GetBlock(ref)
+}
+
+func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte) error {
+	if contextual, ok := handler.Blocks.(ContextBlockSink); ok {
+		return contextual.PutBlockContext(ctx, ref, block)
+	}
+	return handler.Blocks.(BlockSink).PutBlock(ref, block)
+}
+
+type errorResponse struct {
+	XMLName xml.Name `xml:"Error"`
+	Code    string   `xml:"Code"`
+	Message string   `xml:"Message"`
+}
+
+func writeS3Error(writer http.ResponseWriter, status int, code, message string) {
+	data, _ := xml.Marshal(errorResponse{Code: code, Message: message})
+	writer.Header().Set("Content-Type", "application/xml")
+	writer.WriteHeader(status)
+	_, _ = writer.Write(data)
+}

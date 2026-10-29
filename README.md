@@ -51,6 +51,18 @@ The HTTP package does not create or configure a network client or server.
 Applications supply the HTTP request executor, block source, handler chain, and
 server registration.
 
+The `eris/s3` package implements the ERIS object-storage recommendation:
+
+- canonical `s3://ENDPOINT/BUCKET/` store URLs and path-style object URLs;
+- public block reads and authenticated single-request block writes;
+- deterministic AWS Signature Version 4 signing and verification;
+- caller-supplied HTTP clients, credentials, authorization, and clocks; and
+- a fixed-bucket HTTP handler with an optional read-only mode.
+
+The S3 package intentionally omits credential discovery, IAM, bucket
+administration, object listing, and multipart uploads. It uses only the Go
+standard library and the existing ERIS block APIs.
+
 The core `eris` package does not implement storage, file or stream I/O,
 networking, random-secret generation, or ERIS extensions.
 
