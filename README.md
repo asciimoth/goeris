@@ -1,6 +1,7 @@
 # ERIS tools
 
-This repository provides pure Go tools for [ERIS 1.0.0](https://eris.codeberg.page/).
+This repository provides pure Go tools for
+[ERIS 1.0.0](https://eris.codeberg.page/).
 
 The `eris` package implements:
 
@@ -64,8 +65,8 @@ if err != nil {
 defer file.Close()
 ```
 
-Use `Index`, `EncodeIndex`, `DecodeIndex`, and `NewReader` for low-level
-ERIS-FS plumbing. Use `Builder`, `OpenFS`, and `FileSystem` for the high-level
+Use `Index`, `EncodeIndex`, `DecodeIndex`, and `NewReader` for low-level ERIS-FS
+plumbing. Use `Builder`, `OpenFS`, and `FileSystem` for the high-level
 file-system API.
 
 `OpenFS` and `DecodeIndex` limit each decoded index to 64 MiB. Use

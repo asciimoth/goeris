@@ -12,10 +12,14 @@ tidy:
 typos:
   typos
 
-# Format all tracked Go files.
-fmt:
+# Format all tracked source files.
+fmt: markdown-fmt
   golangci-lint fmt ./...
   git ls-files -z -- '*.go' | xargs -0 -r gofmt -w
+
+# Format all tracked Markdown files.
+markdown-fmt:
+  git ls-files -z -- '*.md' | xargs -0 -r mdformat --wrap 80
 
 # Run the Go linters.
 lint:

@@ -23,6 +23,23 @@
         inherit system;
       };
 
+      # mdformat 0.7.22 works with markdown-it-py 4, but its package metadata
+      # still has an upper bound of version 3.
+      markdownPython = pkgs.python3.override {
+        packageOverrides = _: previous: {
+          mdformat = previous.mdformat.overridePythonAttrs (_: {
+            pythonRelaxDeps = [ "markdown-it-py" ];
+          });
+        };
+      };
+      markdownFormatter = markdownPython.withPackages (
+        pythonPackages: with pythonPackages; [
+          mdformat
+          mdformat-gfm
+          mdformat-gfm-alerts
+        ]
+      );
+
       checks = {
         pre-commit-check = pre-commit-hooks.lib.${system}.run {
           src = ./.;
@@ -30,6 +47,11 @@
             # gotest.enable = true;
             commitizen.enable = true;
             typos.enable = true;
+            mdformat = {
+              enable = true;
+              package = markdownFormatter;
+              entry = "${markdownFormatter}/bin/mdformat --wrap 80";
+            };
             typos-commit = {
               enable = true;
               description = "Find typos in commit message";
@@ -75,6 +97,7 @@
           typos
           commitizen
           just
+          markdownFormatter
         ];
       };
     });
