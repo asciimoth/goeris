@@ -28,6 +28,18 @@ The `eris/fs` package implements ERIS-FS version 1:
 - a high-level read-only `FileSystem` interface based on `io/fs`; and
 - verified random-access file reads through `io.ReaderAt` and `io.Seeker`.
 
+The `eris/dns` package implements ERIS DNSLink records:
+
+- canonical `eris` and `erisfs` namespace encoding and decoding;
+- extraction from multiple or whitespace-concatenated TXT values;
+- deterministic updates of existing TXT values and record sets; and
+- DNSLink lookup through an abstract resolver implemented by `*net.Resolver`.
+
+The DNS package does not create or configure a DNS client. Its resolver
+interface lets applications supply standard DNS, DNS over HTTPS, or an in-memory
+implementation. Resolver implementations must follow CNAME chains, as
+`*net.Resolver` does for TXT lookups.
+
 The core `eris` package does not implement storage, file or stream I/O,
 networking, random-secret generation, or ERIS extensions.
 
