@@ -53,7 +53,7 @@ func NewProxyAdvertisement(target string, schemes ...string) (Advertisement, err
 }
 
 func (advertisement Advertisement) validate() error {
-	if advertisement.Target == "" {
+	if advertisement.Target == "" || strings.Contains(advertisement.Target, "#") {
 		return ErrInvalidAdvertisement
 	}
 	canonicalTarget := advertisement.Target

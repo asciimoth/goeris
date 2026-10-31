@@ -82,7 +82,8 @@ func TestStoreURL(t *testing.T) {
 	invalid := []string{
 		"", "http://example.net/", "coap:/x", "coap:///x",
 		"coap://user@example.net/", "coap://example.net:0/", "coap://example.net:99999/",
-		"coap://example.net/a?x", "coap://example.net/a#x", "coap://[fe80::1%25]/",
+		"coap://example.net/a?x", "coap://example.net/a?", "coap://example.net/a#x",
+		"coap://example.net/a#", "coap://[fe80::1%25]/",
 		"coap://[example%25zone]/", "coap://example.net/%FF",
 	}
 	for _, text := range invalid {

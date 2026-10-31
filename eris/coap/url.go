@@ -25,7 +25,7 @@ type StoreURL struct {
 // information, queries, and fragments. It resolves dot segments and removes a
 // trailing path separator.
 func ParseStoreURL(text string) (StoreURL, error) {
-	if !validRawAuthority(text) {
+	if strings.ContainsAny(text, "?#") || !validRawAuthority(text) {
 		return StoreURL{}, ErrInvalidStoreURL
 	}
 	request, target, err := protocol.NewRequest(protocol.GET, text, nil)

@@ -60,7 +60,8 @@ func TestAdvertisements(t *testing.T) {
 	}
 
 	invalidAds := []Advertisement{
-		{}, {Target: "bad target"}, {Target: "/store?query"}, {Target: "/", Base: "http:"},
+		{}, {Target: "bad target"}, {Target: "/store?query"}, {Target: "/store#"},
+		{Target: "/store#fragment"}, {Target: "/", Base: "http:"},
 		{Target: "http://example/"}, {Target: "/", ProxySchemes: []string{"bad scheme"}},
 	}
 	for _, advertisement := range invalidAds {
