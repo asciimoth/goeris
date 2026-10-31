@@ -7,6 +7,7 @@ import (
 	stdfs "io/fs"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/asciimoth/eris-tools/eris"
 )
@@ -153,7 +154,7 @@ func (builder *Builder) recordPath(components []string) {
 }
 
 func splitPath(path string) ([]string, error) {
-	if !stdfs.ValidPath(path) || path == "." {
+	if !stdfs.ValidPath(path) || path == "." || !utf8.ValidString(path) {
 		return nil, ErrInvalidPath
 	}
 	return strings.Split(path, "/"), nil

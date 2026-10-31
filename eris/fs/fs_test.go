@@ -974,6 +974,12 @@ func TestBuilderConflictsAndReadError(t *testing.T) {
 	if err := builder.AddFile(".", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("invalid file path error = %v", err)
 	}
+	if err := builder.AddFile("\xff", errorReader{errors.New("must not read")}, false); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("invalid UTF-8 path error = %v", err)
+	}
+	if len(blocks) != 0 {
+		t.Fatalf("invalid file path wrote %d blocks", len(blocks))
+	}
 	if err := builder.AddSymlink("file", "a"); err != nil {
 		t.Fatal(err)
 	}
