@@ -2,13 +2,12 @@ package link
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
-	"math"
 	"slices"
 	"unicode/utf8"
 
 	"github.com/asciimoth/eris-tools/eris"
+	"github.com/asciimoth/eris-tools/eris/internal/cborwire"
 )
 
 const (
@@ -80,7 +79,7 @@ func (link Link) MarshalBinary() ([]byte, error) {
 	out := append([]byte(nil), header[:]...)
 	capability, _ := link.Capability.MarshalBinary()
 	out = append(out, capability...)
-	out = appendHead(out, 0, link.Size)
+	out = cborwire.AppendHead(out, 0, link.Size)
 	out = appendText(out, link.MIME)
 
 	type attribute struct {
@@ -97,7 +96,7 @@ func (link Link) MarshalBinary() ([]byte, error) {
 		}
 		return bytes.Compare(left.encoded, right.encoded)
 	})
-	out = appendHead(out, 5, uint64(len(attributes)))
+	out = cborwire.AppendHead(out, 5, uint64(len(attributes)))
 	for _, attribute := range attributes {
 		out = append(out, attribute.encoded...)
 		out = append(out, link.Attributes[attribute.key].data...)
@@ -171,27 +170,8 @@ func validateValue(value Value) error {
 	return nil
 }
 
-func appendHead(dst []byte, major byte, value uint64) []byte {
-	switch {
-	case value < 24:
-		return append(dst, major<<5|byte(value))
-	case value <= math.MaxUint8:
-		return append(dst, major<<5|24, byte(value))
-	case value <= math.MaxUint16:
-		dst = append(dst, major<<5|25, 0, 0)
-		binary.BigEndian.PutUint16(dst[len(dst)-2:], uint16(value))
-	case value <= math.MaxUint32:
-		dst = append(dst, major<<5|26, 0, 0, 0, 0)
-		binary.BigEndian.PutUint32(dst[len(dst)-4:], uint32(value))
-	default:
-		dst = append(dst, major<<5|27, 0, 0, 0, 0, 0, 0, 0, 0)
-		binary.BigEndian.PutUint64(dst[len(dst)-8:], value)
-	}
-	return dst
-}
-
 func appendText(dst []byte, text string) []byte {
-	dst = appendHead(dst, 3, uint64(len(text)))
+	dst = cborwire.AppendHead(dst, 3, uint64(len(text)))
 	return append(dst, text...)
 }
 

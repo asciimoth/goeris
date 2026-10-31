@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/asciimoth/eris-tools/eris"
+	"github.com/asciimoth/eris-tools/eris/internal/cborwire"
 )
 
 var indexTagHeader = [...]byte{0xda, 0x65, 0x72, 0x69, 0x74}
@@ -30,17 +31,17 @@ func (index Index) MarshalBinary() ([]byte, error) {
 	}
 	encoded := make([]encodedEntry, len(index.Entries))
 	for i, entry := range index.Entries {
-		key := appendHead(nil, 4, uint64(len(entry.Path)))
+		key := cborwire.AppendHead(nil, 4, uint64(len(entry.Path)))
 		for _, component := range entry.Path {
 			key = appendText(key, component)
 		}
-		value := appendHead(nil, 4, 2)
-		value = appendHead(value, 0, uint64(entry.Type))
+		value := cborwire.AppendHead(nil, 4, 2)
+		value = cborwire.AppendHead(value, 0, uint64(entry.Type))
 		if entry.Type == Symlink {
 			value = appendText(value, entry.Target)
 		} else {
 			capability, _ := entry.Capability.MarshalBinary()
-			value = appendHead(value, 6, eris.CapabilityCBORTag)
+			value = cborwire.AppendHead(value, 6, eris.CapabilityCBORTag)
 			value = appendBytes(value, capability)
 		}
 		encoded[i] = encodedEntry{key: key, value: value}
@@ -52,9 +53,9 @@ func (index Index) MarshalBinary() ([]byte, error) {
 		return bytes.Compare(a.key, b.key)
 	})
 	out := append([]byte(nil), indexTagHeader[:]...)
-	out = appendHead(out, 4, 2)
-	out = appendHead(out, 0, SpecificationVersion)
-	out = appendHead(out, 5, uint64(len(encoded)))
+	out = cborwire.AppendHead(out, 4, 2)
+	out = cborwire.AppendHead(out, 0, SpecificationVersion)
+	out = cborwire.AppendHead(out, 5, uint64(len(encoded)))
 	for _, item := range encoded {
 		out = append(out, item.key...)
 		out = append(out, item.value...)
@@ -224,30 +225,11 @@ func (decoder *cborDecoder) fixed(size int, minimum uint64) (uint64, error) {
 }
 
 func appendText(dst []byte, value string) []byte {
-	dst = appendHead(dst, 3, uint64(len(value)))
+	dst = cborwire.AppendHead(dst, 3, uint64(len(value)))
 	return append(dst, value...)
 }
 
 func appendBytes(dst, value []byte) []byte {
-	dst = appendHead(dst, 2, uint64(len(value)))
+	dst = cborwire.AppendHead(dst, 2, uint64(len(value)))
 	return append(dst, value...)
-}
-
-func appendHead(dst []byte, major byte, value uint64) []byte {
-	switch {
-	case value < 24:
-		return append(dst, major<<5|byte(value))
-	case value <= math.MaxUint8:
-		return append(dst, major<<5|24, byte(value))
-	case value <= math.MaxUint16:
-		dst = append(dst, major<<5|25, 0, 0)
-		binary.BigEndian.PutUint16(dst[len(dst)-2:], uint16(value))
-	case value <= math.MaxUint32:
-		dst = append(dst, major<<5|26, 0, 0, 0, 0)
-		binary.BigEndian.PutUint32(dst[len(dst)-4:], uint32(value))
-	default:
-		dst = append(dst, major<<5|27, 0, 0, 0, 0, 0, 0, 0, 0)
-		binary.BigEndian.PutUint64(dst[len(dst)-8:], value)
-	}
-	return dst
 }

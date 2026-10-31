@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/asciimoth/eris-tools/eris"
+	"github.com/asciimoth/eris-tools/eris/internal/cborwire"
 )
 
 func TestElementConstructorsAndAccessors(t *testing.T) {
@@ -379,7 +380,7 @@ func TestCBORIntegerHeads(t *testing.T) {
 	t.Parallel()
 	values := []uint64{0, 23, 24, math.MaxUint8, math.MaxUint8 + 1, math.MaxUint16, math.MaxUint16 + 1, math.MaxUint32, math.MaxUint32 + 1, math.MaxUint64}
 	for _, value := range values {
-		encoded := appendHead(nil, 0, value)
+		encoded := cborwire.AppendHead(nil, 0, value)
 		decoder := decoder{data: encoded}
 		got, indefinite, err := decoder.head(0, false)
 		if err != nil || indefinite || got != value || decoder.offset != len(encoded) {

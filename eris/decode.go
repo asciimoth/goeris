@@ -39,7 +39,7 @@ func decodeNode(pair Pair, level Level, blockSize BlockSize, blocks BlockSet, ro
 		}
 	}
 
-	pairs, err := parseInternalNode(node)
+	pairs, err := ParseInternalNode(node)
 	if err != nil {
 		return nil, err
 	}
@@ -52,36 +52,6 @@ func decodeNode(pair Pair, level Level, blockSize BlockSize, blocks BlockSet, ro
 		output = append(output, decoded...)
 	}
 	return output, nil
-}
-
-func parseInternalNode(node []byte) ([]Pair, error) {
-	if !validBlockLength(len(node)) {
-		return nil, ErrInvalidNode
-	}
-	pairs := make([]Pair, 0, len(node)/PairSize)
-	foundEnd := false
-	for offset := 0; offset < len(node); offset += PairSize {
-		slot := node[offset : offset+PairSize]
-		zero := true
-		for _, value := range slot {
-			zero = zero && value == 0
-		}
-		if zero {
-			foundEnd = true
-			continue
-		}
-		if foundEnd {
-			return nil, ErrInvalidNode
-		}
-		var pair Pair
-		copy(pair.Reference[:], slot[:32])
-		copy(pair.Key[:], slot[32:])
-		pairs = append(pairs, pair)
-	}
-	if len(pairs) == 0 {
-		return nil, ErrInvalidNode
-	}
-	return pairs, nil
 }
 
 func blake2bKey(data []byte) Key {

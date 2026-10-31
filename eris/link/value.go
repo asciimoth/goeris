@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"math"
 	"unicode/utf8"
+
+	"github.com/asciimoth/eris-tools/eris/internal/cborwire"
 )
 
 // Value is one well-formed CBOR data item used as an attribute value.
@@ -48,7 +50,7 @@ func BoolValue(value bool) Value {
 
 // UintValue returns a CBOR unsigned integer value.
 func UintValue(value uint64) Value {
-	return Value{data: appendHead(nil, 0, value)}
+	return Value{data: cborwire.AppendHead(nil, 0, value)}
 }
 
 // IntValue returns a CBOR integer value.
@@ -56,12 +58,12 @@ func IntValue(value int64) Value {
 	if value >= 0 {
 		return UintValue(uint64(value))
 	}
-	return Value{data: appendHead(nil, 1, uint64(-(value + 1)))}
+	return Value{data: cborwire.AppendHead(nil, 1, uint64(-(value + 1)))}
 }
 
 // BytesValue returns a CBOR byte string value. It copies data.
 func BytesValue(data []byte) Value {
-	encoded := appendHead(nil, 2, uint64(len(data)))
+	encoded := cborwire.AppendHead(nil, 2, uint64(len(data)))
 	return Value{data: append(encoded, data...)}
 }
 
@@ -71,7 +73,7 @@ func TextValue(text string) (Value, error) {
 	if !utf8.ValidString(text) {
 		return Value{}, ErrInvalidValue
 	}
-	encoded := appendHead(nil, 3, uint64(len(text)))
+	encoded := cborwire.AppendHead(nil, 3, uint64(len(text)))
 	return Value{data: append(encoded, text...)}, nil
 }
 

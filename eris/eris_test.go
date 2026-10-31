@@ -438,8 +438,8 @@ func TestDecodeRejectsInvalidData(t *testing.T) {
 func TestInvalidInternalNodes(t *testing.T) {
 	t.Parallel()
 
-	if _, err := parseInternalNode(nil); !errors.Is(err, ErrInvalidNode) {
-		t.Errorf("parseInternalNode(nil) error = %v", err)
+	if _, err := ParseInternalNode(nil); !errors.Is(err, ErrInvalidNode) {
+		t.Errorf("ParseInternalNode(nil) error = %v", err)
 	}
 	for _, node := range [][]byte{
 		make([]byte, BlockSize1KiB),

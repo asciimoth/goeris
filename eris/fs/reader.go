@@ -233,7 +233,7 @@ func (reader *Reader) internal(pair eris.Pair, level eris.Level, root bool) ([]e
 			return nil, eris.ErrInvalidRootKey
 		}
 	}
-	pairs, err := parsePairs(node)
+	pairs, err := eris.ParseInternalNode(node)
 	if err != nil {
 		return nil, err
 	}
@@ -271,36 +271,6 @@ func (reader *Reader) leafPair(index int64) (eris.Pair, error) {
 		index %= span
 	}
 	return pair, nil
-}
-
-func parsePairs(node []byte) ([]eris.Pair, error) {
-	if len(node)%eris.PairSize != 0 {
-		return nil, eris.ErrInvalidNode
-	}
-	pairs := make([]eris.Pair, 0, len(node)/eris.PairSize)
-	ended := false
-	for offset := 0; offset < len(node); offset += eris.PairSize {
-		slot := node[offset : offset+eris.PairSize]
-		zero := true
-		for _, value := range slot {
-			zero = zero && value == 0
-		}
-		if zero {
-			ended = true
-			continue
-		}
-		if ended {
-			return nil, eris.ErrInvalidNode
-		}
-		var pair eris.Pair
-		copy(pair.Reference[:], slot[:32])
-		copy(pair.Key[:], slot[32:])
-		pairs = append(pairs, pair)
-	}
-	if len(pairs) == 0 {
-		return nil, eris.ErrInvalidNode
-	}
-	return pairs, nil
 }
 
 func paddedLength(node []byte) (int, error) {

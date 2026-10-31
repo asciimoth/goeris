@@ -13,6 +13,7 @@ import (
 	"testing/fstest"
 
 	"github.com/asciimoth/eris-tools/eris"
+	"github.com/asciimoth/eris-tools/eris/internal/cborwire"
 )
 
 func TestIndexCanonicalRoundTrip(t *testing.T) {
@@ -155,7 +156,7 @@ func TestCBORPrimitives(t *testing.T) {
 	t.Parallel()
 	values := []uint64{0, 23, 24, 255, 256, 65535, 65536, 1 << 32, 1 << 48}
 	for _, value := range values {
-		encoded := appendHead(nil, 6, value)
+		encoded := cborwire.AppendHead(nil, 6, value)
 		decoder := cborDecoder{data: encoded}
 		decoded, err := decoder.head(6)
 		if err != nil || decoded != value || decoder.offset != len(encoded) {
@@ -949,7 +950,7 @@ func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
 		t.Fatalf("non-contiguous pairs error = %v", err)
 	}
 
-	if _, err := parsePairs([]byte{1}); !errors.Is(err, eris.ErrInvalidNode) {
+	if _, err := eris.ParseInternalNode([]byte{1}); !errors.Is(err, eris.ErrInvalidNode) {
 		t.Fatalf("short pairs error = %v", err)
 	}
 	if _, err := paddedLength([]byte{1}); !errors.Is(err, eris.ErrInvalidPadding) {
