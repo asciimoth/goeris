@@ -149,9 +149,13 @@ func (client *Client) PutBlockContext(ctx context.Context, block []byte, expecte
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return eris.Reference{}, responseError(response)
 	}
-	_, err = io.Copy(io.Discard, response.Body)
+	limit := int64(eris.BlockSize32KiB) + 1
+	n, err := io.Copy(io.Discard, io.LimitReader(response.Body, limit))
 	if err != nil {
 		return eris.Reference{}, err
+	}
+	if n == limit {
+		return eris.Reference{}, ErrResponseTooLarge
 	}
 	return ref, nil
 }

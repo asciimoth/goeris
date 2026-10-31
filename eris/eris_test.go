@@ -495,6 +495,24 @@ func TestDecodeWithLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	if _, err := DecodeWithLimit(large, blocks, 1<<20); !errors.Is(err, ErrDecodedTooLarge) {
 		t.Fatalf("amplified tree limit error = %v", err)
 	}
+	// The first full subtree already exceeds the limit. The decoder must
+	// stop before it fetches an unrelated, missing sibling.
+	var missing Pair
+	missing.Reference[0] = 1
+	copy(rootNode[PairSize:PairSize+32], missing.Reference[:])
+	copy(rootNode[PairSize+32:2*PairSize], missing.Key[:])
+	block, root, err = EncryptNode(rootNode, Secret{}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks[root.Reference] = block
+	partial := Capability{BlockSize: BlockSize1KiB, Level: 2, Root: root}
+	if _, err := DecodeWithLimit(partial, blocks, 1024); !errors.Is(err, ErrDecodedTooLarge) {
+		t.Fatalf("early limit error = %v", err)
+	}
+	if _, err := Decode(partial, blocks); !errors.Is(err, ErrMissingBlock) {
+		t.Fatalf("missing sibling error = %v", err)
+	}
 }
 
 func TestInvalidInternalNodes(t *testing.T) {

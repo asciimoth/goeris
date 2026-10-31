@@ -18,7 +18,7 @@ var (
 	ErrInvalidRequest = errors.New("eris s3: invalid request")
 	// ErrAuthentication means that request authentication failed.
 	ErrAuthentication = errors.New("eris s3: authentication failed")
-	// ErrResponseTooLarge means that an object is larger than an ERIS block.
+	// ErrResponseTooLarge means that a response body is larger than an ERIS block.
 	ErrResponseTooLarge = errors.New("eris s3: response is too large")
 	// ErrUnsupportedMethod means that a client request method is not supported.
 	ErrUnsupportedMethod = errors.New("eris s3: unsupported method")

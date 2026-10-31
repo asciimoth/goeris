@@ -22,7 +22,11 @@ func DecodeWithLimit(capability Capability, blocks BlockSet, limit int64) ([]byt
 	if limit < 0 {
 		return nil, ErrInvalidLimit
 	}
-	inspector := decodeInspector{blocks: blocks, blockSize: capability.BlockSize, summaries: make(map[decodeNodeID]int64)}
+	inspector := decodeInspector{
+		blocks: blocks, blockSize: capability.BlockSize,
+		maxLeaves: limit/int64(capability.BlockSize) + 1,
+		summaries: make(map[decodeNodeID]int64),
+	}
 	leaves, err := inspector.inspect(capability.Root, capability.Level, true)
 	if err != nil {
 		return nil, err
@@ -62,6 +66,7 @@ type decodeNodeID struct {
 type decodeInspector struct {
 	blocks    BlockSet
 	blockSize BlockSize
+	maxLeaves int64
 	summaries map[decodeNodeID]int64
 }
 
@@ -116,6 +121,9 @@ func (inspector *decodeInspector) inspect(pair Pair, level Level, root bool) (in
 			return 0, ErrInvalidNode
 		}
 		total += count
+		if total > inspector.maxLeaves {
+			return 0, ErrDecodedTooLarge
+		}
 	}
 	inspector.summaries[id] = total
 	return total, nil

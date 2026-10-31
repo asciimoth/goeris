@@ -238,6 +238,9 @@ func TestClientPutResponses(t *testing.T) {
 		{func(*http.Request) (*http.Response, error) { return response(403, strings.NewReader("denied")), nil }, &ResponseError{}},
 		{func(*http.Request) (*http.Response, error) { return response(200, errorReader{sentinel}), nil }, sentinel},
 		{func(*http.Request) (*http.Response, error) { return response(200, strings.NewReader("ok")), nil }, nil},
+		{func(*http.Request) (*http.Response, error) {
+			return response(200, bytes.NewReader(make([]byte, int(eris.BlockSize32KiB)+1))), nil
+		}, ErrResponseTooLarge},
 	}
 	for index, test := range tests {
 		client, _ := NewClient(test.do, testStore(t), signerFunc(func(*http.Request, []byte) error { return nil }))

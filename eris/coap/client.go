@@ -59,7 +59,9 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 	if err != nil {
 		return nil, err
 	}
-	response, err := protocol.RequestBody(ctx, client.requester, request, client.config.Transfer)
+	response, err := protocol.RequestBody(ctx, &limitedRequester{
+		requester: client.requester, remaining: int(eris.BlockSize32KiB),
+	}, request, client.config.Transfer)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +107,9 @@ func (client *Client) PutBlockContext(ctx context.Context, block []byte, expecte
 	if err != nil {
 		return eris.Reference{}, err
 	}
-	response, err := protocol.RequestBody(ctx, client.requester, request, client.config.Transfer)
+	response, err := protocol.RequestBody(ctx, &limitedRequester{
+		requester: client.requester, remaining: int(eris.BlockSize32KiB),
+	}, request, client.config.Transfer)
 	if err != nil {
 		return eris.Reference{}, err
 	}
@@ -141,6 +145,25 @@ func validateContentFormat(message *protocol.Message, expected uint32) error {
 		return ErrUnexpectedContentFormat
 	}
 	return nil
+}
+
+// limitedRequester bounds response data before RequestBody reassembles it.
+// Each transfer has its own instance, so concurrent calls do not share state.
+type limitedRequester struct {
+	requester protocol.Requester
+	remaining int
+}
+
+func (requester *limitedRequester) Request(ctx context.Context, request *protocol.Message) (*protocol.Message, error) {
+	response, err := requester.requester.Request(ctx, request)
+	if err != nil || response == nil {
+		return response, err
+	}
+	if len(response.Payload) > requester.remaining {
+		return nil, ErrResponseTooLarge
+	}
+	requester.remaining -= len(response.Payload)
+	return response, nil
 }
 
 var (
