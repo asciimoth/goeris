@@ -94,6 +94,13 @@ func (client *Client) PutBlockContext(ctx context.Context, block []byte, expecte
 	if client == nil || client.requester == nil {
 		return eris.Reference{}, ErrNilRequester
 	}
+	ref, err := eris.ReferenceOf(block)
+	if err != nil {
+		return eris.Reference{}, errors.Join(eris.ErrInvalidBlock, err)
+	}
+	if len(expected) > 1 || len(expected) == 1 && expected[0] != ref {
+		return eris.Reference{}, eris.ErrInvalidBlock
+	}
 	request, err := NewPutRequest(client.store, block, client.config.Request, expected...)
 	if err != nil {
 		return eris.Reference{}, err
@@ -112,15 +119,15 @@ func (client *Client) PutBlockContext(ctx context.Context, block []byte, expecte
 		return eris.Reference{}, &ResponseError{Code: response.Code}
 	}
 	if len(response.Payload) == 0 && len(expected) == 0 {
-		return eris.ReferenceOf(block)
+		return ref, nil
 	}
 	if len(response.Payload) != len(eris.Reference{}) {
 		return eris.Reference{}, ErrInvalidReference
 	}
-	var ref eris.Reference
-	copy(ref[:], response.Payload)
-	if len(expected) == 1 && ref != expected[0] {
-		return eris.Reference{}, eris.ErrInvalidBlock
+	var returned eris.Reference
+	copy(returned[:], response.Payload)
+	if returned != ref {
+		return eris.Reference{}, ErrInvalidReference
 	}
 	return ref, nil
 }

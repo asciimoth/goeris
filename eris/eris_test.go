@@ -464,8 +464,10 @@ func TestInvalidInternalNodes(t *testing.T) {
 
 	missingChild := Pair{Reference: Reference{1}, Key: Key{2}}
 	node := make([]byte, BlockSize1KiB)
-	copy(node[:32], missingChild.Reference[:])
-	copy(node[32:64], missingChild.Key[:])
+	for offset := 0; offset < 2*PairSize; offset += PairSize {
+		copy(node[offset:offset+32], missingChild.Reference[:])
+		copy(node[offset+32:offset+PairSize], missingChild.Key[:])
+	}
 	block, root, _ := EncryptNode(node, Secret{}, 1)
 	_, err := Decode(
 		Capability{BlockSize: BlockSize1KiB, Level: 1, Root: root},
@@ -473,6 +475,34 @@ func TestInvalidInternalNodes(t *testing.T) {
 	)
 	if !errors.Is(err, ErrMissingBlock) {
 		t.Errorf("Decode(missing child) error = %v", err)
+	}
+}
+
+func TestDecodeRejectsNoncanonicalTreeShape(t *testing.T) {
+	t.Parallel()
+	blocks := make(BlockSet)
+	leaf := make([]byte, BlockSize1KiB)
+	leaf[0] = 0x80
+	leafBlock, leafPair, _ := EncryptNode(leaf, Secret{}, 0)
+	blocks[leafPair.Reference] = leafBlock
+
+	internal := make([]byte, BlockSize1KiB)
+	copy(internal[:32], leafPair.Reference[:])
+	copy(internal[32:PairSize], leafPair.Key[:])
+	oneBlock, onePair, _ := EncryptNode(internal, Secret{}, 1)
+	blocks[onePair.Reference] = oneBlock
+	if _, err := Decode(Capability{BlockSize: BlockSize1KiB, Level: 1, Root: onePair}, blocks); !errors.Is(err, ErrInvalidNode) {
+		t.Fatalf("one-child root error = %v", err)
+	}
+
+	copy(internal[:32], onePair.Reference[:])
+	copy(internal[32:PairSize], onePair.Key[:])
+	copy(internal[PairSize:PairSize+32], onePair.Reference[:])
+	copy(internal[PairSize+32:2*PairSize], onePair.Key[:])
+	twoBlock, twoPair, _ := EncryptNode(internal, Secret{}, 2)
+	blocks[twoPair.Reference] = twoBlock
+	if _, err := Decode(Capability{BlockSize: BlockSize1KiB, Level: 2, Root: twoPair}, blocks); !errors.Is(err, ErrInvalidNode) {
+		t.Fatalf("short non-final subtree error = %v", err)
 	}
 }
 

@@ -90,6 +90,23 @@ func TestClientErrors(t *testing.T) {
 	if _, err := client.PutBlock(block, otherRef); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Errorf("invalid PUT error = %v", err)
 	}
+	requests := 0
+	checkedClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
+		requests++
+		return &protocol.Message{Code: protocol.Created, Payload: ref[:]}, nil
+	}), mustStore(t, "coap://example/"), ClientConfig{})
+	if _, err := checkedClient.PutBlock(block, otherRef); !errors.Is(err, eris.ErrInvalidBlock) || requests != 0 {
+		t.Errorf("mismatched expected reference sent %d requests, error = %v", requests, err)
+	}
+	wrongReferenceClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
+		return &protocol.Message{Code: protocol.Created, Payload: otherRef[:]}, nil
+	}), mustStore(t, "coap://example/"), ClientConfig{})
+	if _, err := wrongReferenceClient.PutBlock(block); !errors.Is(err, ErrInvalidReference) {
+		t.Errorf("wrong returned reference error = %v", err)
+	}
+	if _, err := wrongReferenceClient.PutBlock(block, ref); !errors.Is(err, ErrInvalidReference) {
+		t.Errorf("wrong returned expected reference error = %v", err)
+	}
 	badRequestClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.BadRequest}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
