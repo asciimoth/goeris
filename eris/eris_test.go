@@ -435,6 +435,68 @@ func TestDecodeRejectsInvalidData(t *testing.T) {
 	}
 }
 
+func TestDecodeWithLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
+	t.Parallel()
+	blocks := make(BlockSet)
+	leaf := make([]byte, BlockSize1KiB)
+	leaf[len(leaf)-1] = 0x80
+	leafBlock, leafPair, err := EncryptNode(leaf, Secret{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks[leafPair.Reference] = leafBlock
+	internal := make([]byte, BlockSize1KiB)
+	for i := range 16 {
+		copy(internal[i*PairSize:i*PairSize+32], leafPair.Reference[:])
+		copy(internal[i*PairSize+32:(i+1)*PairSize], leafPair.Key[:])
+	}
+	block, pair, err := EncryptNode(internal, Secret{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks[pair.Reference] = block
+	rootNode := make([]byte, BlockSize1KiB)
+	for i := range 2 {
+		copy(rootNode[i*PairSize:i*PairSize+32], pair.Reference[:])
+		copy(rootNode[i*PairSize+32:(i+1)*PairSize], pair.Key[:])
+	}
+	block, root, err := EncryptNode(rootNode, Secret{}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks[root.Reference] = block
+	capability := Capability{BlockSize: BlockSize1KiB, Level: 2, Root: root}
+	const contentSize = 32*1024 - 1
+	if _, err := DecodeWithLimit(capability, blocks, contentSize-1); !errors.Is(err, ErrDecodedTooLarge) {
+		t.Fatalf("small limit error = %v", err)
+	}
+	decoded, err := DecodeWithLimit(capability, blocks, contentSize)
+	if err != nil || len(decoded) != contentSize {
+		t.Fatalf("exact limit decode = (%d bytes, %v)", len(decoded), err)
+	}
+	if _, err := DecodeWithLimit(capability, blocks, -1); !errors.Is(err, ErrInvalidLimit) {
+		t.Fatalf("negative limit error = %v", err)
+	}
+	// Eight levels describe terabytes of output using only a few blocks.
+	for level := Level(2); level <= 8; level++ {
+		full := make([]byte, BlockSize1KiB)
+		for i := range 16 {
+			copy(full[i*PairSize:i*PairSize+32], pair.Reference[:])
+			copy(full[i*PairSize+32:(i+1)*PairSize], pair.Key[:])
+		}
+		block, next, encryptErr := EncryptNode(full, Secret{}, level)
+		if encryptErr != nil {
+			t.Fatal(encryptErr)
+		}
+		blocks[next.Reference] = block
+		pair = next
+	}
+	large := Capability{BlockSize: BlockSize1KiB, Level: 8, Root: pair}
+	if _, err := DecodeWithLimit(large, blocks, 1<<20); !errors.Is(err, ErrDecodedTooLarge) {
+		t.Fatalf("amplified tree limit error = %v", err)
+	}
+}
+
 func TestInvalidInternalNodes(t *testing.T) {
 	t.Parallel()
 

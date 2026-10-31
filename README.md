@@ -97,6 +97,10 @@ if err != nil {
 decoded, err := eris.Decode(capability, blocks)
 ```
 
+`Decode` has no application size limit. When blocks come from an untrusted
+source, use `DecodeWithLimit(capability, blocks, maxBytes)` to reject a tree
+whose decoded content exceeds the selected size limit before expansion.
+
 `BlockSink.PutBlock(block)` returns the reference computed by storage.
 `BlockSink.PutBlock(block, expected)` rejects a block that does not match the
 expected reference. `BlockSource.GetBlock(ref)` returns only a matching block;

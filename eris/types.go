@@ -27,6 +27,11 @@ var (
 	ErrInvalidCapability = errors.New("eris: invalid read capability")
 	// ErrInvalidRootKey means that an internal root key does not match its node.
 	ErrInvalidRootKey = errors.New("eris: invalid root key")
+	// ErrInvalidLimit means that a decoded content limit is negative.
+	ErrInvalidLimit = errors.New("eris: invalid decoded content limit")
+	// ErrDecodedTooLarge means that content exceeds the decoded limit or the
+	// maximum size supported by the current system.
+	ErrDecodedTooLarge = errors.New("eris: decoded content is too large")
 )
 
 // BlockSize is one of the two block sizes defined by ERIS.
