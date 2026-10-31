@@ -1237,3 +1237,85 @@ func TestLinkResolutionLimit(t *testing.T) {
 		t.Fatalf("Lstat must not follow the final link: %v", err)
 	}
 }
+
+func TestRegularFileStatAfterClose(t *testing.T) {
+	t.Parallel()
+	blocks := make(eris.BlockSet)
+	builder := NewBuilder(blocks, eris.Secret{})
+	if err := builder.AddFile("file", strings.NewReader("content"), false); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := OpenFS(capability, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := image.Open("file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Stat(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Stat(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Stat after Close = %v; want ErrClosed", err)
+	}
+}
+
+// Benchmark malformed counts with enough trailing bytes to pass the initial
+// length checks. Memory use must depend on parsed items, not declared counts.
+func BenchmarkIndexInvalidCounts(b *testing.B) {
+	for _, pathCount := range []bool{false, true} {
+		b.Run(fmt.Sprintf("path=%t", pathCount), func(b *testing.B) {
+			data := append([]byte(nil), indexTagHeader[:]...)
+			data = append(data, 0x82, 0x01)
+			if pathCount {
+				data = append(data, 0xa1)
+				data = cborwire.AppendHead(data, 4, 1<<16)
+			} else {
+				data = cborwire.AppendHead(data, 5, 1<<16)
+			}
+			data = append(data, make([]byte, 1<<16)...)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := ParseIndex(data); !errors.Is(err, ErrInvalidIndex) {
+					b.Fatalf("ParseIndex = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestStatSourceErrorHasPath(t *testing.T) {
+	t.Parallel()
+	capability, _, err := eris.Encode([]byte("missing"), eris.Secret{}, eris.BlockSize1KiB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := make(eris.BlockSet)
+	index := Index{Entries: []Entry{{Path: []string{"file"}, Type: Regular, Capability: capability}}}
+	root, err := EncodeIndex(index, eris.Secret{}, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := OpenFS(root, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for operation, stat := range map[string]func(string) (stdfs.FileInfo, error){
+		"stat": image.Stat, "lstat": image.Lstat,
+	} {
+		_, err := stat("file")
+		var pathErr *stdfs.PathError
+		if !errors.As(err, &pathErr) || pathErr.Op != operation || pathErr.Path != "file" || !errors.Is(err, eris.ErrMissingBlock) {
+			t.Errorf("%s error = %v; want PathError with missing block", operation, err)
+		}
+	}
+}

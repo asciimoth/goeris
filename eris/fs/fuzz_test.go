@@ -14,6 +14,9 @@ func FuzzIndexDecode(f *testing.F) {
 	valid, _ := (Index{}).MarshalBinary()
 	f.Add(valid)
 	f.Add([]byte{})
+	// Counts fit in the input length, but the declared items are absent.
+	f.Add(append([]byte{0xda, 0x65, 0x72, 0x69, 0x74, 0x82, 0x01, 0xb9, 0x01, 0x00}, make([]byte, 256)...))
+	f.Add(append([]byte{0xda, 0x65, 0x72, 0x69, 0x74, 0x82, 0x01, 0xa1, 0x99, 0x01, 0x00}, make([]byte, 256)...))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		index, err := ParseIndex(data)
 		if err != nil {

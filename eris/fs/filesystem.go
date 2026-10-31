@@ -213,7 +213,11 @@ func (fileSystem *FS) Stat(path string) (stdfs.FileInfo, error) {
 	if err != nil {
 		return nil, pathError("stat", path, err)
 	}
-	return item.info()
+	info, err := item.info()
+	if err != nil {
+		return nil, pathError("stat", path, err)
+	}
+	return info, nil
 }
 
 // Lstat implements io/fs.ReadLinkFS without following the final link.
@@ -222,7 +226,11 @@ func (fileSystem *FS) Lstat(path string) (stdfs.FileInfo, error) {
 	if err != nil {
 		return nil, pathError("lstat", path, err)
 	}
-	return item.info()
+	info, err := item.info()
+	if err != nil {
+		return nil, pathError("lstat", path, err)
+	}
+	return info, nil
 }
 
 // ReadDir implements io/fs.ReadDirFS.
@@ -361,7 +369,14 @@ type regularFile struct {
 	*Reader
 }
 
-func (file *regularFile) Stat() (stdfs.FileInfo, error) { return file.node.info() }
+func (file *regularFile) Stat() (stdfs.FileInfo, error) {
+	file.mu.Lock()
+	defer file.mu.Unlock()
+	if file.closed {
+		return nil, ErrClosed
+	}
+	return file.node.info()
+}
 
 type directoryFile struct {
 	node   *node

@@ -82,7 +82,9 @@ func (index *Index) UnmarshalBinary(data []byte) error {
 	if err != nil || count > uint64(len(data)) {
 		return ErrInvalidIndex
 	}
-	next := Index{Entries: make([]Entry, 0, int(count))}
+	// Grow only after entries are parsed. An untrusted count must not cause
+	// allocation for entries that are absent or invalid.
+	next := Index{Entries: []Entry{}}
 	for range count {
 		entry, decodeErr := decoder.entry()
 		if decodeErr != nil {
@@ -118,12 +120,13 @@ func (decoder *cborDecoder) entry() (Entry, error) {
 	if err != nil || pathLength == 0 || pathLength > uint64(len(decoder.data)) {
 		return Entry{}, ErrInvalidIndex
 	}
-	entry := Entry{Path: make([]string, int(pathLength))}
-	for i := range entry.Path {
-		entry.Path[i], err = decoder.text()
+	var entry Entry
+	for range pathLength {
+		component, err := decoder.text()
 		if err != nil {
 			return Entry{}, err
 		}
+		entry.Path = append(entry.Path, component)
 	}
 	length, err := decoder.head(4)
 	if err != nil || length != 2 {
