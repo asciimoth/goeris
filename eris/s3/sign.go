@@ -60,12 +60,13 @@ func (signer StaticV4Signer) Sign(request *http.Request, payload []byte) error {
 // SignV4 adds an AWS Signature Version 4 Authorization header. It signs the
 // host and all stable request headers. Its result is deterministic for
 // the supplied request, payload, credentials, region, and time.
+// The URL must use Path and optional RawPath, not Opaque.
 func SignV4(request *http.Request, payload []byte, credentials Credentials, region string, now time.Time) error {
 	if !credentials.Valid() || region == "" || strings.ContainsAny(region, "/, \t\r\n") {
 		return ErrInvalidCredentials
 	}
 	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" ||
-		!validRequestQuery(request) {
+		!validRequestURL(request) {
 		return ErrInvalidRequest
 	}
 	if request.Header == nil {
@@ -92,9 +93,10 @@ func SignV4(request *http.Request, payload []byte, credentials Credentials, regi
 
 // CanonicalRequest returns the SigV4 canonical request and signed-header list.
 // The caller must supply a lowercase hexadecimal SHA-256 payload hash.
+// The URL must use Path and optional RawPath, not Opaque.
 func CanonicalRequest(request *http.Request, payloadHash string) (string, string, error) {
 	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" ||
-		!validSHA256Hex(payloadHash) || !validRequestQuery(request) {
+		!validSHA256Hex(payloadHash) || !validRequestURL(request) {
 		return "", "", ErrInvalidRequest
 	}
 	canonical, signedHeaders := canonicalRequest(request, payloadHash)
@@ -121,7 +123,7 @@ func canonicalRequest(request *http.Request, payloadHash string) (string, string
 		headers.WriteByte('\n')
 	}
 	signedHeaders := strings.Join(names, ";")
-	canonical := request.Method + "\n" + canonicalURI(request.URL.Path) + "\n" +
+	canonical := request.Method + "\n" + canonicalURI(request.URL.EscapedPath()) + "\n" +
 		canonicalQuery(request.URL.Query()) + "\n" + headers.String() + "\n" + signedHeaders + "\n" + payloadHash
 	return canonical, signedHeaders
 }
@@ -134,7 +136,11 @@ func validSHA256Hex(value string) bool {
 	return err == nil
 }
 
-func validRequestQuery(request *http.Request) bool {
+func validRequestURL(request *http.Request) bool {
+	// Opaque URLs can send a request target that differs from EscapedPath.
+	if request.URL.Opaque != "" {
+		return false
+	}
 	_, err := url.ParseQuery(request.URL.RawQuery)
 	return err == nil
 }
@@ -175,13 +181,19 @@ func requestHost(request *http.Request) string {
 	return ""
 }
 
-func normalizeHeader(value string) string { return strings.Join(strings.Fields(value), " ") }
+func normalizeHeader(value string) string {
+	// SigV4 collapses consecutive ASCII spaces inside a header value. Other
+	// internal whitespace is data and must remain covered by the signature.
+	return strings.Join(strings.FieldsFunc(strings.TrimSpace(value), func(char rune) bool {
+		return char == ' '
+	}), " ")
+}
 
 func canonicalURI(path string) string {
 	if path == "" {
 		return "/"
 	}
-	return uriEncode(path, false)
+	return path
 }
 
 func canonicalQuery(values url.Values) string {
@@ -274,7 +286,7 @@ type V4Authenticator struct {
 func (authenticator V4Authenticator) Authenticate(request *http.Request, payload []byte) (string, error) {
 	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" ||
 		authenticator.Credentials == nil || authenticator.Region == "" ||
-		strings.ContainsAny(authenticator.Region, "/, \t\r\n") || !validRequestQuery(request) {
+		strings.ContainsAny(authenticator.Region, "/, \t\r\n") || !validRequestURL(request) {
 		return "", ErrAuthentication
 	}
 	parsed, err := parseAuthorization(request.Header.Get("Authorization"))
@@ -394,7 +406,7 @@ func canonicalRequestForVerification(request *http.Request, names string) (strin
 		}
 	}
 	payloadHash := request.Header.Get("x-amz-content-sha256")
-	canonical := request.Method + "\n" + canonicalURI(request.URL.Path) + "\n" +
+	canonical := request.Method + "\n" + canonicalURI(request.URL.EscapedPath()) + "\n" +
 		canonicalQuery(request.URL.Query()) + "\n" + headers.String() + "\n" + names + "\n" + payloadHash
 	return canonical, names, nil
 }

@@ -78,6 +78,46 @@ func TestCanonicalRequest(t *testing.T) {
 	}
 }
 
+func TestSignatureCoversEscapedPath(t *testing.T) {
+	t.Parallel()
+	request, err := http.NewRequest(http.MethodGet, "https://example/bucket/a%2Fb", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, _, err := CanonicalRequest(request, sha256Hex(nil))
+	if err != nil || !strings.HasPrefix(canonical, "GET\n/bucket/a%2Fb\n") {
+		t.Fatalf("escaped path changed: %q, %v", canonical, err)
+	}
+	if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
+		t.Fatal(err)
+	}
+	authenticator := V4Authenticator{
+		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+			return testCredentials, nil
+		}),
+		Region: "region",
+		Clock:  func() time.Time { return testTime },
+	}
+	if _, err := authenticator.Authenticate(request, nil); err != nil {
+		t.Fatal(err)
+	}
+	request.URL.RawPath = ""
+	if _, err := authenticator.Authenticate(request, nil); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("changed escaped path authenticated: %v", err)
+	}
+	request.URL.RawPath = "/bucket/a%2Fb"
+	request.URL.Opaque = "//example/other"
+	if _, err := authenticator.Authenticate(request, nil); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("opaque target authenticated: %v", err)
+	}
+	if _, _, err := CanonicalRequest(request, sha256Hex(nil)); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("opaque canonical request: %v", err)
+	}
+	if err := SignV4(request, nil, testCredentials, "region", testTime); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("opaque target signed: %v", err)
+	}
+}
+
 func TestMalformedQueryCannotBeSignedOrAuthenticated(t *testing.T) {
 	t.Parallel()
 	request, err := http.NewRequest(http.MethodGet, "https://example/key?good=1", nil)
@@ -155,6 +195,42 @@ func TestSignAndAuthenticate(t *testing.T) {
 	expired.Clock = func() time.Time { return testTime.Add(time.Hour) }
 	if _, err := expired.Authenticate(request, []byte("body")); !errors.Is(err, ErrAuthentication) {
 		t.Errorf("expired request: %v", err)
+	}
+}
+
+func TestSignedHeaderPreservesInternalWhitespace(t *testing.T) {
+	t.Parallel()
+	authenticator := V4Authenticator{
+		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+			return testCredentials, nil
+		}),
+		Region: "region",
+		Clock:  func() time.Time { return testTime },
+	}
+	for name, separator := range map[string]string{
+		"non-breaking space": "\u00a0", "em space": "\u2003", "tab": "\t",
+	} {
+		t.Run(name, func(t *testing.T) {
+			request, err := http.NewRequest(http.MethodGet, "https://example/key", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("x-amz-meta-label", "first"+separator+"second")
+			canonical, _, err := CanonicalRequest(request, sha256Hex(nil))
+			if err != nil || !strings.Contains(canonical, "x-amz-meta-label:first"+separator+"second\n") {
+				t.Fatalf("header value changed in canonical request: %q, %v", canonical, err)
+			}
+			if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := authenticator.Authenticate(request, nil); err != nil {
+				t.Fatalf("original header: %v", err)
+			}
+			request.Header.Set("x-amz-meta-label", "first second")
+			if _, err := authenticator.Authenticate(request, nil); !errors.Is(err, ErrAuthentication) {
+				t.Fatalf("changed header authenticated: %v", err)
+			}
+		})
 	}
 }
 
