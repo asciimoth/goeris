@@ -55,11 +55,12 @@ type Authorizer func(ctx context.Context, identity, method, bucket string, ref e
 
 // Handler serves one fixed bucket. GET and HEAD are public. PUT requires Auth,
 // public-read, and a Blocks value that also implements BlockSink or
-// ContextBlockSink. ReadOnly rejects PUT before authentication.
+// ContextBlockSink. PUT is disabled unless AllowPut is true.
 type Handler struct {
-	Blocks    BlockSource
-	Bucket    string
-	ReadOnly  bool
+	Blocks BlockSource
+	Bucket string
+	// AllowPut enables authenticated PUT requests. The zero value rejects PUT.
+	AllowPut  bool
 	Auth      RequestAuthenticator
 	Authorize Authorizer
 }
@@ -83,15 +84,15 @@ func (handler Handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	case http.MethodGet, http.MethodHead:
 		handler.get(writer, request, ref)
 	case http.MethodPut:
-		if handler.ReadOnly {
+		if !handler.AllowPut {
 			writer.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
-			writeS3Error(writer, http.StatusMethodNotAllowed, "MethodNotAllowed", ErrReadOnly.Error())
+			writeS3Error(writer, http.StatusMethodNotAllowed, "MethodNotAllowed", "The handler is read-only.")
 			return
 		}
 		handler.put(writer, request, ref)
 	default:
 		allow := http.MethodGet + ", " + http.MethodHead
-		if !handler.ReadOnly {
+		if handler.AllowPut {
 			allow += ", " + http.MethodPut
 		}
 		writer.Header().Set("Allow", allow)

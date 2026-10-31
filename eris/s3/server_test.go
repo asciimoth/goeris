@@ -59,7 +59,7 @@ func TestHandlerReads(t *testing.T) {
 	t.Parallel()
 	ref, block := testBlock(t)
 	blocks := eris.BlockSet{ref: block}
-	handler := Handler{Blocks: blocks, Bucket: "blocks", ReadOnly: true}
+	handler := Handler{Blocks: blocks, Bucket: "blocks"}
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		request := httptest.NewRequest(method, "https://s3.example/blocks/"+ref.String(), nil)
 		recorder := httptest.NewRecorder()
@@ -128,33 +128,33 @@ func TestHandlerWriteChecks(t *testing.T) {
 		request func() *http.Request
 		status  int
 	}{
-		{"read only", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", ReadOnly: true}, base, 405},
-		{"no auth", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, base, 401},
-		{"bad auth", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", Auth: deny}, base, 403},
-		{"denied", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", Auth: allow, Authorize: func(_ context.Context, _, _, _ string, _ eris.Reference) bool { return false }}, base, 403},
-		{"bad acl", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", Auth: allow}, func() *http.Request { request := base(); request.Header.Del("x-amz-acl"); return request }, 400},
-		{"bad block", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", Auth: allow}, func() *http.Request {
+		{"read only by default", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", Auth: allow}, base, 405},
+		{"no auth", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true}, base, 401},
+		{"bad auth", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: deny}, base, 403},
+		{"denied", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow, Authorize: func(_ context.Context, _, _, _ string, _ eris.Reference) bool { return false }}, base, 403},
+		{"bad acl", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request { request := base(); request.Header.Del("x-amz-acl"); return request }, 400},
+		{"bad block", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Body = io.NopCloser(bytes.NewReader(make([]byte, eris.BlockSize1KiB)))
 			return request
 		}, 400},
-		{"too large", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", Auth: allow}, func() *http.Request {
+		{"too large", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Body = io.NopCloser(bytes.NewReader(make([]byte, int(eris.BlockSize32KiB)+1)))
 			return request
 		}, 413},
-		{"body error", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", Auth: allow}, func() *http.Request {
+		{"body error", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Body = io.NopCloser(errorReader{sentinel})
 			return request
 		}, 400},
-		{"missing body", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", Auth: allow}, func() *http.Request {
+		{"missing body", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Body = nil
 			return request
 		}, 400},
-		{"source only", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrMissingBlock }), Bucket: "blocks", Auth: allow}, base, 500},
-		{"sink error", Handler{Blocks: storeFunc{get: func(eris.Reference) ([]byte, error) { return nil, eris.ErrMissingBlock }, put: func(eris.Reference, []byte) error { return sentinel }}, Bucket: "blocks", Auth: allow}, base, 500},
+		{"source only", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrMissingBlock }), Bucket: "blocks", AllowPut: true, Auth: allow}, base, 500},
+		{"sink error", Handler{Blocks: storeFunc{get: func(eris.Reference) ([]byte, error) { return nil, eris.ErrMissingBlock }, put: func(eris.Reference, []byte) error { return sentinel }}, Bucket: "blocks", AllowPut: true, Auth: allow}, base, 500},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -167,14 +167,63 @@ func TestHandlerWriteChecks(t *testing.T) {
 	}
 }
 
+func TestHandlerDefaultRejectsPutBeforeAuthentication(t *testing.T) {
+	t.Parallel()
+	ref, block := testBlock(t)
+	blocks := make(eris.BlockSet)
+	authCalled := false
+	handler := Handler{
+		Blocks: blocks,
+		Bucket: "blocks",
+		Auth: RequestAuthenticatorFunc(func(*http.Request, []byte) (string, error) {
+			authCalled = true
+			return "writer", nil
+		}),
+	}
+	request := httptest.NewRequest(http.MethodPut, "https://example/blocks/"+ref.String(), bytes.NewReader(block))
+	request.Header.Set("x-amz-acl", "public-read")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusMethodNotAllowed || recorder.Header().Get("Allow") != "GET, HEAD" || authCalled {
+		t.Fatalf("default PUT = status %d, Allow %q, auth called %t", recorder.Code, recorder.Header().Get("Allow"), authCalled)
+	}
+	if _, err := blocks.GetBlock(ref); !errors.Is(err, eris.ErrMissingBlock) {
+		t.Fatalf("default PUT stored block: %v", err)
+	}
+}
+
+func TestHandlerAllowHeader(t *testing.T) {
+	t.Parallel()
+	ref, block := testBlock(t)
+	for _, test := range []struct {
+		name     string
+		allowPut bool
+		allow    string
+	}{
+		{"read only", false, "GET, HEAD"},
+		{"writable", true, "GET, HEAD, PUT"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler := Handler{Blocks: eris.BlockSet{ref: block}, Bucket: "blocks", AllowPut: test.allowPut}
+			request := httptest.NewRequest(http.MethodDelete, "https://example/blocks/"+ref.String(), nil)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusMethodNotAllowed || recorder.Header().Get("Allow") != test.allow {
+				t.Fatalf("DELETE = status %d, Allow %q; want %q", recorder.Code, recorder.Header().Get("Allow"), test.allow)
+			}
+		})
+	}
+}
+
 func TestHandlerAuthenticatedWrite(t *testing.T) {
 	t.Parallel()
 	ref, block := testBlock(t)
 	blocks := make(eris.BlockSet)
 	authorized := false
 	handler := Handler{
-		Blocks: blocks,
-		Bucket: "blocks",
+		Blocks:   blocks,
+		Bucket:   "blocks",
+		AllowPut: true,
 		Auth: RequestAuthenticatorFunc(func(_ *http.Request, payload []byte) (string, error) {
 			if !bytes.Equal(payload, block) {
 				t.Error("authenticator received incorrect payload")
@@ -204,7 +253,7 @@ func TestHandlerContextStore(t *testing.T) {
 	ref, block := testBlock(t)
 	store := &contextStore{block: block, ref: ref}
 	auth := RequestAuthenticatorFunc(func(*http.Request, []byte) (string, error) { return "writer", nil })
-	handler := Handler{Blocks: store, Bucket: "blocks", Auth: auth}
+	handler := Handler{Blocks: store, Bucket: "blocks", AllowPut: true, Auth: auth}
 
 	get := httptest.NewRequest(http.MethodGet, "https://example/blocks/"+ref.String(), nil)
 	getRecorder := httptest.NewRecorder()
@@ -231,7 +280,7 @@ func FuzzHandlerPath(f *testing.F) {
 	f.Add(http.MethodGet, "/blocks/"+ref.String())
 	f.Add(http.MethodPut, "/blocks/bad")
 	f.Fuzz(func(t *testing.T, method, path string) {
-		handler := Handler{Blocks: eris.BlockSet{ref: block}, Bucket: "blocks", ReadOnly: true}
+		handler := Handler{Blocks: eris.BlockSet{ref: block}, Bucket: "blocks"}
 		request := httptest.NewRequest(http.MethodGet, "https://example/", nil)
 		request.Method = method
 		request.URL.Path = path

@@ -57,7 +57,7 @@ The `eris/s3` package implements the ERIS object-storage recommendation:
 - public block reads and authenticated single-request block writes;
 - deterministic AWS Signature Version 4 signing and verification;
 - caller-supplied HTTP clients, credentials, authorization, and clocks; and
-- a fixed-bucket HTTP handler with an optional read-only mode.
+- a fixed-bucket HTTP handler that permits writes only when `AllowPut` is true.
 
 The S3 package intentionally omits credential discovery, IAM, bucket
 administration, object listing, and multipart uploads. It uses only the Go

@@ -22,8 +22,6 @@ var (
 	ErrResponseTooLarge = errors.New("eris s3: response is too large")
 	// ErrUnsupportedMethod means that a client request method is not supported.
 	ErrUnsupportedMethod = errors.New("eris s3: unsupported method")
-	// ErrReadOnly means that a write was sent to a read-only handler.
-	ErrReadOnly = errors.New("eris s3: handler is read-only")
 )
 
 // ResponseError reports a non-successful object-storage response.

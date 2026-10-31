@@ -227,6 +227,7 @@ func TestHandlerErrors(t *testing.T) {
 	}{
 		{"default next", Handler{}, nethttp.MethodGet, "urn:other:value", nethttp.StatusNotFound},
 		{"method", Handler{Blocks: blocks}, nethttp.MethodPost, ref.URN(), nethttp.StatusMethodNotAllowed},
+		{"put rejected", Handler{Blocks: blocks}, nethttp.MethodPut, ref.URN(), nethttp.StatusMethodNotAllowed},
 		{"nil source", Handler{}, nethttp.MethodGet, ref.URN(), nethttp.StatusInternalServerError},
 		{"bad block URN", Handler{Blocks: blocks}, nethttp.MethodGet, "urn:blake2b:bad", nethttp.StatusBadRequest},
 		{"bad capability URN", Handler{Blocks: blocks}, nethttp.MethodGet, "urn:eris:bad", nethttp.StatusBadRequest},

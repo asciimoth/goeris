@@ -22,7 +22,7 @@ func ExampleClient() {
 	if err != nil {
 		panic(err)
 	}
-	handler := eriss3.Handler{Blocks: blocks, Bucket: "eris", ReadOnly: true}
+	handler := eriss3.Handler{Blocks: blocks, Bucket: "eris"}
 
 	// This executor calls the handler in memory. It does not open a socket.
 	httpClient := exampleHTTPClient(func(request *http.Request) (*http.Response, error) {

@@ -114,7 +114,7 @@ func TestClientEndToEnd(t *testing.T) {
 		Region: "test-1",
 		Clock:  clock,
 	}
-	handler := Handler{Blocks: blocks, Bucket: "blocks", Auth: auth}
+	handler := Handler{Blocks: blocks, Bucket: "blocks", AllowPut: true, Auth: auth}
 	executor := httpClientFunc(func(request *http.Request) (*http.Response, error) {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
