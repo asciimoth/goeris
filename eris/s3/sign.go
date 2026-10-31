@@ -183,8 +183,9 @@ func requestHost(request *http.Request) string {
 
 func normalizeHeader(value string) string {
 	// SigV4 collapses consecutive ASCII spaces inside a header value. Other
-	// internal whitespace is data and must remain covered by the signature.
-	return strings.Join(strings.FieldsFunc(strings.TrimSpace(value), func(char rune) bool {
+	// whitespace is data and must remain covered by the signature. Only HTTP
+	// space and tab characters can be removed from the ends.
+	return strings.Join(strings.FieldsFunc(strings.Trim(value, " \t"), func(char rune) bool {
 		return char == ' '
 	}), " ")
 }

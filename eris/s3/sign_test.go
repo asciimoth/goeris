@@ -234,6 +234,36 @@ func TestSignedHeaderPreservesInternalWhitespace(t *testing.T) {
 	}
 }
 
+func TestSignedHeaderPreservesEdgeUnicodeWhitespace(t *testing.T) {
+	t.Parallel()
+	authenticator := V4Authenticator{
+		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+			return testCredentials, nil
+		}),
+		Region: "region",
+		Clock:  func() time.Time { return testTime },
+	}
+	for _, value := range []string{"\u00a0label", "label\u00a0", "\u2003label\u2003"} {
+		t.Run(value, func(t *testing.T) {
+			request, err := http.NewRequest(http.MethodGet, "https://example/key", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("x-amz-meta-label", value)
+			if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := authenticator.Authenticate(request, nil); err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("x-amz-meta-label", "label")
+			if _, err := authenticator.Authenticate(request, nil); !errors.Is(err, ErrAuthentication) {
+				t.Fatalf("changed metadata authenticated: %v", err)
+			}
+		})
+	}
+}
+
 func TestSigningErrors(t *testing.T) {
 	t.Parallel()
 	request, _ := http.NewRequest(http.MethodGet, "https://example/", nil)
