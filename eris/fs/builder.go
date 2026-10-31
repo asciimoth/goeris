@@ -15,7 +15,7 @@ import (
 // not enumerate or read a host file system. A Builder is not safe for
 // concurrent use.
 type Builder struct {
-	sink     BlockSink
+	sink     eris.BlockSink
 	secret   eris.Secret
 	entries  []Entry
 	paths    map[string]struct{}
@@ -23,7 +23,7 @@ type Builder struct {
 }
 
 // NewBuilder returns a builder that writes all file and index blocks to sink.
-func NewBuilder(sink BlockSink, secret eris.Secret) *Builder {
+func NewBuilder(sink eris.BlockSink, secret eris.Secret) *Builder {
 	return &Builder{
 		sink: sink, secret: secret,
 		paths: make(map[string]struct{}), prefixes: make(map[string]int),

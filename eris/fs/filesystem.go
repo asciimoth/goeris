@@ -17,7 +17,7 @@ const directoryType EntryType = 255
 // FS exposes an ERIS-FS image through the standard library file-system
 // interfaces. Nested ERIS-FS indexes are loaded when a caller enters them.
 type FS struct {
-	source     BlockSource
+	source     eris.BlockSource
 	root       *node
 	prefix     string
 	indexLimit int64
@@ -25,7 +25,7 @@ type FS struct {
 
 type node struct {
 	mu         sync.Mutex
-	source     BlockSource
+	source     eris.BlockSource
 	name       string
 	kind       EntryType
 	capability eris.Capability
@@ -39,13 +39,13 @@ type node struct {
 
 // OpenFS decodes the top-level index and returns a read-only virtual file
 // system. It does not read the content of regular files.
-func OpenFS(capability eris.Capability, source BlockSource) (*FS, error) {
+func OpenFS(capability eris.Capability, source eris.BlockSource) (*FS, error) {
 	return OpenFSWithLimit(capability, source, DefaultMaxIndexSize)
 }
 
 // OpenFSWithLimit opens an image whose top-level and nested decoded indexes
 // are each at most limit bytes. A non-positive limit is invalid.
-func OpenFSWithLimit(capability eris.Capability, source BlockSource, limit int64) (*FS, error) {
+func OpenFSWithLimit(capability eris.Capability, source eris.BlockSource, limit int64) (*FS, error) {
 	index, err := DecodeIndexWithLimit(capability, source, limit)
 	if err != nil {
 		return nil, err
@@ -57,7 +57,7 @@ func OpenFSWithLimit(capability eris.Capability, source BlockSource, limit int64
 	return &FS{source: source, root: root, prefix: ".", indexLimit: limit}, nil
 }
 
-func buildTree(index Index, source BlockSource, rootName string, indexLimit int64) (*node, error) {
+func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit int64) (*node, error) {
 	if err := index.Validate(); err != nil {
 		return nil, err
 	}

@@ -13,28 +13,6 @@ import (
 	"github.com/asciimoth/eris-tools/eris"
 )
 
-// BlockSource reads encrypted ERIS blocks. It must be safe for concurrent use.
-type BlockSource interface {
-	GetBlock(ref eris.Reference) ([]byte, error)
-}
-
-// ContextBlockSource reads encrypted ERIS blocks with cancellation and
-// deadline support. Handler uses this interface when Blocks implements it.
-type ContextBlockSource interface {
-	GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error)
-}
-
-// BlockSink writes encrypted ERIS blocks. It must be safe for concurrent use.
-type BlockSink interface {
-	PutBlock(ref eris.Reference, block []byte) error
-}
-
-// ContextBlockSink writes encrypted ERIS blocks with cancellation and deadline
-// support. Handler uses this interface when Blocks implements it.
-type ContextBlockSink interface {
-	PutBlockContext(ctx context.Context, ref eris.Reference, block []byte) error
-}
-
 // RequestAuthenticator authenticates a complete request body and returns an
 // identity. Implementations must be safe for concurrent use.
 type RequestAuthenticator interface {
@@ -54,10 +32,10 @@ func (function RequestAuthenticatorFunc) Authenticate(request *http.Request, pay
 type Authorizer func(ctx context.Context, identity, method, bucket string, ref eris.Reference) bool
 
 // Handler serves one fixed bucket. GET and HEAD are public. PUT requires Auth,
-// public-read, and a Blocks value that also implements BlockSink or
-// ContextBlockSink. PUT is disabled unless AllowPut is true.
+// public-read, and a Blocks value that also implements eris.BlockSink or
+// eris.ContextBlockSink. PUT is disabled unless AllowPut is true.
 type Handler struct {
-	Blocks BlockSource
+	Blocks eris.BlockSource
 	Bucket string
 	// AllowPut enables authenticated PUT requests. The zero value rejects PUT.
 	AllowPut  bool
@@ -164,8 +142,8 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusBadRequest, "BadDigest", "The block does not match its key.")
 		return
 	}
-	_, sinkOK := handler.Blocks.(BlockSink)
-	_, contextSinkOK := handler.Blocks.(ContextBlockSink)
+	_, sinkOK := handler.Blocks.(eris.BlockSink)
+	_, contextSinkOK := handler.Blocks.(eris.ContextBlockSink)
 	if !sinkOK && !contextSinkOK {
 		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store is not writable.")
 		return
@@ -178,17 +156,17 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 }
 
 func (handler Handler) getBlock(ctx context.Context, ref eris.Reference) ([]byte, error) {
-	if source, ok := handler.Blocks.(ContextBlockSource); ok {
+	if source, ok := handler.Blocks.(eris.ContextBlockSource); ok {
 		return source.GetBlockContext(ctx, ref)
 	}
 	return handler.Blocks.GetBlock(ref)
 }
 
 func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte) error {
-	if contextual, ok := handler.Blocks.(ContextBlockSink); ok {
+	if contextual, ok := handler.Blocks.(eris.ContextBlockSink); ok {
 		return contextual.PutBlockContext(ctx, ref, block)
 	}
-	return handler.Blocks.(BlockSink).PutBlock(ref, block)
+	return handler.Blocks.(eris.BlockSink).PutBlock(ref, block)
 }
 
 type errorResponse struct {

@@ -10,28 +10,6 @@ import (
 	"github.com/asciimoth/eris-tools/eris"
 )
 
-// BlockSource reads encrypted ERIS blocks. It must be safe for concurrent use.
-type BlockSource interface {
-	GetBlock(ref eris.Reference) ([]byte, error)
-}
-
-// ContextBlockSource reads encrypted ERIS blocks with cancellation and
-// deadline support.
-type ContextBlockSource interface {
-	GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error)
-}
-
-// BlockSink writes encrypted ERIS blocks. It must be safe for concurrent use.
-type BlockSink interface {
-	PutBlock(ref eris.Reference, block []byte) error
-}
-
-// ContextBlockSink writes encrypted ERIS blocks with cancellation and
-// deadline support.
-type ContextBlockSink interface {
-	PutBlockContext(ctx context.Context, ref eris.Reference, block []byte) error
-}
-
 // Handler serves the blocks resource of one store. Path contains the decoded
 // URI path segments before the final blocks segment. An empty path selects the
 // endpoint-wide root store.
@@ -42,11 +20,11 @@ type ContextBlockSink interface {
 type Handler struct {
 	// Path contains the store path before its final blocks segment.
 	Path []string
-	// Blocks supplies reads and, when it also implements BlockSink or
-	// ContextBlockSink, writes.
-	Blocks BlockSource
-	// AllowPut enables PUT when Blocks also implements BlockSink or
-	// ContextBlockSink. The zero value rejects PUT with 4.01 Unauthorized.
+	// Blocks supplies reads and, when it also implements eris.BlockSink or
+	// eris.ContextBlockSink, writes.
+	Blocks eris.BlockSource
+	// AllowPut enables PUT when Blocks also implements eris.BlockSink or
+	// eris.ContextBlockSink. The zero value rejects PUT with 4.01 Unauthorized.
 	AllowPut bool
 	// Next receives requests outside this store. A nil Next produces 4.04 Not
 	// Found.
@@ -175,23 +153,23 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 }
 
 func (handler Handler) getBlock(ctx context.Context, ref eris.Reference) ([]byte, error) {
-	if contextual, ok := handler.Blocks.(ContextBlockSource); ok {
+	if contextual, ok := handler.Blocks.(eris.ContextBlockSource); ok {
 		return contextual.GetBlockContext(ctx, ref)
 	}
 	return handler.Blocks.GetBlock(ref)
 }
 
 func (handler Handler) writable() bool {
-	_, sink := handler.Blocks.(BlockSink)
-	_, contextual := handler.Blocks.(ContextBlockSink)
+	_, sink := handler.Blocks.(eris.BlockSink)
+	_, contextual := handler.Blocks.(eris.ContextBlockSink)
 	return sink || contextual
 }
 
 func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte) error {
-	if contextual, ok := handler.Blocks.(ContextBlockSink); ok {
+	if contextual, ok := handler.Blocks.(eris.ContextBlockSink); ok {
 		return contextual.PutBlockContext(ctx, ref, append([]byte(nil), block...))
 	}
-	return handler.Blocks.(BlockSink).PutBlock(ref, append([]byte(nil), block...))
+	return handler.Blocks.(eris.BlockSink).PutBlock(ref, append([]byte(nil), block...))
 }
 
 var _ protocol.Handler = Handler{}

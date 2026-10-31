@@ -140,4 +140,7 @@ func cloneURL(input *url.URL) *url.URL {
 	return &clone
 }
 
-var _ ContextBlockSource = (*Client)(nil)
+var (
+	_ eris.BlockSource        = (*Client)(nil)
+	_ eris.ContextBlockSource = (*Client)(nil)
+)

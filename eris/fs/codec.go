@@ -10,7 +10,7 @@ import (
 // EncodeContent reads content, encodes it with ERIS, and writes each encrypted
 // block to sink. It keeps only one content block and a bounded set of pending
 // tree pairs per level. It does not access host I/O.
-func EncodeContent(content io.Reader, secret eris.Secret, blockSize eris.BlockSize, sink BlockSink) (eris.Capability, error) {
+func EncodeContent(content io.Reader, secret eris.Secret, blockSize eris.BlockSize, sink eris.BlockSink) (eris.Capability, error) {
 	if !blockSize.Valid() {
 		return eris.Capability{}, eris.ErrInvalidBlockSize
 	}
@@ -47,7 +47,7 @@ func EncodeContent(content io.Reader, secret eris.Secret, blockSize eris.BlockSi
 }
 
 // EncodeIndex encodes a canonical ERIS-FS index and writes its ERIS blocks.
-func EncodeIndex(index Index, secret eris.Secret, sink BlockSink) (eris.Capability, error) {
+func EncodeIndex(index Index, secret eris.Secret, sink eris.BlockSink) (eris.Capability, error) {
 	data, err := index.MarshalBinary()
 	if err != nil {
 		return eris.Capability{}, err
@@ -56,13 +56,13 @@ func EncodeIndex(index Index, secret eris.Secret, sink BlockSink) (eris.Capabili
 }
 
 // DecodeIndex reads and parses an ERIS-FS index from source.
-func DecodeIndex(capability eris.Capability, source BlockSource) (Index, error) {
+func DecodeIndex(capability eris.Capability, source eris.BlockSource) (Index, error) {
 	return DecodeIndexWithLimit(capability, source, DefaultMaxIndexSize)
 }
 
 // DecodeIndexWithLimit reads and parses an index whose decoded representation
 // is at most limit bytes. A non-positive limit is invalid.
-func DecodeIndexWithLimit(capability eris.Capability, source BlockSource, limit int64) (Index, error) {
+func DecodeIndexWithLimit(capability eris.Capability, source eris.BlockSource, limit int64) (Index, error) {
 	if limit <= 0 {
 		return Index{}, ErrInvalidLimit
 	}
@@ -77,7 +77,7 @@ func DecodeIndexWithLimit(capability eris.Capability, source BlockSource, limit 
 	return ParseIndex(data)
 }
 
-func putNode(node []byte, secret eris.Secret, level eris.Level, sink BlockSink) (eris.Pair, error) {
+func putNode(node []byte, secret eris.Secret, level eris.Level, sink eris.BlockSink) (eris.Pair, error) {
 	block, pair, err := eris.EncryptNode(node, secret, level)
 	if err != nil {
 		return eris.Pair{}, err
@@ -91,7 +91,7 @@ func putNode(node []byte, secret eris.Secret, level eris.Level, sink BlockSink) 
 type treeEncoder struct {
 	secret    eris.Secret
 	blockSize eris.BlockSize
-	sink      BlockSink
+	sink      eris.BlockSink
 	levels    [][]eris.Pair
 }
 

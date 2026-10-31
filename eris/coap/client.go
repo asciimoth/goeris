@@ -124,8 +124,7 @@ func validateContentFormat(message *protocol.Message, expected uint32) error {
 }
 
 var (
-	_ BlockSource        = (*Client)(nil)
-	_ ContextBlockSource = (*Client)(nil)
-	_ BlockSink          = (*Client)(nil)
-	_ ContextBlockSink   = (*Client)(nil)
+	_ eris.BlockStore         = (*Client)(nil)
+	_ eris.ContextBlockSource = (*Client)(nil)
+	_ eris.ContextBlockSink   = (*Client)(nil)
 )

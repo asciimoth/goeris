@@ -42,25 +42,6 @@ var (
 	ErrClosed = stdfs.ErrClosed
 )
 
-// BlockSource retrieves encrypted ERIS blocks. Implementations can use any
-// storage or transport. GetBlock must return the full block for ref. A source
-// used by FS must support concurrent calls.
-type BlockSource interface {
-	GetBlock(ref eris.Reference) ([]byte, error)
-}
-
-// BlockSink stores encrypted ERIS blocks. PutBlock must not retain block unless
-// its contract explicitly permits that behavior.
-type BlockSink interface {
-	PutBlock(ref eris.Reference, block []byte) error
-}
-
-// BlockStore can read and write encrypted ERIS blocks.
-type BlockStore interface {
-	BlockSource
-	BlockSink
-}
-
 // FileSystem is the high-level, read-only ERIS-FS interface. It includes the
 // standard library file-system operations, link metadata, and typed access to
 // regular files that support seeking and random-access reads.

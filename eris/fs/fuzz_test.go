@@ -2,6 +2,8 @@ package fs
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"reflect"
 	"testing"
 
@@ -52,8 +54,10 @@ func FuzzIndexRoundTrip(f *testing.F) {
 }
 
 func FuzzReaderRandomAccess(f *testing.F) {
+	f.Add([]byte{}, uint16(0), uint16(1))
 	f.Add([]byte("content"), uint16(0), uint16(20))
 	f.Add(make([]byte, 2049), uint16(1000), uint16(2000))
+	f.Add(make([]byte, 16385), uint16(16380), uint16(16))
 	f.Fuzz(func(t *testing.T, content []byte, offset, length uint16) {
 		if len(content) > 1<<18 {
 			t.Skip()
@@ -72,10 +76,16 @@ func FuzzReaderRandomAccess(f *testing.F) {
 			position = len(content)
 		}
 		buffer := make([]byte, int(length))
-		n, _ := reader.ReadAt(buffer, int64(position))
+		n, readErr := reader.ReadAt(buffer, int64(position))
 		end := min(len(content), position+len(buffer))
-		if !bytes.Equal(buffer[:n], content[position:end]) {
-			t.Fatal("random read returned different content")
+		if n != end-position || !bytes.Equal(buffer[:n], content[position:end]) {
+			t.Fatalf("random read returned %d bytes; want %d matching bytes", n, end-position)
+		}
+		if len(buffer) > n && !errors.Is(readErr, io.EOF) {
+			t.Fatalf("short read error = %v; want EOF", readErr)
+		}
+		if len(buffer) == n && readErr != nil {
+			t.Fatalf("complete read error = %v; want nil", readErr)
 		}
 	})
 }

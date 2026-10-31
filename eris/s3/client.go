@@ -137,7 +137,8 @@ func responseError(response *http.Response) error {
 	return &ResponseError{StatusCode: response.StatusCode, Status: response.Status}
 }
 
-var _ interface {
-	GetBlock(eris.Reference) ([]byte, error)
-	PutBlock(eris.Reference, []byte) error
-} = (*Client)(nil)
+var (
+	_ eris.BlockStore         = (*Client)(nil)
+	_ eris.ContextBlockSource = (*Client)(nil)
+	_ eris.ContextBlockSink   = (*Client)(nil)
+)

@@ -1,7 +1,7 @@
 // Package fs implements version 1 of the ERIS-FS format.
 //
-// The low-level API contains Index, Entry, the index codecs, Reader, and the
-// abstract block source and sink interfaces. These values let applications
+// The low-level API contains Index, Entry, the index codecs, and Reader. It uses
+// the block source and sink interfaces in the eris package so applications can
 // control storage and transport.
 //
 // The high-level API contains Builder, FileSystem, and OpenFS. It exposes an

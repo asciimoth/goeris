@@ -25,7 +25,7 @@ type treeSummary struct {
 // internal nodes when it opens and fetches leaf blocks only when they are read.
 type Reader struct {
 	mu         sync.Mutex
-	source     BlockSource
+	source     eris.BlockSource
 	capability eris.Capability
 	size       int64
 	position   int64
@@ -37,11 +37,11 @@ type Reader struct {
 }
 
 // NewReader opens an ERIS byte sequence from an abstract block source.
-func NewReader(capability eris.Capability, source BlockSource) (*Reader, error) {
+func NewReader(capability eris.Capability, source eris.BlockSource) (*Reader, error) {
 	return newReader(capability, source, -1)
 }
 
-func newReader(capability eris.Capability, source BlockSource, maxSize int64) (*Reader, error) {
+func newReader(capability eris.Capability, source eris.BlockSource, maxSize int64) (*Reader, error) {
 	if source == nil || capability.Validate() != nil {
 		return nil, eris.ErrInvalidCapability
 	}

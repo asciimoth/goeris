@@ -12,27 +12,13 @@ import (
 	erisfs "github.com/asciimoth/eris-tools/eris/fs"
 )
 
-// BlockSource retrieves encrypted ERIS blocks. Implementations can use any
-// storage or transport. GetBlock must return the complete block for ref. A
-// source used by Handler must support concurrent calls.
-type BlockSource interface {
-	GetBlock(ref eris.Reference) ([]byte, error)
-}
-
-// ContextBlockSource retrieves encrypted ERIS blocks with cancellation and
-// deadline support. Handler uses this interface when Blocks implements it. It
-// uses BlockSource otherwise.
-type ContextBlockSource interface {
-	GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error)
-}
-
 // Handler serves ERIS resources from an abstract block source. It processes
 // only supported URNs at N2RPath. It delegates all other requests to Next.
 // Callers can chain handlers for other URN types on the same endpoint.
 //
 // A nil Next handler is equivalent to net/http.NotFoundHandler.
 type Handler struct {
-	Blocks BlockSource
+	Blocks eris.BlockSource
 	Next   nethttp.Handler
 }
 
@@ -95,11 +81,11 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 
 type requestBlockSource struct {
 	ctx    context.Context
-	source BlockSource
+	source eris.BlockSource
 }
 
 func (source requestBlockSource) GetBlock(ref eris.Reference) ([]byte, error) {
-	if contextual, ok := source.source.(ContextBlockSource); ok {
+	if contextual, ok := source.source.(eris.ContextBlockSource); ok {
 		return contextual.GetBlockContext(source.ctx, ref)
 	}
 	return source.source.GetBlock(ref)

@@ -600,14 +600,14 @@ type errorReader struct{ err error }
 func (reader errorReader) Read([]byte) (int, error) { return 0, reader.err }
 
 type flakySource struct {
-	BlockSource
+	eris.BlockSource
 	ref       eris.Reference
 	remaining int
 	err       error
 }
 
 type failAfterSource struct {
-	BlockSource
+	eris.BlockSource
 	calls  int
 	failAt int
 	err    error
