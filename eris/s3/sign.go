@@ -194,7 +194,21 @@ func canonicalURI(path string) string {
 	if path == "" {
 		return "/"
 	}
-	return path
+	// EscapedPath permits reserved characters that SigV4 requires encoded.
+	// Keep existing escapes (including encoded slashes) and path segments;
+	// decoding or cleaning the path can change the requested object.
+	var encoded strings.Builder
+	for path != "" {
+		index := strings.IndexByte(path, '%')
+		if index < 0 || index+2 >= len(path) {
+			encoded.WriteString(uriEncode(path, false))
+			break
+		}
+		encoded.WriteString(uriEncode(path[:index], false))
+		encoded.WriteString(strings.ToUpper(path[index : index+3]))
+		path = path[index+3:]
+	}
+	return encoded.String()
 }
 
 func canonicalQuery(values url.Values) string {

@@ -118,6 +118,27 @@ func TestSignatureCoversEscapedPath(t *testing.T) {
 	}
 }
 
+func TestCanonicalRequestReservedPathCharacters(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ path, want string }{
+		{"/bucket/a:b@c=d+$&", "/bucket/a%3Ab%40c%3Dd%2B%24%26"},
+		{"/bucket/a%2fb%3ac", "/bucket/a%2Fb%3Ac"},
+		{"/bucket/a%252Fb", "/bucket/a%252Fb"},
+		{"/bucket//a/../b", "/bucket//a/../b"},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			request, err := http.NewRequest(http.MethodGet, "https://example"+test.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonical, _, err := CanonicalRequest(request, sha256Hex(nil))
+			if err != nil || !strings.HasPrefix(canonical, "GET\n"+test.want+"\n") {
+				t.Fatalf("canonical request = %q, %v; want path %q", canonical, err, test.want)
+			}
+		})
+	}
+}
+
 func TestMalformedQueryCannotBeSignedOrAuthenticated(t *testing.T) {
 	t.Parallel()
 	request, err := http.NewRequest(http.MethodGet, "https://example/key?good=1", nil)
