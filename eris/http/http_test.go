@@ -446,7 +446,7 @@ func TestClientContentBodyOwnership(t *testing.T) {
 		t.Fatalf("Close() = %v; closed = %v", err, successBody.closed)
 	}
 
-	for _, status := range []int{nethttp.StatusNotFound, nethttp.StatusInternalServerError} {
+	for _, status := range []int{nethttp.StatusNotFound, nethttp.StatusPartialContent, nethttp.StatusNoContent, nethttp.StatusInternalServerError} {
 		errorBody := &trackingBody{Reader: strings.NewReader("error")}
 		client, _ := NewClient(clientFunc(func(*nethttp.Request) (*nethttp.Response, error) {
 			response := response(status, "text/plain", strings.NewReader(""))

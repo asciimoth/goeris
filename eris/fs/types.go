@@ -74,22 +74,23 @@ type Index struct {
 // Validate checks all entries and path relationships.
 func (index Index) Validate() error {
 	entries := slices.Clone(index.Entries)
-	for i := range entries {
-		entries[i].Path = slices.Clone(entries[i].Path)
-		if err := validateEntry(entries[i]); err != nil {
+	for _, entry := range index.Entries {
+		if err := validateEntry(entry); err != nil {
 			return err
 		}
 	}
 	slices.SortFunc(entries, func(a, b Entry) int {
-		return strings.Compare(strings.Join(a.Path, "/"), strings.Join(b.Path, "/"))
+		for i := 0; i < min(len(a.Path), len(b.Path)); i++ {
+			if order := strings.Compare(a.Path[i], b.Path[i]); order != 0 {
+				return order
+			}
+		}
+		return len(a.Path) - len(b.Path)
 	})
 	for i := 1; i < len(entries); i++ {
-		previous := strings.Join(entries[i-1].Path, "/")
-		current := strings.Join(entries[i].Path, "/")
-		if current == previous {
-			return ErrPathConflict
-		}
-		if strings.HasPrefix(current, previous+"/") {
+		previous := entries[i-1].Path
+		current := entries[i].Path
+		if len(previous) <= len(current) && slices.Equal(previous, current[:len(previous)]) {
 			return ErrPathConflict
 		}
 	}

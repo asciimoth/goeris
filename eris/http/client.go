@@ -124,7 +124,7 @@ func (client *Client) OpenContent(ctx context.Context, capability eris.Capabilit
 		_ = response.Body.Close()
 		return nil, eris.ErrMissingBlock
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
+	if response.StatusCode != nethttp.StatusOK {
 		_ = response.Body.Close()
 		return nil, &ResponseError{StatusCode: response.StatusCode, Status: response.Status}
 	}

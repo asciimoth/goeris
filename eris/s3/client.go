@@ -146,7 +146,7 @@ func (client *Client) PutBlockContext(ctx context.Context, block []byte, expecte
 		return eris.Reference{}, err
 	}
 	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
+	if response.StatusCode != http.StatusOK {
 		return eris.Reference{}, responseError(response)
 	}
 	limit := int64(eris.BlockSize32KiB) + 1

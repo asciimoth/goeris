@@ -116,6 +116,16 @@ func TestIndexValidation(t *testing.T) {
 		"prefix": {
 			{Path: []string{"a"}, Type: Symlink}, {Path: []string{"a", "b"}, Type: Symlink},
 		},
+		"interleaved prefix": {
+			{Path: []string{"a"}, Type: Symlink},
+			{Path: []string{"a-b"}, Type: Symlink},
+			{Path: []string{"a", "b"}, Type: Symlink},
+		},
+		"child before parent": {
+			{Path: []string{"a", "b"}, Type: Symlink},
+			{Path: []string{"a-b"}, Type: Symlink},
+			{Path: []string{"a"}, Type: Symlink},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := (Index{Entries: entries}).Validate(); !errors.Is(err, ErrPathConflict) {

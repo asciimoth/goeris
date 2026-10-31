@@ -236,6 +236,8 @@ func TestClientPutResponses(t *testing.T) {
 	}{
 		{func(*http.Request) (*http.Response, error) { return nil, sentinel }, sentinel},
 		{func(*http.Request) (*http.Response, error) { return response(403, strings.NewReader("denied")), nil }, &ResponseError{}},
+		{func(*http.Request) (*http.Response, error) { return response(202, strings.NewReader("pending")), nil }, &ResponseError{}},
+		{func(*http.Request) (*http.Response, error) { return response(206, strings.NewReader("partial")), nil }, &ResponseError{}},
 		{func(*http.Request) (*http.Response, error) { return response(200, errorReader{sentinel}), nil }, sentinel},
 		{func(*http.Request) (*http.Response, error) { return response(200, strings.NewReader("ok")), nil }, nil},
 		{func(*http.Request) (*http.Response, error) {
