@@ -256,7 +256,8 @@ func (fileSystem *FS) ReadLink(path string) (string, error) {
 	return item.target, nil
 }
 
-// Sub implements io/fs.SubFS.
+// Sub implements io/fs.SubFS. Links in the result can resolve to paths outside
+// the selected directory but remain inside the same image.
 func (fileSystem *FS) Sub(name string) (stdfs.FS, error) {
 	item, err := fileSystem.find(name, true)
 	if err != nil {
@@ -395,7 +396,7 @@ func (file *directoryFile) ReadDir(count int) ([]stdfs.DirEntry, error) {
 	}
 	end := len(entries)
 	if count > 0 {
-		end = min(end, file.offset+count)
+		end = file.offset + min(count, len(entries)-file.offset)
 	}
 	result := entries[file.offset:end]
 	file.offset = end

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	stdfs "io/fs"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -522,6 +523,21 @@ func TestFileSystemConformance(t *testing.T) {
 	}
 	if err = fstest.TestFS(image, "a", "a/file", "a/link", "tool"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDirectoryReadDirLargeCountAfterOffset(t *testing.T) {
+	t.Parallel()
+	file := &directoryFile{node: &node{children: map[string]*node{
+		"a": {name: "a"}, "b": {name: "b"}, "c": {name: "c"},
+	}}}
+	first, err := file.ReadDir(1)
+	if err != nil || names(first) != "a" {
+		t.Fatalf("first ReadDir = (%v, %v)", names(first), err)
+	}
+	rest, err := file.ReadDir(math.MaxInt)
+	if err != nil || names(rest) != "b,c" {
+		t.Fatalf("large ReadDir = (%v, %v)", names(rest), err)
 	}
 }
 

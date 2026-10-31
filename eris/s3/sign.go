@@ -64,7 +64,8 @@ func SignV4(request *http.Request, payload []byte, credentials Credentials, regi
 	if !credentials.Valid() || region == "" || strings.ContainsAny(region, "/, \t\r\n") {
 		return ErrInvalidCredentials
 	}
-	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" {
+	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" ||
+		!validRequestQuery(request) {
 		return ErrInvalidRequest
 	}
 	if request.Header == nil {
@@ -93,7 +94,7 @@ func SignV4(request *http.Request, payload []byte, credentials Credentials, regi
 // The caller must supply a lowercase hexadecimal SHA-256 payload hash.
 func CanonicalRequest(request *http.Request, payloadHash string) (string, string, error) {
 	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" ||
-		!validSHA256Hex(payloadHash) {
+		!validSHA256Hex(payloadHash) || !validRequestQuery(request) {
 		return "", "", ErrInvalidRequest
 	}
 	canonical, signedHeaders := canonicalRequest(request, payloadHash)
@@ -130,6 +131,11 @@ func validSHA256Hex(value string) bool {
 		return false
 	}
 	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validRequestQuery(request *http.Request) bool {
+	_, err := url.ParseQuery(request.URL.RawQuery)
 	return err == nil
 }
 
@@ -268,7 +274,7 @@ type V4Authenticator struct {
 func (authenticator V4Authenticator) Authenticate(request *http.Request, payload []byte) (string, error) {
 	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" ||
 		authenticator.Credentials == nil || authenticator.Region == "" ||
-		strings.ContainsAny(authenticator.Region, "/, \t\r\n") {
+		strings.ContainsAny(authenticator.Region, "/, \t\r\n") || !validRequestQuery(request) {
 		return "", ErrAuthentication
 	}
 	parsed, err := parseAuthorization(request.Header.Get("Authorization"))

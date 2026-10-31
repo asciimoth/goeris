@@ -78,6 +78,37 @@ func TestCanonicalRequest(t *testing.T) {
 	}
 }
 
+func TestMalformedQueryCannotBeSignedOrAuthenticated(t *testing.T) {
+	t.Parallel()
+	request, err := http.NewRequest(http.MethodGet, "https://example/key?good=1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator := V4Authenticator{
+		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+			return testCredentials, nil
+		}),
+		Region: "region",
+		Clock:  func() time.Time { return testTime },
+	}
+	if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authenticator.Authenticate(request, nil); err != nil {
+		t.Fatalf("valid query authentication = %v", err)
+	}
+	request.URL.RawQuery += "&bad=%"
+	if _, err := authenticator.Authenticate(request, nil); !errors.Is(err, ErrAuthentication) {
+		t.Errorf("malformed query authentication = %v", err)
+	}
+	if _, _, err := CanonicalRequest(request, sha256Hex(nil)); !errors.Is(err, ErrInvalidRequest) {
+		t.Errorf("malformed canonical request = %v", err)
+	}
+	if err := SignV4(request, nil, testCredentials, "region", testTime); !errors.Is(err, ErrInvalidRequest) {
+		t.Errorf("malformed query signing = %v", err)
+	}
+}
+
 func TestSignAndAuthenticate(t *testing.T) {
 	t.Parallel()
 	credentials := testCredentials
@@ -276,6 +307,12 @@ func FuzzCanonicalRequest(f *testing.F) {
 		request.Header.Set("x-amz-meta-fuzz", header)
 		first, firstHeaders, firstErr := CanonicalRequest(request, sha256Hex(nil))
 		second, secondHeaders, secondErr := CanonicalRequest(request, sha256Hex(nil))
+		if _, queryErr := url.ParseQuery(query); queryErr != nil {
+			if !errors.Is(firstErr, ErrInvalidRequest) || !errors.Is(secondErr, ErrInvalidRequest) {
+				t.Fatalf("malformed query errors = %v, %v", firstErr, secondErr)
+			}
+			return
+		}
 		if firstErr != nil || secondErr != nil {
 			t.Fatalf("canonical errors = %v, %v", firstErr, secondErr)
 		}
