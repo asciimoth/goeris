@@ -459,3 +459,67 @@ func FuzzAuthorizationParser(f *testing.F) {
 		}
 	})
 }
+
+func TestSignV4HeaderMapCase(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"x-amz-meta-label", "X-AMZ-Meta-LABEL"} {
+		t.Run(name, func(t *testing.T) {
+			request, _ := http.NewRequest(http.MethodGet, "https://example/key", nil)
+			request.Header[name] = []string{"original"}
+			canonical, _, err := CanonicalRequest(request, sha256Hex(nil))
+			if err != nil || !strings.Contains(canonical, "x-amz-meta-label:original\n") {
+				t.Fatalf("header value omitted: %q, %v", canonical, err)
+			}
+			if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
+				t.Fatal(err)
+			}
+			// A server parses wire headers into canonical map keys.
+			wire := request.Clone(context.Background())
+			wire.Header = make(http.Header)
+			for name, values := range request.Header {
+				for _, value := range values {
+					wire.Header.Add(name, value)
+				}
+			}
+			auth := V4Authenticator{
+				Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+					return testCredentials, nil
+				}),
+				Region: "region", Clock: func() time.Time { return testTime },
+			}
+			if _, err := auth.Authenticate(wire, nil); err != nil {
+				t.Fatalf("wire request rejected: %v", err)
+			}
+			wire.Header.Set("x-amz-meta-label", "changed")
+			if _, err := auth.Authenticate(wire, nil); !errors.Is(err, ErrAuthentication) {
+				t.Fatalf("changed value authenticated: %v", err)
+			}
+		})
+	}
+}
+
+func TestSignV4RejectsAmbiguousHeaderMap(t *testing.T) {
+	t.Parallel()
+	request, _ := http.NewRequest(http.MethodGet, "https://example/key", nil)
+	if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
+		t.Fatal(err)
+	}
+	request.Header["X-Amz-Meta-Label"] = []string{"first"}
+	request.Header["x-amz-meta-label"] = []string{"second"}
+	if _, _, err := CanonicalRequest(request, sha256Hex(nil)); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("ambiguous canonical request: %v", err)
+	}
+	if err := SignV4(request, nil, testCredentials, "region", testTime); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("ambiguous request signed: %v", err)
+	}
+	auth := V4Authenticator{
+		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+			t.Fatal("ambiguous headers reached credential lookup")
+			return testCredentials, nil
+		}),
+		Region: "region", Clock: func() time.Time { return testTime },
+	}
+	if _, err := auth.Authenticate(request, nil); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("ambiguous request authenticated: %v", err)
+	}
+}

@@ -60,7 +60,8 @@ func (signer StaticV4Signer) Sign(request *http.Request, payload []byte) error {
 // SignV4 adds an AWS Signature Version 4 Authorization header. It signs the
 // host and all stable request headers. Its result is deterministic for
 // the supplied request, payload, credentials, region, and time.
-// The URL must use Path and optional RawPath, not Opaque.
+// The URL must use Path and optional RawPath, not Opaque. Header map keys
+// must not contain multiple case variants of the same field.
 func SignV4(request *http.Request, payload []byte, credentials Credentials, region string, now time.Time) error {
 	if !credentials.Valid() || region == "" || strings.ContainsAny(region, "/, \t\r\n") {
 		return ErrInvalidCredentials
@@ -69,9 +70,11 @@ func SignV4(request *http.Request, payload []byte, credentials Credentials, regi
 		!validRequestURL(request) {
 		return ErrInvalidRequest
 	}
-	if request.Header == nil {
-		request.Header = make(http.Header)
+	headers, err := normalizedHeaders(request.Header)
+	if err != nil {
+		return err
 	}
+	request.Header = headers
 	request.Header.Del("Authorization")
 	now = now.UTC()
 	payloadHash := sha256Hex(payload)
@@ -93,14 +96,35 @@ func SignV4(request *http.Request, payload []byte, credentials Credentials, regi
 
 // CanonicalRequest returns the SigV4 canonical request and signed-header list.
 // The caller must supply a lowercase hexadecimal SHA-256 payload hash.
-// The URL must use Path and optional RawPath, not Opaque.
+// The URL must use Path and optional RawPath, not Opaque. Header map keys
+// must not contain multiple case variants of the same field.
 func CanonicalRequest(request *http.Request, payloadHash string) (string, string, error) {
 	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" ||
 		!validSHA256Hex(payloadHash) || !validRequestURL(request) {
 		return "", "", ErrInvalidRequest
 	}
-	canonical, signedHeaders := canonicalRequest(request, payloadHash)
+	headers, err := normalizedHeaders(request.Header)
+	if err != nil {
+		return "", "", err
+	}
+	clone := *request
+	clone.Header = headers
+	canonical, signedHeaders := canonicalRequest(&clone, payloadHash)
 	return canonical, signedHeaders, nil
+}
+
+// Normalize direct map assignments before using Header.Get or Header.Values.
+// Distinct keys for the same field are ambiguous to callers that use Get.
+func normalizedHeaders(input http.Header) (http.Header, error) {
+	output := make(http.Header, len(input))
+	for name, values := range input {
+		canonical := http.CanonicalHeaderKey(name)
+		if _, exists := output[canonical]; exists {
+			return nil, ErrInvalidRequest
+		}
+		output[canonical] = append([]string(nil), values...)
+	}
+	return output, nil
 }
 
 func canonicalRequest(request *http.Request, payloadHash string) (string, string) {
@@ -297,13 +321,21 @@ type V4Authenticator struct {
 	ClockSkew   time.Duration
 }
 
-// Authenticate verifies request and returns its access key.
+// Authenticate verifies request and returns its access key. It rejects
+// header maps with multiple case variants of the same field.
 func (authenticator V4Authenticator) Authenticate(request *http.Request, payload []byte) (string, error) {
 	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" ||
 		authenticator.Credentials == nil || authenticator.Region == "" ||
 		strings.ContainsAny(authenticator.Region, "/, \t\r\n") || !validRequestURL(request) {
 		return "", ErrAuthentication
 	}
+	headers, err := normalizedHeaders(request.Header)
+	if err != nil {
+		return "", ErrAuthentication
+	}
+	clone := *request
+	clone.Header = headers
+	request = &clone
 	parsed, err := parseAuthorization(request.Header.Get("Authorization"))
 	if err != nil {
 		return "", err

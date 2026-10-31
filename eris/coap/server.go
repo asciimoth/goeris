@@ -138,7 +138,7 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 	if size, present, err := oneUintOption(request, protocol.OptionSize1); err != nil || present && uint64(size) != uint64(len(request.Payload)) {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
-	if !eris.BlockSize(len(request.Payload)).Valid() {
+	if !validBlockLength(len(request.Payload)) {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
 	if !handler.writable() {

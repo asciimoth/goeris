@@ -74,7 +74,7 @@ func NewGetRequest(store StoreURL, ref eris.Reference, config RequestConfig) (*p
 // reference is sent as a URI query. Size1 and the application/octet-stream
 // content format are always included.
 func NewPutRequest(store StoreURL, block []byte, config RequestConfig, expected ...eris.Reference) (*protocol.Message, error) {
-	if !eris.BlockSize(len(block)).Valid() {
+	if !validBlockLength(len(block)) {
 		return nil, errors.Join(eris.ErrInvalidBlock, eris.ErrInvalidBlockSize)
 	}
 	if len(expected) > 1 {
@@ -99,6 +99,10 @@ func NewPutRequest(store StoreURL, block []byte, config RequestConfig, expected 
 	options = append(options, protocol.UintOption(protocol.OptionSize1, uint32(len(block))))
 	sortOptions(options)
 	return &protocol.Message{Type: protocol.Confirmable, Code: protocol.PUT, Options: options, Payload: append([]byte(nil), block...)}, nil
+}
+
+func validBlockLength(length int) bool {
+	return length == int(eris.BlockSize1KiB) || length == int(eris.BlockSize32KiB)
 }
 
 func referenceQuery(ref eris.Reference, encoding ReferenceEncoding) ([]byte, error) {
