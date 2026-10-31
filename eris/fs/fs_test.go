@@ -1135,3 +1135,105 @@ func makeNode(pairs ...eris.Pair) []byte {
 	}
 	return node
 }
+
+func TestLinksToImageRoot(t *testing.T) {
+	t.Parallel()
+	blocks := make(eris.BlockSet)
+	builder := NewBuilder(blocks, eris.Secret{})
+	for name, target := range map[string]string{"root": ".", "dir/up": "..", "chain": "root"} {
+		if err := builder.AddSymlink(name, target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capability, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := OpenFS(capability, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"root", "dir/up", "chain"} {
+		info, err := image.Stat(name)
+		if err != nil {
+			t.Errorf("Stat(%q): %v", name, err)
+			continue
+		}
+		if !info.IsDir() {
+			t.Errorf("Stat(%q) is not a directory", name)
+		}
+		entries, err := image.ReadDir(name)
+		if err != nil || len(entries) != 3 {
+			t.Errorf("ReadDir(%q) = %d entries, %v", name, len(entries), err)
+		}
+	}
+}
+
+func TestLinkTargetsResolveComponentsInOrder(t *testing.T) {
+	t.Parallel()
+	blocks := make(eris.BlockSet)
+	builder := NewBuilder(blocks, eris.Secret{})
+	for name, content := range map[string]string{"value": "root", "real/value": "parent", "real/child/file": "child"} {
+		if err := builder.AddFile(name, strings.NewReader(content), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, target := range map[string]string{
+		"alias": "real/child", "via-parent": "alias/../value",
+		"missing-parent": "missing/../value", "file-parent": "value/../value",
+		"escape-return": "../real/../value", "file-slash": "value/",
+	} {
+		if err := builder.AddSymlink(name, target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capability, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := OpenFS(capability, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := stdfs.ReadFile(image, "via-parent")
+	if err != nil || string(data) != "parent" {
+		t.Errorf("link through directory link and parent = %q, %v", data, err)
+	}
+	for _, name := range []string{"missing-parent", "file-parent", "escape-return", "file-slash"} {
+		if _, err := image.Stat(name); !errors.Is(err, stdfs.ErrNotExist) {
+			t.Errorf("Stat(%q) error = %v", name, err)
+		}
+	}
+}
+
+func TestLinkResolutionLimit(t *testing.T) {
+	t.Parallel()
+	blocks := make(eris.BlockSet)
+	builder := NewBuilder(blocks, eris.Secret{})
+	for i := 0; i < 41; i++ {
+		target := "."
+		if i < 40 {
+			target = fmt.Sprintf("link%d", i+1)
+		}
+		if err := builder.AddSymlink(fmt.Sprintf("link%d", i), target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capability, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := OpenFS(capability, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := image.Stat("link1"); err != nil || !info.IsDir() {
+		t.Fatalf("40 links to root: %v", err)
+	}
+	if _, err := image.Stat("link0"); !errors.Is(err, stdfs.ErrInvalid) {
+		t.Fatalf("41 links error = %v", err)
+	}
+	if info, err := image.Lstat("link0"); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
+		t.Fatalf("Lstat must not follow the final link: %v", err)
+	}
+}

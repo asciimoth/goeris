@@ -137,6 +137,9 @@ func FuzzPadding(f *testing.F) {
 func FuzzUnpad(f *testing.F) {
 	f.Add(make([]byte, BlockSize1KiB), uint8(0))
 	f.Add([]byte{0x80}, uint8(1))
+	padded, _ := Pad([]byte("content"), BlockSize1KiB)
+	f.Add(padded, uint8(0))
+	f.Add(append([]byte{0}, padded...), uint8(0))
 	f.Fuzz(func(t *testing.T, padded []byte, sizeCode uint8) {
 		if len(padded) > 1<<20 {
 			t.Skip()
@@ -152,6 +155,9 @@ func FuzzUnpad(f *testing.F) {
 		repadded, err := Pad(content, size)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if !bytes.Equal(repadded, padded) {
+			t.Fatal("accepted padding is not canonical")
 		}
 		decoded, err := Unpad(repadded, size)
 		if err != nil || !bytes.Equal(decoded, content) {

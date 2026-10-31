@@ -124,54 +124,51 @@ func (fileSystem *FS) find(name string, followFinal bool) (*node, error) {
 	if currentPath == "." {
 		return fileSystem.root, nil
 	}
-	for links := 0; links <= 40; links++ {
-		current := fileSystem.root
-		components := strings.Split(currentPath, "/")
-		restarted := false
-		for i, component := range components {
-			if err := current.load(); err != nil {
-				return nil, err
-			}
-			if !current.isDir() {
+	pending := strings.Split(currentPath, "/")
+	ancestors := []*node{fileSystem.root}
+	links := 0
+	for len(pending) > 0 {
+		current := ancestors[len(ancestors)-1]
+		if !current.isDir() {
+			return nil, stdfs.ErrNotExist
+		}
+		component := pending[0]
+		pending = pending[1:]
+		switch component {
+		case "", ".":
+			continue
+		case "..":
+			if len(ancestors) == 1 {
 				return nil, stdfs.ErrNotExist
 			}
-			current.mu.Lock()
-			next := current.children[component]
-			current.mu.Unlock()
-			if next == nil {
-				return nil, stdfs.ErrNotExist
-			}
-			final := i == len(components)-1
-			if next.kind != Symlink || (final && !followFinal) {
-				current = next
-				continue
-			}
-			resolved, err := resolveLink(components[:i], next.target, components[i+1:])
-			if err != nil {
-				return nil, err
-			}
-			currentPath = resolved
-			restarted = true
-			break
+			ancestors = ancestors[:len(ancestors)-1]
+			continue
 		}
-		if !restarted {
-			return current, nil
+		if err := current.load(); err != nil {
+			return nil, err
 		}
+		current.mu.Lock()
+		next := current.children[component]
+		current.mu.Unlock()
+		if next == nil {
+			return nil, stdfs.ErrNotExist
+		}
+		if next.kind != Symlink || (len(pending) == 0 && !followFinal) {
+			ancestors = append(ancestors, next)
+			continue
+		}
+		if links == 40 {
+			return nil, stdfs.ErrInvalid
+		}
+		links++
+		if next.target == "" || strings.HasPrefix(next.target, "/") {
+			return nil, stdfs.ErrNotExist
+		}
+		// Resolve each target component before processing its parent segments.
+		// Cleaning the text first can select a different file through a link.
+		pending = append(strings.Split(next.target, "/"), pending...)
 	}
-	return nil, stdfs.ErrInvalid
-}
-
-func resolveLink(parent []string, target string, remainder []string) (string, error) {
-	if target == "" || strings.HasPrefix(target, "/") {
-		return "", stdfs.ErrNotExist
-	}
-	parts := append(slices.Clone(parent), target)
-	parts = append(parts, remainder...)
-	resolved := path.Clean(strings.Join(parts, "/"))
-	if resolved == ".." || strings.HasPrefix(resolved, "../") || !stdfs.ValidPath(resolved) {
-		return "", stdfs.ErrNotExist
-	}
-	return resolved, nil
+	return ancestors[len(ancestors)-1], nil
 }
 
 // Open implements io/fs.FS. Links are resolved only within this image. An

@@ -21,7 +21,7 @@ func Unpad(padded []byte, blockSize BlockSize) ([]byte, error) {
 		return nil, ErrInvalidBlockSize
 	}
 	size := int(blockSize)
-	if len(padded) < size {
+	if len(padded) < size || len(padded)%size != 0 {
 		return nil, ErrInvalidPadding
 	}
 	for i := len(padded) - 1; i >= len(padded)-size; i-- {

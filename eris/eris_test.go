@@ -261,6 +261,19 @@ func TestPadding(t *testing.T) {
 	}
 }
 
+func TestUnpadRejectsPartialBlocks(t *testing.T) {
+	t.Parallel()
+	for _, size := range []BlockSize{BlockSize1KiB, BlockSize32KiB} {
+		for _, length := range []int{int(size) + 1, 2*int(size) - 1} {
+			padded := make([]byte, length)
+			padded[length-1] = 0x80
+			if _, err := Unpad(padded, size); !errors.Is(err, ErrInvalidPadding) {
+				t.Errorf("Unpad(%d bytes, %d) error = %v", length, size, err)
+			}
+		}
+	}
+}
+
 func TestCrypto(t *testing.T) {
 	t.Parallel()
 
