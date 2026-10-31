@@ -9,7 +9,8 @@ The `eris` package implements:
 - BLAKE2b-256 references and ChaCha20 node encryption;
 - read capability binary, URN, and CBOR encodings;
 - deterministic encoding to an in-memory block set; and
-- verified decoding from an in-memory block set.
+- verified decoding from an in-memory block set, with abstract block storage
+  interfaces.
 
 The `eris/cbor` package implements the ERIS CBOR transport format:
 
@@ -21,7 +22,7 @@ The `eris/cbor` package implements the ERIS CBOR transport format:
 The `eris/fs` package implements ERIS-FS version 1:
 
 - canonical deterministic CBOR index encoding and strict decoding;
-- low-level index, ERIS reader, and abstract block storage APIs;
+- low-level index and ERIS reader APIs;
 - regular, executable, symbolic-link, and nested-image entries;
 - host-independent builders that accept `io.Reader` values and abstract block
   stores;
@@ -67,7 +68,8 @@ The `eris/coap` package implements ERIS over CoAP:
 
 - canonical `coap` and `coap+tcp` store URLs;
 - raw and Base32 block-reference queries;
-- verified GET and PUT clients with single-message and block-wise transfers;
+- verified GET and reference-returning PUT clients with single-message and
+  block-wise transfers;
 - storage-backed, context-aware handlers with opt-in PUT support;
 - deterministic CoRE Link Format discovery documents;
 - cross-network proxy advertisements and Hop-Limit forwarding helpers; and
@@ -76,6 +78,11 @@ The `eris/coap` package implements ERIS over CoAP:
 The CoAP package performs no name resolution, dialing, listening, socket
 creation, or file-system access. Applications supply `coaperation` requesters
 over their chosen in-memory or network transports.
+
+CoAP PUT handlers return the computed reference as 32 raw octets in the
+`2.01 Created` payload. A PUT request can include an expected reference as a URI
+query. For an older server with an empty success payload, the client computes
+the reference locally when no expected reference was supplied.
 
 The core `eris` package does not implement storage, file or stream I/O,
 networking, random-secret generation, or ERIS extensions.
@@ -89,6 +96,11 @@ if err != nil {
 
 decoded, err := eris.Decode(capability, blocks)
 ```
+
+`BlockSink.PutBlock(block)` returns the reference computed by storage.
+`BlockSink.PutBlock(block, expected)` rejects a block that does not match the
+expected reference. `BlockSource.GetBlock(ref)` returns only a matching block;
+the source verifies stored or received data if it can be incorrect.
 
 Build and open an ERIS-FS image without host file-system access:
 

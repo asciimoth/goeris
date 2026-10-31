@@ -81,9 +81,10 @@ func FuzzAdvertisements(f *testing.F) {
 }
 
 func FuzzHandler(f *testing.F) {
-	_, ref := makeBlock(int(eris.BlockSize1KiB), 2)
+	block, ref := makeBlock(int(eris.BlockSize1KiB), 2)
 	f.Add(uint8(protocol.GET), []byte(ref.String()), uint32(1024), []byte(nil))
 	f.Add(uint8(protocol.PUT), []byte(nil), uint32(1024), bytes.Repeat([]byte{1}, 1024))
+	f.Add(uint8(protocol.PUT), ref[:], uint32(1024), block)
 	f.Add(uint8(255), []byte("bad"), uint32(0), []byte("bad"))
 	f.Fuzz(func(t *testing.T, code uint8, query []byte, size uint32, payload []byte) {
 		if len(payload) > int(eris.BlockSize32KiB)+1 {
@@ -98,10 +99,16 @@ func FuzzHandler(f *testing.F) {
 		}
 		sortOptions(options)
 		request := &protocol.Message{Code: protocol.Code(code), Options: options, Payload: append([]byte(nil), payload...)}
-		handler := Handler{Blocks: make(eris.BlockSet)}
+		handler := Handler{Blocks: make(eris.BlockSet), AllowPut: true}
 		response, err := handler.ServeCOAP(context.Background(), request)
 		if err != nil || response == nil || !response.Code.IsResponse() {
 			t.Fatalf("response = %+v, %v", response, err)
+		}
+		if response.Code == protocol.Created {
+			actual, hashErr := eris.ReferenceOf(payload)
+			if hashErr != nil || !bytes.Equal(response.Payload, actual[:]) {
+				t.Fatalf("PUT reference = %x, hash error %v", response.Payload, hashErr)
+			}
 		}
 	})
 }

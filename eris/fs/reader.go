@@ -249,7 +249,7 @@ func (reader *Reader) decrypt(pair eris.Pair, level eris.Level) ([]byte, error) 
 	if len(block) != int(reader.capability.BlockSize) {
 		return nil, eris.ErrInvalidBlockSize
 	}
-	return eris.DecryptNode(block, pair, level)
+	return eris.DecryptNodeFromSource(block, pair.Key, level)
 }
 
 func (reader *Reader) leafPair(index int64) (eris.Pair, error) {

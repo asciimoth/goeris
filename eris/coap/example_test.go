@@ -22,7 +22,7 @@ func ExampleClient() {
 	reference := encoded.Root.Reference
 	block, _ := encodedBlocks.GetBlock(reference)
 
-	_ = client.PutBlock(reference, block)
+	_, _ = client.PutBlock(block, reference)
 	received, _ := client.GetBlock(reference)
 	fmt.Println(len(received))
 	// Output: 1024

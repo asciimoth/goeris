@@ -631,7 +631,15 @@ func (source *flakySource) GetBlock(ref eris.Reference) ([]byte, error) {
 
 type errorSink struct{ err error }
 
-func (sink errorSink) PutBlock(eris.Reference, []byte) error { return sink.err }
+type malformedSource []byte
+
+func (source malformedSource) GetBlock(eris.Reference) ([]byte, error) {
+	return source, nil
+}
+
+func (sink errorSink) PutBlock([]byte, ...eris.Reference) (eris.Reference, error) {
+	return eris.Reference{}, sink.err
+}
 
 type countingSink struct {
 	calls  int
@@ -639,12 +647,12 @@ type countingSink struct {
 	err    error
 }
 
-func (sink *countingSink) PutBlock(eris.Reference, []byte) error {
+func (sink *countingSink) PutBlock(block []byte, _ ...eris.Reference) (eris.Reference, error) {
 	sink.calls++
 	if sink.calls == sink.failAt {
-		return sink.err
+		return eris.Reference{}, sink.err
 	}
-	return nil
+	return eris.ReferenceOf(block)
 }
 
 func TestCodecErrors(t *testing.T) {
@@ -835,6 +843,9 @@ func TestReaderRejectsBadBlocks(t *testing.T) {
 	wrongSize[capability.Root.Reference] = []byte{1}
 	if _, err := NewReader(capability, wrongSize); !errors.Is(err, eris.ErrInvalidBlockSize) {
 		t.Fatalf("short root error = %v", err)
+	}
+	if _, err := NewReader(capability, malformedSource(make([]byte, eris.BlockSize32KiB))); !errors.Is(err, eris.ErrInvalidBlockSize) {
+		t.Fatalf("wrong size from source error = %v", err)
 	}
 	corrupt := cloneBlockSet(blocks)
 	corrupt[capability.Root.Reference][0] ^= 1
@@ -1033,7 +1044,7 @@ func TestBlockSetStorageMethods(t *testing.T) {
 	node := make([]byte, eris.BlockSize1KiB)
 	block, pair, _ := eris.EncryptNode(node, eris.Secret{}, 0)
 	blocks := make(eris.BlockSet)
-	if err := blocks.PutBlock(pair.Reference, block); err != nil {
+	if _, err := blocks.PutBlock(block, pair.Reference); err != nil {
 		t.Fatal(err)
 	}
 	block[0] ^= 1
@@ -1049,11 +1060,11 @@ func TestBlockSetStorageMethods(t *testing.T) {
 	if _, err = blocks.GetBlock(eris.Reference{9}); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("missing error = %v", err)
 	}
-	if err = (eris.BlockSet(nil)).PutBlock(pair.Reference, again); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err = (eris.BlockSet(nil)).PutBlock(again, pair.Reference); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("nil put error = %v", err)
 	}
 	again[0] ^= 1
-	if err = blocks.PutBlock(pair.Reference, again); !errors.Is(err, eris.ErrInvalidBlock) {
+	if _, err = blocks.PutBlock(again, pair.Reference); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Fatalf("corrupt put error = %v", err)
 	}
 }

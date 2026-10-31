@@ -121,8 +121,8 @@ func TestClientEndToEnd(t *testing.T) {
 		return recorder.Result(), nil
 	})
 	client, _ := NewClient(executor, testStore(t), StaticV4Signer{Credentials: credentials, Region: "test-1", Clock: clock})
-	if err := client.PutBlock(ref, block); err != nil {
-		t.Fatal(err)
+	if gotRef, err := client.PutBlock(block); err != nil || gotRef != ref {
+		t.Fatalf("PutBlock() = %v, %v", gotRef, err)
 	}
 	got, err := client.GetBlock(ref)
 	if err != nil || !bytes.Equal(got, block) {
@@ -241,7 +241,7 @@ func TestClientPutResponses(t *testing.T) {
 	}
 	for index, test := range tests {
 		client, _ := NewClient(test.do, testStore(t), signerFunc(func(*http.Request, []byte) error { return nil }))
-		err := client.PutBlockContext(context.Background(), ref, block)
+		_, err := client.PutBlockContext(context.Background(), block, ref)
 		if test.want == nil && err != nil {
 			t.Errorf("case %d: %v", index, err)
 		} else if test.want != nil {
@@ -256,8 +256,42 @@ func TestClientPutResponses(t *testing.T) {
 		}
 	}
 	unsigned, _ := NewClient(httpClientFunc(nil), testStore(t), nil)
-	if err := unsigned.PutBlockContext(context.Background(), ref, block); !errors.Is(err, ErrAuthentication) {
+	if _, err := unsigned.PutBlockContext(context.Background(), block, ref); !errors.Is(err, ErrAuthentication) {
 		t.Errorf("request construction error = %v", err)
+	}
+}
+
+func TestClientPutValidation(t *testing.T) {
+	t.Parallel()
+	ref, block := testBlock(t)
+	other := ref
+	other[0] ^= 1
+	client, _ := NewClient(httpClientFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("invalid PUT reached transport")
+		return nil, nil
+	}), testStore(t), signerFunc(func(*http.Request, []byte) error { return nil }))
+	tests := []struct {
+		name     string
+		client   *Client
+		block    []byte
+		expected []eris.Reference
+		want     error
+	}{
+		{"nil client", nil, block, nil, ErrNilHTTPClient},
+		{"invalid size", client, []byte{1}, nil, eris.ErrInvalidBlockSize},
+		{"wrong reference", client, block, []eris.Reference{other}, eris.ErrInvalidBlock},
+		{"multiple references", client, block, []eris.Reference{ref, ref}, eris.ErrInvalidBlock},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := test.client.PutBlockContext(context.Background(), test.block, test.expected...); !errors.Is(err, test.want) {
+				t.Fatalf("PutBlockContext() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+	badStore := &Client{httpClient: client.httpClient, signer: client.signer}
+	if _, err := badStore.PutBlockContext(context.Background(), block); !errors.Is(err, ErrInvalidStoreURL) {
+		t.Fatalf("bad store error = %v", err)
 	}
 }
 

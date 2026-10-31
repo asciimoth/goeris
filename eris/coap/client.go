@@ -82,34 +82,47 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 	return block, nil
 }
 
-// PutBlock verifies and stores one encrypted block.
-func (client *Client) PutBlock(ref eris.Reference, block []byte) error {
-	return client.PutBlockContext(context.Background(), ref, block)
+// PutBlock stores one encrypted block and returns its reference.
+func (client *Client) PutBlock(block []byte, expected ...eris.Reference) (eris.Reference, error) {
+	return client.PutBlockContext(context.Background(), block, expected...)
 }
 
-// PutBlockContext verifies and stores one encrypted block.
-func (client *Client) PutBlockContext(ctx context.Context, ref eris.Reference, block []byte) error {
+// PutBlockContext stores one encrypted block and returns its reference. If an
+// older server returns no reference, it computes the reference locally when
+// no expected reference was supplied.
+func (client *Client) PutBlockContext(ctx context.Context, block []byte, expected ...eris.Reference) (eris.Reference, error) {
 	if client == nil || client.requester == nil {
-		return ErrNilRequester
+		return eris.Reference{}, ErrNilRequester
 	}
-	if err := eris.VerifyBlock(block, ref); err != nil {
-		return err
-	}
-	request, err := NewPutRequest(client.store, block, client.config.Request)
+	request, err := NewPutRequest(client.store, block, client.config.Request, expected...)
 	if err != nil {
-		return err
+		return eris.Reference{}, err
 	}
 	response, err := protocol.RequestBody(ctx, client.requester, request, client.config.Transfer)
 	if err != nil {
-		return err
+		return eris.Reference{}, err
 	}
 	if response.Code == protocol.NotFound {
-		return eris.ErrMissingBlock
+		return eris.Reference{}, eris.ErrMissingBlock
+	}
+	if response.Code == protocol.BadRequest && len(expected) != 0 {
+		return eris.Reference{}, eris.ErrInvalidBlock
 	}
 	if response.Code != protocol.Created {
-		return &ResponseError{Code: response.Code}
+		return eris.Reference{}, &ResponseError{Code: response.Code}
 	}
-	return nil
+	if len(response.Payload) == 0 && len(expected) == 0 {
+		return eris.ReferenceOf(block)
+	}
+	if len(response.Payload) != len(eris.Reference{}) {
+		return eris.Reference{}, ErrInvalidReference
+	}
+	var ref eris.Reference
+	copy(ref[:], response.Payload)
+	if len(expected) == 1 && ref != expected[0] {
+		return eris.Reference{}, eris.ErrInvalidBlock
+	}
+	return ref, nil
 }
 
 func validateContentFormat(message *protocol.Message, expected uint32) error {

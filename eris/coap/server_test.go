@@ -19,9 +19,24 @@ type storeFunc struct {
 	put func(eris.Reference, []byte) error
 }
 
+type wrongReferenceStore struct{ eris.BlockSet }
+
+func (wrongReferenceStore) PutBlock(_ []byte, expected ...eris.Reference) (eris.Reference, error) {
+	ref := expected[0]
+	ref[0] ^= 1
+	return ref, nil
+}
+
 func (store storeFunc) GetBlock(ref eris.Reference) ([]byte, error) { return store.get(ref) }
-func (store storeFunc) PutBlock(ref eris.Reference, block []byte) error {
-	return store.put(ref, block)
+func (store storeFunc) PutBlock(block []byte, expected ...eris.Reference) (eris.Reference, error) {
+	ref, err := eris.ReferenceOf(block)
+	if err != nil {
+		return eris.Reference{}, err
+	}
+	if len(expected) == 1 && expected[0] != ref {
+		return eris.Reference{}, eris.ErrInvalidBlock
+	}
+	return ref, store.put(ref, block)
 }
 
 type contextStore struct {
@@ -35,16 +50,16 @@ type contextStore struct {
 func (store *contextStore) GetBlock(ref eris.Reference) ([]byte, error) {
 	panic("non-context GetBlock called")
 }
-func (store *contextStore) PutBlock(eris.Reference, []byte) error {
+func (store *contextStore) PutBlock([]byte, ...eris.Reference) (eris.Reference, error) {
 	panic("non-context PutBlock called")
 }
 func (store *contextStore) GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error) {
 	store.get = ctx.Value(store.key) == store.value
 	return store.blocks.GetBlock(ref)
 }
-func (store *contextStore) PutBlockContext(ctx context.Context, ref eris.Reference, block []byte) error {
+func (store *contextStore) PutBlockContext(ctx context.Context, block []byte, expected ...eris.Reference) (eris.Reference, error) {
 	store.put = ctx.Value(store.key) == store.value
-	return store.blocks.PutBlock(ref, block)
+	return store.blocks.PutBlock(block, expected...)
 }
 
 func serve(t *testing.T, handler protocol.Handler, request *protocol.Message) *protocol.Message {
@@ -109,7 +124,7 @@ func TestHandlerGet(t *testing.T) {
 		}(), protocol.BadRequest},
 		{"missing", Handler{Path: []string{"store"}, Blocks: eris.BlockSet{}}, request, protocol.NotFound},
 		{"source error", Handler{Path: []string{"store"}, Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, errors.New("store") })}, request, protocol.InternalServerError},
-		{"invalid stored block", Handler{Path: []string{"store"}, Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return make([]byte, eris.BlockSize1KiB), nil })}, request, protocol.InternalServerError},
+		{"invalid stored block", Handler{Path: []string{"store"}, Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrInvalidBlock })}, request, protocol.InternalServerError},
 		{"nil source", Handler{Path: []string{"store"}}, request, protocol.InternalServerError},
 		{"method", handler, func() *protocol.Message { clone := request.Clone(); clone.Code = protocol.DELETE; return clone }(), protocol.MethodNotAllowed},
 		{"nil request", handler, nil, protocol.BadRequest},
@@ -130,8 +145,8 @@ func TestHandlerPut(t *testing.T) {
 	handler := Handler{Blocks: blocks, AllowPut: true}
 	store := mustStore(t, "coap://example/")
 	request, _ := NewPutRequest(store, block, RequestConfig{})
-	if response := serve(t, handler, request); response.Code != protocol.Created {
-		t.Fatalf("PUT code = %s", response.Code)
+	if response := serve(t, handler, request); response.Code != protocol.Created || !bytes.Equal(response.Payload, ref[:]) {
+		t.Fatalf("PUT response = %s, %x", response.Code, response.Payload)
 	}
 	stored, err := blocks.GetBlock(ref)
 	if err != nil || !bytes.Equal(stored, block) {
@@ -148,6 +163,10 @@ func TestHandlerPut(t *testing.T) {
 	}
 
 	base, _ := NewPutRequest(store, block, RequestConfig{})
+	wrongRef := ref
+	wrongRef[0] ^= 1
+	wrongRequest, _ := NewPutRequest(store, block, RequestConfig{}, wrongRef)
+	checkedRequest, _ := NewPutRequest(store, block, RequestConfig{}, ref)
 	tests := []struct {
 		name    string
 		handler Handler
@@ -160,6 +179,8 @@ func TestHandlerPut(t *testing.T) {
 		{"repeated content format", handler, addOption(base, protocol.UintOption(protocol.OptionContentFormat, ContentFormatOctetStream)), protocol.BadRequest},
 		{"bad size", handler, replaceOption(base, protocol.UintOption(protocol.OptionSize1, 2)), protocol.BadRequest},
 		{"query", handler, addOption(base, protocol.StringOption(protocol.OptionURIQuery, "unexpected")), protocol.BadRequest},
+		{"wrong reference", handler, wrongRequest, protocol.BadRequest},
+		{"sink reports wrong reference", Handler{Blocks: wrongReferenceStore{make(eris.BlockSet)}, AllowPut: true}, checkedRequest, protocol.InternalServerError},
 		{"short block", handler, func() *protocol.Message {
 			clone := base.Clone()
 			clone.Payload = []byte("short")
@@ -272,7 +293,7 @@ func TestBlockWiseClientHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.PutBlock(ref, block); err != nil {
+	if _, err := client.PutBlock(block, ref); err != nil {
 		t.Fatal(err)
 	}
 	got, err := client.GetBlock(ref)

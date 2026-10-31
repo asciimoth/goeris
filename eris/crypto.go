@@ -34,22 +34,32 @@ func VerifyBlock(block []byte, expected Reference) error {
 // EncryptNode encrypts one full node and returns its reference-key pair.
 // The secret is used only when level is zero, as required by ERIS.
 func EncryptNode(node []byte, secret Secret, level Level) ([]byte, Pair, error) {
-	var pair Pair
+	block, key, err := EncryptNodeForStorage(node, secret, level)
+	if err != nil {
+		return nil, Pair{}, err
+	}
+	ref, _ := ReferenceOf(block)
+	return block, Pair{Reference: ref, Key: key}, nil
+}
+
+// EncryptNodeForStorage encrypts one node without hashing the block. The sink
+// that stores the block computes its reference.
+func EncryptNodeForStorage(node []byte, secret Secret, level Level) ([]byte, Key, error) {
+	var key Key
 	if !validBlockLength(len(node)) {
-		return nil, pair, ErrInvalidBlockSize
+		return nil, Key{}, ErrInvalidBlockSize
 	}
 
 	if level == 0 {
-		pair.Key = keyedHash(node, secret)
+		key = keyedHash(node, secret)
 	} else {
 		digest := blake2b.Sum256(node)
-		copy(pair.Key[:], digest[:])
+		copy(key[:], digest[:])
 	}
 
 	block := make([]byte, len(node))
-	xorNode(block, node, pair.Key, level)
-	pair.Reference, _ = ReferenceOf(block)
-	return block, pair, nil
+	xorNode(block, node, key, level)
+	return block, key, nil
 }
 
 // DecryptNode verifies and decrypts one full block.
@@ -57,8 +67,17 @@ func DecryptNode(block []byte, pair Pair, level Level) ([]byte, error) {
 	if err := VerifyBlock(block, pair.Reference); err != nil {
 		return nil, err
 	}
+	return DecryptNodeFromSource(block, pair.Key, level)
+}
+
+// DecryptNodeFromSource decrypts a block returned by a trusted BlockSource.
+// It checks the block size but does not compute its reference again.
+func DecryptNodeFromSource(block []byte, key Key, level Level) ([]byte, error) {
+	if !validBlockLength(len(block)) {
+		return nil, ErrInvalidBlockSize
+	}
 	node := make([]byte, len(block))
-	xorNode(node, block, pair.Key, level)
+	xorNode(node, block, key, level)
 	return node, nil
 }
 

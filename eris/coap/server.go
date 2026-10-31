@@ -110,9 +110,6 @@ func (handler Handler) get(ctx context.Context, request *protocol.Message) *prot
 		}
 		return &protocol.Message{Code: protocol.InternalServerError}
 	}
-	if err := eris.VerifyBlock(block, ref); err != nil {
-		return &protocol.Message{Code: protocol.InternalServerError}
-	}
 	return &protocol.Message{
 		Code: protocol.Content,
 		Options: []protocol.Option{
@@ -127,8 +124,13 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 	if !handler.AllowPut {
 		return &protocol.Message{Code: protocol.Unauthorized}
 	}
+	var expected []eris.Reference
 	if len(request.URIQueries()) != 0 {
-		return &protocol.Message{Code: protocol.BadRequest}
+		ref, err := parseReferenceQuery(request)
+		if err != nil {
+			return &protocol.Message{Code: protocol.BadRequest}
+		}
+		expected = append(expected, ref)
 	}
 	if value, present, err := oneUintOption(request, protocol.OptionContentFormat); err != nil || present && value != ContentFormatOctetStream {
 		return &protocol.Message{Code: protocol.BadRequest}
@@ -136,20 +138,26 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 	if size, present, err := oneUintOption(request, protocol.OptionSize1); err != nil || present && uint64(size) != uint64(len(request.Payload)) {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
-	ref, err := referenceForBlock(request.Payload)
-	if err != nil {
+	if !eris.BlockSize(len(request.Payload)).Valid() {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
 	if !handler.writable() {
 		return &protocol.Message{Code: protocol.Unauthorized}
 	}
-	if err := handler.putBlock(ctx, ref, request.Payload); err != nil {
+	ref, err := handler.putBlock(ctx, request.Payload, expected...)
+	if err != nil {
 		if errors.Is(err, eris.ErrMissingBlock) {
 			return &protocol.Message{Code: protocol.NotFound}
 		}
+		if errors.Is(err, eris.ErrInvalidBlock) {
+			return &protocol.Message{Code: protocol.BadRequest}
+		}
 		return &protocol.Message{Code: protocol.InternalServerError}
 	}
-	return &protocol.Message{Code: protocol.Created}
+	if len(expected) == 1 && ref != expected[0] {
+		return &protocol.Message{Code: protocol.InternalServerError}
+	}
+	return &protocol.Message{Code: protocol.Created, Payload: ref[:]}
 }
 
 func (handler Handler) getBlock(ctx context.Context, ref eris.Reference) ([]byte, error) {
@@ -165,11 +173,11 @@ func (handler Handler) writable() bool {
 	return sink || contextual
 }
 
-func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte) error {
+func (handler Handler) putBlock(ctx context.Context, block []byte, expected ...eris.Reference) (eris.Reference, error) {
 	if contextual, ok := handler.Blocks.(eris.ContextBlockSink); ok {
-		return contextual.PutBlockContext(ctx, ref, append([]byte(nil), block...))
+		return contextual.PutBlockContext(ctx, append([]byte(nil), block...), expected...)
 	}
-	return handler.Blocks.(eris.BlockSink).PutBlock(ref, append([]byte(nil), block...))
+	return handler.Blocks.(eris.BlockSink).PutBlock(append([]byte(nil), block...), expected...)
 }
 
 var _ protocol.Handler = Handler{}

@@ -22,8 +22,8 @@ func TestClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.PutBlock(ref, block); err != nil {
-		t.Fatal(err)
+	if gotRef, err := client.PutBlock(block); err != nil || gotRef != ref {
+		t.Fatalf("PutBlock() = %v, %v", gotRef, err)
 	}
 	got, err := client.GetBlockContext(context.Background(), ref)
 	if err != nil || !bytes.Equal(got, block) {
@@ -78,17 +78,38 @@ func TestClientErrors(t *testing.T) {
 		})
 	}
 
-	if err := (&Client{}).PutBlock(ref, block); !errors.Is(err, ErrNilRequester) {
+	if _, err := (&Client{}).PutBlock(block, ref); !errors.Is(err, ErrNilRequester) {
 		t.Errorf("nil client PUT error = %v", err)
 	}
 	if _, err := (*Client)(nil).GetBlock(ref); !errors.Is(err, ErrNilRequester) {
 		t.Errorf("nil client GET error = %v", err)
 	}
 	client, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
+		return &protocol.Message{Code: protocol.Created, Payload: ref[:]}, nil
+	}), mustStore(t, "coap://example/"), ClientConfig{})
+	if _, err := client.PutBlock(block, otherRef); !errors.Is(err, eris.ErrInvalidBlock) {
+		t.Errorf("invalid PUT error = %v", err)
+	}
+	badRequestClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
+		return &protocol.Message{Code: protocol.BadRequest}, nil
+	}), mustStore(t, "coap://example/"), ClientConfig{})
+	if _, err := badRequestClient.PutBlock(block, ref); !errors.Is(err, eris.ErrInvalidBlock) {
+		t.Errorf("rejected reference error = %v", err)
+	}
+	malformedClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.Created}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if err := client.PutBlock(otherRef, block); !errors.Is(err, eris.ErrInvalidBlock) {
-		t.Errorf("invalid PUT error = %v", err)
+	if gotRef, err := malformedClient.PutBlock(block); err != nil || gotRef != ref {
+		t.Errorf("legacy response reference = %v, %v", gotRef, err)
+	}
+	if _, err := malformedClient.PutBlock(block, ref); !errors.Is(err, ErrInvalidReference) {
+		t.Errorf("missing response reference with expectation error = %v", err)
+	}
+	shortResponseClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
+		return &protocol.Message{Code: protocol.Created, Payload: []byte{1}}, nil
+	}), mustStore(t, "coap://example/"), ClientConfig{})
+	if _, err := shortResponseClient.PutBlock(block); !errors.Is(err, ErrInvalidReference) {
+		t.Errorf("short response reference error = %v", err)
 	}
 
 	putTests := []struct {
@@ -102,7 +123,7 @@ func TestClientErrors(t *testing.T) {
 	}
 	for _, test := range putTests {
 		client, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) { return test.response, test.err }), mustStore(t, "coap://example/"), ClientConfig{})
-		err := client.PutBlock(ref, block)
+		_, err := client.PutBlock(block, ref)
 		var responseError *ResponseError
 		if _, ok := test.want.(*ResponseError); ok {
 			if !errors.As(err, &responseError) || responseError.Code != protocol.Content {

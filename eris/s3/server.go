@@ -97,10 +97,6 @@ func (handler Handler) get(writer http.ResponseWriter, request *http.Request, re
 		}
 		return
 	}
-	if err := eris.VerifyBlock(block, ref); err != nil {
-		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The stored block is invalid.")
-		return
-	}
 	writer.Header().Set("Content-Type", "application/octet-stream")
 	writer.Header().Set("Cache-Control", "max-age=31536000, immutable")
 	http.ServeContent(writer, request, ref.String(), time.Time{}, bytes.NewReader(block))
@@ -138,10 +134,6 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusBadRequest, "InvalidArgument", "x-amz-acl must be public-read.")
 		return
 	}
-	if err := eris.VerifyBlock(block, ref); err != nil {
-		writeS3Error(writer, http.StatusBadRequest, "BadDigest", "The block does not match its key.")
-		return
-	}
 	_, sinkOK := handler.Blocks.(eris.BlockSink)
 	_, contextSinkOK := handler.Blocks.(eris.ContextBlockSink)
 	if !sinkOK && !contextSinkOK {
@@ -149,7 +141,11 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		return
 	}
 	if err := handler.putBlock(request.Context(), ref, block); err != nil {
-		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store could not write the block.")
+		if errors.Is(err, eris.ErrInvalidBlock) {
+			writeS3Error(writer, http.StatusBadRequest, "BadDigest", "The block does not match its key.")
+		} else {
+			writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store could not write the block.")
+		}
 		return
 	}
 	writer.WriteHeader(http.StatusOK)
@@ -163,10 +159,20 @@ func (handler Handler) getBlock(ctx context.Context, ref eris.Reference) ([]byte
 }
 
 func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte) error {
+	var stored eris.Reference
+	var err error
 	if contextual, ok := handler.Blocks.(eris.ContextBlockSink); ok {
-		return contextual.PutBlockContext(ctx, ref, block)
+		stored, err = contextual.PutBlockContext(ctx, block, ref)
+	} else {
+		stored, err = handler.Blocks.(eris.BlockSink).PutBlock(block, ref)
 	}
-	return handler.Blocks.(eris.BlockSink).PutBlock(ref, block)
+	if err != nil {
+		return err
+	}
+	if stored != ref {
+		return errors.New("eris s3: block sink returned an unexpected reference")
+	}
+	return nil
 }
 
 type errorResponse struct {

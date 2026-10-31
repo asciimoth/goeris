@@ -2,8 +2,47 @@ package eris
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
+
+func FuzzBlockSetPut(f *testing.F) {
+	block := make([]byte, BlockSize1KiB)
+	ref, _ := ReferenceOf(block)
+	f.Add(block, false, []byte(nil))
+	f.Add(block, true, ref[:])
+	f.Add([]byte{1}, false, []byte(nil))
+	f.Fuzz(func(t *testing.T, block []byte, check bool, reference []byte) {
+		if len(block) > int(BlockSize32KiB) {
+			t.Skip()
+		}
+		store := make(BlockSet)
+		var expected []Reference
+		if check {
+			var ref Reference
+			copy(ref[:], reference)
+			expected = append(expected, ref)
+		}
+		got, err := store.PutBlock(block, expected...)
+		actual, sizeErr := ReferenceOf(block)
+		if sizeErr != nil {
+			if !errors.Is(err, ErrInvalidBlockSize) || len(store) != 0 {
+				t.Fatalf("invalid size: ref %v, error %v, stored %d", got, err, len(store))
+			}
+			return
+		}
+		if check && expected[0] != actual {
+			if !errors.Is(err, ErrInvalidBlock) || len(store) != 0 {
+				t.Fatalf("mismatch: ref %v, error %v, stored %d", got, err, len(store))
+			}
+			return
+		}
+		stored, readErr := store.GetBlock(actual)
+		if err != nil || readErr != nil || got != actual || !bytes.Equal(stored, block) {
+			t.Fatalf("stored block mismatch: ref %v, write %v, read %v", got, err, readErr)
+		}
+	})
+}
 
 func FuzzCapabilityBinary(f *testing.F) {
 	valid, _, _ := Encode([]byte("seed"), Secret{}, BlockSize1KiB)

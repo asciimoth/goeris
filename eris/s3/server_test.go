@@ -22,6 +22,14 @@ type storeFunc struct {
 	put func(eris.Reference, []byte) error
 }
 
+type wrongReferenceStore struct{ eris.BlockSet }
+
+func (wrongReferenceStore) PutBlock(_ []byte, expected ...eris.Reference) (eris.Reference, error) {
+	ref := expected[0]
+	ref[0] ^= 1
+	return ref, nil
+}
+
 type contextStore struct {
 	block  []byte
 	ref    eris.Reference
@@ -41,18 +49,25 @@ func (store *contextStore) GetBlockContext(ctx context.Context, ref eris.Referen
 	return append([]byte(nil), store.block...), nil
 }
 
-func (store *contextStore) PutBlockContext(ctx context.Context, ref eris.Reference, block []byte) error {
-	if ctx == nil || ref != store.ref {
-		return errors.New("incorrect context write")
+func (store *contextStore) PutBlockContext(ctx context.Context, block []byte, expected ...eris.Reference) (eris.Reference, error) {
+	if ctx == nil || len(expected) != 1 || expected[0] != store.ref {
+		return eris.Reference{}, errors.New("incorrect context write")
 	}
 	store.writes++
 	store.block = append([]byte(nil), block...)
-	return nil
+	return store.ref, nil
 }
 
 func (store storeFunc) GetBlock(ref eris.Reference) ([]byte, error) { return store.get(ref) }
-func (store storeFunc) PutBlock(ref eris.Reference, block []byte) error {
-	return store.put(ref, block)
+func (store storeFunc) PutBlock(block []byte, expected ...eris.Reference) (eris.Reference, error) {
+	ref, err := eris.ReferenceOf(block)
+	if err != nil {
+		return eris.Reference{}, err
+	}
+	if len(expected) == 1 && expected[0] != ref {
+		return eris.Reference{}, eris.ErrInvalidBlock
+	}
+	return ref, store.put(ref, block)
 }
 
 func TestHandlerReads(t *testing.T) {
@@ -94,7 +109,7 @@ func TestHandlerRoutingAndReadErrors(t *testing.T) {
 		{"nil store", Handler{Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 500},
 		{"missing", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 404},
 		{"source error", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, sentinel }), Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 500},
-		{"corrupt", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return make([]byte, eris.BlockSize1KiB), nil }), Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 500},
+		{"corrupt", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrInvalidBlock }), Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 500},
 		{"method", Handler{Blocks: eris.BlockSet{ref: block}, Bucket: "blocks"}, http.MethodDelete, "/blocks/" + ref.String(), 405},
 	}
 	for _, test := range tests {
@@ -155,6 +170,7 @@ func TestHandlerWriteChecks(t *testing.T) {
 		}, 400},
 		{"source only", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrMissingBlock }), Bucket: "blocks", AllowPut: true, Auth: allow}, base, 500},
 		{"sink error", Handler{Blocks: storeFunc{get: func(eris.Reference) ([]byte, error) { return nil, eris.ErrMissingBlock }, put: func(eris.Reference, []byte) error { return sentinel }}, Bucket: "blocks", AllowPut: true, Auth: allow}, base, 500},
+		{"sink reports wrong reference", Handler{Blocks: wrongReferenceStore{make(eris.BlockSet)}, Bucket: "blocks", AllowPut: true, Auth: allow}, base, 500},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

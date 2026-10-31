@@ -40,8 +40,8 @@ func TestBlockSetStorage(t *testing.T) {
 	node := make([]byte, BlockSize1KiB)
 	block, pair, _ := EncryptNode(node, Secret{}, 0)
 	blocks := make(BlockSet)
-	if err := blocks.PutBlock(pair.Reference, block); err != nil {
-		t.Fatal(err)
+	if ref, err := blocks.PutBlock(block); err != nil || ref != pair.Reference {
+		t.Fatalf("PutBlock() = %v, %v", ref, err)
 	}
 	block[0] ^= 1
 	got, err := blocks.GetBlock(pair.Reference)
@@ -56,12 +56,32 @@ func TestBlockSetStorage(t *testing.T) {
 	if _, err = blocks.GetBlock(Reference{1}); !errors.Is(err, ErrMissingBlock) {
 		t.Fatalf("missing error = %v", err)
 	}
-	if err = (BlockSet(nil)).PutBlock(pair.Reference, again); !errors.Is(err, ErrMissingBlock) {
+	if _, err = (BlockSet(nil)).PutBlock(again, pair.Reference); !errors.Is(err, ErrMissingBlock) {
 		t.Fatalf("nil set error = %v", err)
 	}
 	again[0] ^= 1
-	if err = blocks.PutBlock(pair.Reference, again); !errors.Is(err, ErrInvalidBlock) {
+	if _, err = blocks.PutBlock(again, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("invalid block error = %v", err)
+	}
+	if _, err = blocks.PutBlock(block, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
+		t.Fatalf("mismatched reference error = %v", err)
+	}
+	if _, err = blocks.PutBlock(nil); !errors.Is(err, ErrInvalidBlockSize) {
+		t.Fatalf("invalid size error = %v", err)
+	}
+	if _, err = blocks.PutBlock(again, pair.Reference, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
+		t.Fatalf("multiple references error = %v", err)
+	}
+	blocks[pair.Reference][0] ^= 1
+	if _, err = blocks.GetBlock(pair.Reference); !errors.Is(err, ErrInvalidBlock) {
+		t.Fatalf("corrupt stored block error = %v", err)
+	}
+}
+
+func TestDecryptNodeFromSourceRejectsBadSize(t *testing.T) {
+	t.Parallel()
+	if _, err := DecryptNodeFromSource([]byte{1}, Key{}, 0); !errors.Is(err, ErrInvalidBlockSize) {
+		t.Fatalf("invalid size error = %v", err)
 	}
 }
 

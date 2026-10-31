@@ -78,14 +78,15 @@ func DecodeIndexWithLimit(capability eris.Capability, source eris.BlockSource, l
 }
 
 func putNode(node []byte, secret eris.Secret, level eris.Level, sink eris.BlockSink) (eris.Pair, error) {
-	block, pair, err := eris.EncryptNode(node, secret, level)
+	block, key, err := eris.EncryptNodeForStorage(node, secret, level)
 	if err != nil {
 		return eris.Pair{}, err
 	}
-	if err = sink.PutBlock(pair.Reference, block); err != nil {
+	ref, err := sink.PutBlock(block)
+	if err != nil {
 		return eris.Pair{}, err
 	}
-	return pair, nil
+	return eris.Pair{Reference: ref, Key: key}, nil
 }
 
 type treeEncoder struct {

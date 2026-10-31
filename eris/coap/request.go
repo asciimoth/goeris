@@ -9,7 +9,6 @@ import (
 
 	protocol "github.com/asciimoth/coaperation"
 	"github.com/asciimoth/eris-tools/eris"
-	"golang.org/x/crypto/blake2b"
 )
 
 const (
@@ -52,14 +51,9 @@ func NewGetRequest(store StoreURL, ref eris.Reference, config RequestConfig) (*p
 	if err != nil {
 		return nil, err
 	}
-	var query []byte
-	switch config.ReferenceEncoding {
-	case ReferenceRaw:
-		query = ref[:]
-	case ReferenceBase32:
-		query = []byte(ref.String())
-	default:
-		return nil, ErrInvalidReference
+	query, err := referenceQuery(ref, config.ReferenceEncoding)
+	if err != nil {
+		return nil, err
 	}
 	options = append(options, protocol.NewOption(protocol.OptionURIQuery, query))
 	options, err = addRoutingOptions(options, config)
@@ -76,17 +70,28 @@ func NewGetRequest(store StoreURL, ref eris.Reference, config RequestConfig) (*p
 	return &protocol.Message{Type: protocol.Confirmable, Code: protocol.GET, Options: options}, nil
 }
 
-// NewPutRequest constructs a PUT request containing block. Size1 and the
-// application/octet-stream content format are always included.
-func NewPutRequest(store StoreURL, block []byte, config RequestConfig) (*protocol.Message, error) {
-	if _, err := referenceForBlock(block); err != nil {
-		return nil, err
+// NewPutRequest constructs a PUT request containing block. An optional expected
+// reference is sent as a URI query. Size1 and the application/octet-stream
+// content format are always included.
+func NewPutRequest(store StoreURL, block []byte, config RequestConfig, expected ...eris.Reference) (*protocol.Message, error) {
+	if !eris.BlockSize(len(block)).Valid() {
+		return nil, errors.Join(eris.ErrInvalidBlock, eris.ErrInvalidBlockSize)
+	}
+	if len(expected) > 1 {
+		return nil, eris.ErrInvalidBlock
 	}
 	options, err := store.requestOptions()
 	if err != nil {
 		return nil, err
 	}
 	options = append(options, protocol.UintOption(protocol.OptionContentFormat, ContentFormatOctetStream))
+	if len(expected) == 1 {
+		query, err := referenceQuery(expected[0], config.ReferenceEncoding)
+		if err != nil {
+			return nil, err
+		}
+		options = append(options, protocol.NewOption(protocol.OptionURIQuery, query))
+	}
 	options, err = addRoutingOptions(options, config)
 	if err != nil {
 		return nil, err
@@ -94,6 +99,17 @@ func NewPutRequest(store StoreURL, block []byte, config RequestConfig) (*protoco
 	options = append(options, protocol.UintOption(protocol.OptionSize1, uint32(len(block))))
 	sortOptions(options)
 	return &protocol.Message{Type: protocol.Confirmable, Code: protocol.PUT, Options: options, Payload: append([]byte(nil), block...)}, nil
+}
+
+func referenceQuery(ref eris.Reference, encoding ReferenceEncoding) ([]byte, error) {
+	switch encoding {
+	case ReferenceRaw:
+		return ref[:], nil
+	case ReferenceBase32:
+		return []byte(ref.String()), nil
+	default:
+		return nil, ErrInvalidReference
+	}
 }
 
 func addRoutingOptions(options []protocol.Option, config RequestConfig) ([]protocol.Option, error) {
@@ -137,13 +153,6 @@ func parseReferenceQuery(request *protocol.Message) (eris.Reference, error) {
 		}
 	}
 	return zero, ErrInvalidReference
-}
-
-func referenceForBlock(block []byte) (eris.Reference, error) {
-	if len(block) != int(eris.BlockSize1KiB) && len(block) != int(eris.BlockSize32KiB) {
-		return eris.Reference{}, errors.Join(eris.ErrInvalidBlock, eris.ErrInvalidBlockSize)
-	}
-	return eris.Reference(blake2b.Sum256(block)), nil
 }
 
 func oneUintOption(message *protocol.Message, number protocol.OptionNumber) (uint32, bool, error) {

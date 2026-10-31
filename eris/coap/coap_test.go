@@ -151,7 +151,7 @@ func TestInternalValidationErrors(t *testing.T) {
 	if _, err := badClient.GetBlock(ref); !errors.Is(err, ErrInvalidStoreURL) {
 		t.Errorf("bad client GET error = %v", err)
 	}
-	if err := badClient.PutBlock(blockRef, block); !errors.Is(err, ErrInvalidStoreURL) {
+	if _, err := badClient.PutBlock(block, blockRef); !errors.Is(err, ErrInvalidStoreURL) {
 		t.Errorf("bad client PUT error = %v", err)
 	}
 }
@@ -218,8 +218,18 @@ func TestRequestConstruction(t *testing.T) {
 	if size, _, _ := oneUintOption(put, protocol.OptionSize1); size != uint32(eris.BlockSize1KiB) {
 		t.Errorf("PUT Size1 = %d", size)
 	}
+	base32Put, err := NewPutRequest(store, put.Payload, RequestConfig{ReferenceEncoding: ReferenceBase32}, ref)
+	if err != nil || !bytes.Equal(optionValue(t, base32Put, protocol.OptionURIQuery), []byte(ref.String())) {
+		t.Fatalf("Base32 PUT reference = %v, %v", base32Put, err)
+	}
+	if _, err := NewPutRequest(store, put.Payload, RequestConfig{ReferenceEncoding: 255}, ref); !errors.Is(err, ErrInvalidReference) {
+		t.Errorf("invalid PUT reference encoding error = %v", err)
+	}
 	if _, err := NewPutRequest(store, []byte("short"), RequestConfig{}); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Errorf("short PUT error = %v", err)
+	}
+	if _, err := NewPutRequest(store, put.Payload, RequestConfig{}, ref, ref); !errors.Is(err, eris.ErrInvalidBlock) {
+		t.Errorf("multiple expected references error = %v", err)
 	}
 }
 

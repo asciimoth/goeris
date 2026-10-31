@@ -3,6 +3,7 @@ package s3
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 
@@ -38,6 +39,10 @@ func NewClient(httpClient HTTPClient, store StoreURL, signer Signer) (*Client, e
 // NewRequest returns a request for ref and signs it when the client has a
 // signer. It does not execute the request. Only GET, HEAD, and PUT are allowed.
 func (client *Client) NewRequest(ctx context.Context, method string, ref eris.Reference, block []byte) (*http.Request, error) {
+	return client.newRequest(ctx, method, ref, block, true)
+}
+
+func (client *Client) newRequest(ctx context.Context, method string, ref eris.Reference, block []byte, check bool) (*http.Request, error) {
 	if client == nil || client.httpClient == nil {
 		return nil, ErrNilHTTPClient
 	}
@@ -48,8 +53,10 @@ func (client *Client) NewRequest(ctx context.Context, method string, ref eris.Re
 		if client.signer == nil {
 			return nil, ErrAuthentication
 		}
-		if err := eris.VerifyBlock(block, ref); err != nil {
-			return nil, err
+		if check {
+			if err := eris.VerifyBlock(block, ref); err != nil {
+				return nil, err
+			}
 		}
 	} else if len(block) != 0 {
 		return nil, eris.ErrInvalidBlock
@@ -110,27 +117,43 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 	return block, nil
 }
 
-// PutBlock verifies and stores one block.
-func (client *Client) PutBlock(ref eris.Reference, block []byte) error {
-	return client.PutBlockContext(context.Background(), ref, block)
+// PutBlock stores one block and returns its reference.
+func (client *Client) PutBlock(block []byte, expected ...eris.Reference) (eris.Reference, error) {
+	return client.PutBlockContext(context.Background(), block, expected...)
 }
 
-// PutBlockContext verifies and stores one block.
-func (client *Client) PutBlockContext(ctx context.Context, ref eris.Reference, block []byte) error {
-	request, err := client.NewRequest(ctx, http.MethodPut, ref, block)
+// PutBlockContext stores one block and returns its reference.
+func (client *Client) PutBlockContext(ctx context.Context, block []byte, expected ...eris.Reference) (eris.Reference, error) {
+	if client == nil || client.httpClient == nil {
+		return eris.Reference{}, ErrNilHTTPClient
+	}
+	if client.signer == nil {
+		return eris.Reference{}, ErrAuthentication
+	}
+	ref, err := eris.ReferenceOf(block)
 	if err != nil {
-		return err
+		return eris.Reference{}, errors.Join(eris.ErrInvalidBlock, err)
+	}
+	if len(expected) > 1 || len(expected) == 1 && expected[0] != ref {
+		return eris.Reference{}, eris.ErrInvalidBlock
+	}
+	request, err := client.newRequest(ctx, http.MethodPut, ref, block, false)
+	if err != nil {
+		return eris.Reference{}, err
 	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return err
+		return eris.Reference{}, err
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return responseError(response)
+		return eris.Reference{}, responseError(response)
 	}
 	_, err = io.Copy(io.Discard, response.Body)
-	return err
+	if err != nil {
+		return eris.Reference{}, err
+	}
+	return ref, nil
 }
 
 func responseError(response *http.Response) error {

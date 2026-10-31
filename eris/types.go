@@ -93,30 +93,38 @@ type Pair struct {
 }
 
 // BlockSet is an in-memory set of encrypted blocks, indexed by reference.
-// Encode owns the slices in the set. Decode does not modify them.
+// Encode owns the slices in the set. Decode does not modify them. Concurrent
+// reads are safe only while no caller changes the map or its blocks.
 type BlockSet map[Reference][]byte
 
-// GetBlock returns a copy of the encrypted block for ref. It lets BlockSet be
-// used as a storage abstraction by packages that must not access host storage.
+// GetBlock verifies and returns a copy of the encrypted block for ref. The map
+// can be changed directly, so each read checks the reference.
 func (s BlockSet) GetBlock(ref Reference) ([]byte, error) {
 	block, ok := s[ref]
 	if !ok {
 		return nil, ErrMissingBlock
 	}
+	if err := VerifyBlock(block, ref); err != nil {
+		return nil, err
+	}
 	return append([]byte(nil), block...), nil
 }
 
-// PutBlock stores a copy of an encrypted block. The reference is verified
-// before the map is changed.
-func (s BlockSet) PutBlock(ref Reference, block []byte) error {
+// PutBlock stores a copy of an encrypted block and returns its reference. It
+// rejects a block that does not match an optional expected reference.
+func (s BlockSet) PutBlock(block []byte, expected ...Reference) (Reference, error) {
 	if s == nil {
-		return ErrMissingBlock
+		return Reference{}, ErrMissingBlock
 	}
-	if err := VerifyBlock(block, ref); err != nil {
-		return err
+	ref, err := ReferenceOf(block)
+	if err != nil {
+		return Reference{}, errors.Join(ErrInvalidBlock, err)
+	}
+	if len(expected) > 1 || len(expected) == 1 && expected[0] != ref {
+		return Reference{}, ErrInvalidBlock
 	}
 	s[ref] = append([]byte(nil), block...)
-	return nil
+	return ref, nil
 }
 
 var base32Encoding = base32.StdEncoding.WithPadding(base32.NoPadding)

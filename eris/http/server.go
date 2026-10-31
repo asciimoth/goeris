@@ -55,10 +55,6 @@ func (handler Handler) serveBlock(writer nethttp.ResponseWriter, request *nethtt
 		writeSourceError(writer, err)
 		return
 	}
-	if err := eris.VerifyBlock(block, ref); err != nil {
-		writer.WriteHeader(nethttp.StatusInternalServerError)
-		return
-	}
 	setResourceHeaders(writer)
 	nethttp.ServeContent(writer, request, "", time.Time{}, bytes.NewReader(block))
 }

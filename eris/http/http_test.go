@@ -236,7 +236,7 @@ func TestHandlerErrors(t *testing.T) {
 			return nil, errors.Join(errors.New("store"), eris.ErrMissingBlock)
 		})}, nethttp.MethodGet, ref.URN(), nethttp.StatusNotFound},
 		{"source failure", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, errors.New("store") })}, nethttp.MethodGet, ref.URN(), nethttp.StatusInternalServerError},
-		{"corrupt block", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return make([]byte, eris.BlockSize1KiB), nil })}, nethttp.MethodGet, ref.URN(), nethttp.StatusInternalServerError},
+		{"corrupt block", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrInvalidBlock })}, nethttp.MethodGet, ref.URN(), nethttp.StatusInternalServerError},
 		{"missing content", Handler{Blocks: eris.BlockSet{}}, nethttp.MethodGet, capability.String(), nethttp.StatusNotFound},
 	}
 	for _, test := range tests {
