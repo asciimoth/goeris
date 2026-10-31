@@ -63,6 +63,20 @@ The S3 package intentionally omits credential discovery, IAM, bucket
 administration, object listing, and multipart uploads. It uses only the Go
 standard library and the existing ERIS block APIs.
 
+The `eris/coap` package implements ERIS over CoAP:
+
+- canonical `coap` and `coap+tcp` store URLs;
+- raw and Base32 block-reference queries;
+- verified GET and PUT clients with single-message and block-wise transfers;
+- storage-backed, context-aware handlers with opt-in PUT support;
+- deterministic CoRE Link Format discovery documents;
+- cross-network proxy advertisements and Hop-Limit forwarding helpers; and
+- caller-supplied CoAP requesters and remote addresses.
+
+The CoAP package performs no name resolution, dialing, listening, socket
+creation, or file-system access. Applications supply `coaperation` requesters
+over their chosen in-memory or network transports.
+
 The core `eris` package does not implement storage, file or stream I/O,
 networking, random-secret generation, or ERIS extensions.
 
