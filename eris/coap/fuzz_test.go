@@ -60,6 +60,7 @@ func FuzzAdvertisements(f *testing.F) {
 	for _, seed := range [][]byte{
 		{}, []byte(`</>;if="http://purl.org/eris/coap";base=coap+tcp:`),
 		[]byte(`</>;if="http://purl.org/eris/coap";rt=core.proxy;proxy-scheme=ocapn`),
+		[]byte(`<coap://example:5683/store/>;if="http://purl.org/eris/coap"`),
 		[]byte("invalid"),
 	} {
 		f.Add(seed)
@@ -74,8 +75,14 @@ func FuzzAdvertisements(f *testing.F) {
 			t.Fatal(err)
 		}
 		roundTrip, err := ParseAdvertisements(encoded)
-		if err != nil || !reflect.DeepEqual(roundTrip, advertisements) {
+		if err != nil {
 			t.Fatalf("round trip = %+v, %v", roundTrip, err)
+		}
+		// Absolute targets are canonicalized during encoding. The canonical
+		// document must be stable even when the input uses another spelling.
+		reencoded, err := MarshalAdvertisements(roundTrip)
+		if err != nil || !bytes.Equal(reencoded, encoded) {
+			t.Fatalf("canonical round trip = %q, %v; want %q", reencoded, err, encoded)
 		}
 	})
 }
