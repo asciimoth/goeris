@@ -1,4 +1,4 @@
-module github.com/asciimoth/eris-tools
+module github.com/asciimoth/goeris
 
 go 1.26.10
 

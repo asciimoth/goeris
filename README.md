@@ -1,7 +1,9 @@
-# ERIS tools
+# Go ERIS
 
-This repository provides pure Go tools for
+This repository provides a Go library for
 [ERIS 1.0.0](https://eris.codeberg.page/).
+
+Install this library with `go get github.com/asciimoth/goeris`.
 
 The `eris` package implements:
 
@@ -12,14 +14,14 @@ The `eris` package implements:
 - verified decoding from an in-memory block set, with abstract block storage
   interfaces.
 
-The `eris/cbor` package implements the ERIS CBOR transport format:
+The `cbor` package implements the ERIS CBOR transport format:
 
 - deterministic tagged, untagged, and self-described arrays;
 - tagged and untagged CBOR sequences;
 - definite-length and indefinite-length decoding; and
 - typed blocks, references, verified block maps, and read capabilities.
 
-The `eris/fs` package implements ERIS-FS version 1:
+The `fs` package implements ERIS-FS version 1:
 
 - canonical deterministic CBOR index encoding and strict decoding;
 - low-level index and ERIS reader APIs;
@@ -29,7 +31,7 @@ The `eris/fs` package implements ERIS-FS version 1:
 - a high-level read-only `FileSystem` interface based on `io/fs`; and
 - verified random-access file reads through `io.ReaderAt` and `io.Seeker`.
 
-The `eris/dns` package implements ERIS DNSLink records:
+The `dns` package implements ERIS DNSLink records:
 
 - canonical `eris` and `erisfs` namespace encoding and decoding;
 - extraction from multiple or whitespace-concatenated TXT values;
@@ -41,7 +43,7 @@ interface lets applications supply standard DNS, DNS over HTTPS, or an in-memory
 implementation. Resolver implementations must follow CNAME chains, as
 `*net.Resolver` does for TXT lookups.
 
-The `eris/http` package implements ERIS over HTTP:
+The `http` package implements ERIS over HTTP:
 
 - low-level RFC 2169 N2R URL and request construction;
 - a chainable HTTP handler for encrypted blocks and decoded content;
@@ -52,7 +54,7 @@ The HTTP package does not create or configure a network client or server.
 Applications supply the HTTP request executor, block source, handler chain, and
 server registration.
 
-The `eris/s3` package implements the ERIS object-storage recommendation:
+The `s3` package implements the ERIS object-storage recommendation:
 
 - canonical `s3://ENDPOINT/BUCKET/` store URLs and path-style object URLs;
 - public block reads and authenticated single-request block writes;
@@ -64,7 +66,7 @@ The S3 package intentionally omits credential discovery, IAM, bucket
 administration, object listing, and multipart uploads. It uses only the Go
 standard library and the existing ERIS block APIs.
 
-The `eris/coap` package implements ERIS over CoAP:
+The `coap` package implements ERIS over CoAP:
 
 - canonical `coap` and `coap+tcp` store URLs;
 - raw and Base32 block-reference queries;
@@ -144,8 +146,7 @@ not provide confidentiality.
 Run the complete checks with:
 
 ```sh
-go test -race -cover ./...
-golangci-lint run ./...
+just check
 ```
 
 ## License
@@ -163,5 +164,5 @@ Files in this repository are distributed under the CC0 license.
      href="https://github.com/asciimoth">
     <span property="dct:title">ASCIIMoth</span></a>
   has waived all copyright and related or neighboring rights to
-  <span property="dct:title">eris-tools</span>.
+  <span property="dct:title">goeris</span>.
 </p>
