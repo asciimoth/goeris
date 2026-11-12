@@ -2,8 +2,10 @@ package http
 
 import (
 	"bytes"
+	"compress/gzip"
 	"errors"
 	"io"
+	"math"
 	nethttp "net/http"
 	"net/http/httptest"
 	"net/url"
@@ -157,5 +159,79 @@ func TestClientRejectsUnexpectedSuccessStatus(t *testing.T) {
 		if !body.closed {
 			t.Fatalf("status %d: response body was not closed", status)
 		}
+	}
+}
+
+// endlessBody models a peer that continues to send data without an EOF.
+type endlessBody struct {
+	read   int
+	closed bool
+}
+
+func (body *endlessBody) Read(buffer []byte) (int, error) {
+	clear(buffer)
+	body.read += len(buffer)
+	return len(buffer), nil
+}
+
+func (body *endlessBody) Close() error {
+	body.closed = true
+	return nil
+}
+
+func TestClientBoundsBlockResponseReads(t *testing.T) {
+	base, _ := url.Parse("http://example.test")
+	maximum := int64(eris.BlockSize32KiB)
+	for _, length := range []int64{-1, 0, 1, maximum, maximum + 1, math.MaxInt64} {
+		body := new(endlessBody)
+		client, err := NewClient(clientFunc(func(*nethttp.Request) (*nethttp.Response, error) {
+			res := response(nethttp.StatusOK, ContentType, nil)
+			res.ContentLength = length
+			res.Body = body
+			return res, nil
+		}), base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block, err := client.GetBlock(eris.Reference{})
+		if block != nil || !errors.Is(err, ErrResponseTooLarge) || !body.closed {
+			t.Fatalf("length %d: block size %d, error %v, closed %v", length, len(block), err, body.closed)
+		}
+		wantRead := int(maximum) + 1
+		if length > maximum {
+			wantRead = 0
+		}
+		if body.read != wantRead {
+			t.Fatalf("length %d: read %d bytes; want %d", length, body.read, wantRead)
+		}
+	}
+}
+
+func TestClientBoundsDecompressedBlockResponse(t *testing.T) {
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write(make([]byte, int(eris.BlockSize32KiB)+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		if r.Header.Get("Accept-Encoding") != "gzip" {
+			t.Error("request does not enable gzip decoding")
+		}
+		w.Header().Set("Content-Type", ContentType)
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(compressed.Bytes())
+	}))
+	defer server.Close()
+	base, _ := url.Parse(server.URL)
+	client, err := NewClient(server.Client(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := client.GetBlock(eris.Reference{})
+	if block != nil || !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("block size %d, error %v", len(block), err)
 	}
 }

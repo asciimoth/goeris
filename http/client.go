@@ -98,6 +98,9 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 	if parseErr != nil || mediaType != ContentType {
 		return nil, ErrUnexpectedContentType
 	}
+	if response.ContentLength > int64(eris.BlockSize32KiB) {
+		return nil, ErrResponseTooLarge
+	}
 	limit := int64(eris.BlockSize32KiB) + 1
 	block, err := io.ReadAll(io.LimitReader(response.Body, limit))
 	if err != nil {
