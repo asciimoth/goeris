@@ -118,6 +118,12 @@ func (fileSystem *FS) find(name string, followFinal bool) (*node, error) {
 	currentPath := name
 	if fileSystem.prefix != "." {
 		currentPath = path.Join(fileSystem.prefix, name)
+		// Sub has already selected a directory. Its "." names that
+		// directory, even when the prefix ends in a symlink. Lstat and
+		// ReadLink must not expose the prefix's final link as the new root.
+		if name == "." {
+			followFinal = true
+		}
 	}
 	if currentPath == "." {
 		return fileSystem.root, nil
