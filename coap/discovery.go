@@ -202,13 +202,24 @@ func (advertisement Advertisement) Resolve(origin StoreURL) (StoreURL, error) {
 		return store, nil
 	}
 	target, _ := url.Parse(advertisement.Target)
-	base, _ := url.Parse(origin.String())
-	base.Path, base.RawPath = CorePath, ""
+	// net/url rejects some escaped registered hosts accepted by CoAP. Resolve
+	// the path against a placeholder, then retain the original authority unless
+	// the advertisement supplies its own. Do not parse origin.String() here.
+	base := &url.URL{Scheme: origin.Scheme(), Host: "origin.invalid", Path: CorePath}
 	resolved := base.ResolveReference(target)
 	if advertisement.Base != "" {
 		resolved.Scheme = strings.TrimSuffix(advertisement.Base, ":")
 	}
-	return storeFromURL(resolved)
+	store, err := storeFromURL(resolved)
+	if err != nil {
+		return StoreURL{}, err
+	}
+	if target.Host == "" {
+		authority := origin.Target()
+		authority.Scheme = store.Scheme()
+		return NewStoreURL(authority, store.Path())
+	}
+	return store, nil
 }
 
 // NewDiscoveryRequest constructs a deterministic resource-discovery request.

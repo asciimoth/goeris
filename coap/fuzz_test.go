@@ -33,6 +33,32 @@ func FuzzParseStoreURL(f *testing.F) {
 	})
 }
 
+func FuzzAdvertisementResolve(f *testing.F) {
+	f.Add("coap://example/", "peer", "")
+	f.Add("coap://example%2Fname:61616/", "/store", "coap+tcp:")
+	f.Add("coap://exa%3Ample/", "../a%2Fb", "")
+	f.Add("coap://name%25zone/", "//peer.example/store", "")
+	f.Add("coap://[fe80::1%25eth0]/", "coap://peer.example/", "")
+	f.Fuzz(func(t *testing.T, originText, target, base string) {
+		origin, err := ParseStoreURL(originText)
+		if err != nil {
+			return
+		}
+		advertisement, err := NewStoreAdvertisement(target, base)
+		if err != nil {
+			return
+		}
+		resolved, err := advertisement.Resolve(origin)
+		if err != nil {
+			return
+		}
+		reparsed, err := ParseStoreURL(resolved.String())
+		if err != nil || !reflect.DeepEqual(reparsed, resolved) {
+			t.Fatalf("resolved URL cannot round trip: %+v, %v", resolved, err)
+		}
+	})
+}
+
 func FuzzReferenceQuery(f *testing.F) {
 	_, ref := makeBlock(int(eris.BlockSize1KiB), 1)
 	f.Add(ref[:])

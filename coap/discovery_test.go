@@ -121,6 +121,30 @@ func TestAdvertisementResolve(t *testing.T) {
 	}
 }
 
+func TestAdvertisementResolveEscapedOrigin(t *testing.T) {
+	t.Parallel()
+	for _, host := range []string{"example%2Fname", "exa%3Ample.net", "name%25zone", "[fe80::1%25eth0]"} {
+		t.Run(host, func(t *testing.T) {
+			origin := mustStore(t, "coap://"+host+":61616/old/path")
+			for _, test := range []struct {
+				advertisement Advertisement
+				want          string
+			}{
+				{Advertisement{Target: "/store"}, "coap://" + host + ":61616/store"},
+				{Advertisement{Target: "peer"}, "coap://" + host + ":61616/.well-known/peer"},
+				{Advertisement{Target: "../a%2Fb", Base: "coap+tcp:"}, "coap+tcp://" + host + ":61616/a%2Fb"},
+				{Advertisement{Target: "//peer.example/store"}, "coap://peer.example/store"},
+				{Advertisement{Target: "coap+tcp://peer.example/store"}, "coap+tcp://peer.example/store"},
+			} {
+				got, err := test.advertisement.Resolve(origin)
+				if err != nil || got.String() != test.want {
+					t.Errorf("Resolve(%+v) = %q, %v; want %q", test.advertisement, got.String(), err, test.want)
+				}
+			}
+		})
+	}
+}
+
 func TestDiscoveryRequestResponse(t *testing.T) {
 	t.Parallel()
 	request := NewDiscoveryRequest()
