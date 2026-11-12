@@ -141,3 +141,52 @@ func FuzzPrepareForward(f *testing.F) {
 		}
 	})
 }
+
+func FuzzBlockWiseHandler(f *testing.F) {
+	f.Add(uint8(protocol.PUT), []byte{0x0d}, []byte(nil), bytes.Repeat([]byte{1}, 512), false)
+	f.Add(uint8(protocol.PUT), []byte{0x15}, []byte(nil), bytes.Repeat([]byte{1}, 512), false)
+	f.Add(uint8(protocol.GET), []byte(nil), []byte{6}, []byte(nil), true)
+	f.Fuzz(func(t *testing.T, code uint8, block1, block2, payload []byte, duplicate bool) {
+		if len(payload) > int(eris.BlockSize32KiB)+1 {
+			payload = payload[:int(eris.BlockSize32KiB)+1]
+		}
+		blocks := make(eris.BlockSet)
+		handler, err := (Handler{Blocks: blocks, AllowPut: true, MaxTransfers: 2}).BlockWise(protocol.BlockWiseConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range 6 {
+			request := &protocol.Message{
+				Type: protocol.Confirmable, Code: protocol.Code(code), Payload: payload,
+				Options: []protocol.Option{
+					protocol.StringOption(protocol.OptionURIPath, blocksSegment),
+					protocol.NewOption(65000, []byte{byte(i % 3)}),
+				},
+			}
+			for _, option := range []protocol.Option{
+				protocol.NewOption(protocol.OptionBlock1, block1),
+				protocol.NewOption(protocol.OptionBlock2, block2),
+			} {
+				if len(option.Value) > 0 {
+					request.Options = append(request.Options, option)
+					if duplicate {
+						request.Options = append(request.Options, option)
+					}
+				}
+			}
+			sortOptions(request.Options)
+			response, err := handler.ServeCOAP(context.Background(), request)
+			if err != nil || response == nil || !response.Code.IsResponse() {
+				t.Fatalf("response = %+v, %v", response, err)
+			}
+			if len(handler.transfers) > 2 {
+				t.Fatal("transfer state exceeded the configured limit")
+			}
+		}
+		for ref, block := range blocks {
+			if err := eris.VerifyBlock(block, ref); err != nil {
+				t.Fatalf("invalid stored block: %v", err)
+			}
+		}
+	})
+}

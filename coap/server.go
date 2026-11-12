@@ -28,6 +28,9 @@ type Handler struct {
 	// AllowPut enables PUT when Blocks also implements eris.BlockSink or
 	// eris.ContextBlockSink. The zero value rejects PUT with 4.01 Unauthorized.
 	AllowPut bool
+	// MaxTransfers limits active and retained block-wise transfers. Zero uses
+	// DefaultMaxTransfers. It applies only to the handler returned by BlockWise.
+	MaxTransfers int
 	// Next receives requests outside this store. A nil Next produces 4.04 Not
 	// Found.
 	Next protocol.Handler
@@ -37,6 +40,9 @@ type Handler struct {
 func (handler Handler) Validate() error {
 	if handler.Blocks == nil {
 		return errors.New("eris coap: nil block source")
+	}
+	if handler.MaxTransfers < 0 {
+		return errors.New("eris coap: negative transfer limit")
 	}
 	for index, segment := range handler.Path {
 		if !utf8.ValidString(segment) || segment == "." || segment == ".." || index == len(handler.Path)-1 && segment == "" {
@@ -48,14 +54,14 @@ func (handler Handler) Validate() error {
 
 // BlockWise wraps handler with complete-body Block1 and Block2 support. A zero
 // MaxBodySize limits reassembled bodies to the largest valid block size.
-func (handler Handler) BlockWise(config protocol.BlockWiseConfig) (*protocol.BlockWiseHandler, error) {
+func (handler Handler) BlockWise(config protocol.BlockWiseConfig) (*BlockWiseHandler, error) {
 	if err := handler.Validate(); err != nil {
 		return nil, err
 	}
 	if config.MaxBodySize == 0 {
 		config.MaxBodySize = int(eris.BlockSize32KiB)
 	}
-	return protocol.NewBlockWiseHandler(handler, config)
+	return newBlockWiseHandler(handler, config)
 }
 
 // ServeCOAP implements coaperation.Handler.

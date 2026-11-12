@@ -122,7 +122,10 @@ func (fileSystem *FS) find(name string, followFinal bool) (*node, error) {
 	if currentPath == "." {
 		return fileSystem.root, nil
 	}
-	pending := strings.Split(currentPath, "/")
+	// Keep one unprocessed string per followed link. Splitting and copying
+	// all target components can multiply memory use when a link points to
+	// itself followed by a long suffix, even with the 40-link limit.
+	pending := []string{currentPath}
 	ancestors := []*node{fileSystem.root}
 	links := 0
 	for len(pending) > 0 {
@@ -130,8 +133,13 @@ func (fileSystem *FS) find(name string, followFinal bool) (*node, error) {
 		if !current.isDir() {
 			return nil, stdfs.ErrNotExist
 		}
-		component := pending[0]
-		pending = pending[1:]
+		last := len(pending) - 1
+		component, rest, more := strings.Cut(pending[last], "/")
+		if more {
+			pending[last] = rest
+		} else {
+			pending = pending[:last]
+		}
 		switch component {
 		case "", ".":
 			continue
@@ -164,7 +172,7 @@ func (fileSystem *FS) find(name string, followFinal bool) (*node, error) {
 		}
 		// Resolve each target component before processing its parent segments.
 		// Cleaning the text first can select a different file through a link.
-		pending = append(strings.Split(next.target, "/"), pending...)
+		pending = append(pending, next.target)
 	}
 	return ancestors[len(ancestors)-1], nil
 }

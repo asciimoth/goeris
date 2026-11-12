@@ -2,6 +2,7 @@ package coap
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 
 	protocol "github.com/asciimoth/coaperation"
@@ -106,6 +107,17 @@ func (client *Client) PutBlockContext(ctx context.Context, block []byte, expecte
 	request, err := NewPutRequest(client.store, block, client.config.Request, expected...)
 	if err != nil {
 		return eris.Reference{}, err
+	}
+	if transfer := client.config.Transfer; transfer.Mode == protocol.TransferBlockWise ||
+		transfer.Mode == protocol.TransferAuto && len(block) > transfer.SingleMessageThreshold {
+		// RFC 9175 Request-Tag separates concurrent bodies sent to the same
+		// resource. The exchange token alone does not identify a transfer.
+		var tag [8]byte
+		if _, err := rand.Read(tag[:]); err != nil {
+			return eris.Reference{}, err
+		}
+		request.Options = append(request.Options, protocol.NewOption(292, tag[:]))
+		sortOptions(request.Options)
 	}
 	response, err := protocol.RequestBody(ctx, &limitedRequester{
 		requester: client.requester, remaining: int(eris.BlockSize32KiB),

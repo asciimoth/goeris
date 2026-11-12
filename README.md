@@ -101,12 +101,28 @@ CoAP PUT handlers return the computed reference as 32 raw octets in the
 query. For an older server with an empty success payload, the client computes
 the reference locally when no expected reference was supplied.
 
+The client adds a separate
+[Request-Tag](https://www.rfc-editor.org/rfc/rfc9175.html#section-3) to each
+block-wise upload so concurrent uploads to the same resource keep their
+fragments separate.
+
 Use `coap.Handler.BlockWise` for block-wise uploads. The direct handler rejects
 PUT requests with a Block1 option, so a fragment cannot be stored as a complete
 block. The block and discovery handlers reject unsupported critical options,
 including conditional request options and Accept. Confirmable requests receive
 4.02 Bad Option; non-confirmable requests are discarded. Unknown elective
 options are ignored.
+
+The block-wise wrapper returns a `*coap.BlockWiseHandler`. It limits active and
+retained transfers to 128 by default; set `Handler.MaxTransfers` to select
+another positive limit. At capacity, new transfers receive 5.03 Service
+Unavailable. Existing transfers can continue. Completed download caches can be
+removed to make room for new transfers. Transfer state expires after the
+configured `StateLifetime` (two minutes by default), with expiry checked on each
+request. Each transfer retains at most 64 KiB of request metadata. The wrapper
+checks write permission and critical options before accepting fragments and
+rejects repeated Block1, Block2, Size1, and Size2 options. Requests for other
+paths go directly to `Next`; that handler controls its own transfer policy.
 
 The `link` and `magnet` packages implement the
 [ERIS link file](specs/eer/linkfile/index.md) and
