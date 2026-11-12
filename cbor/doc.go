@@ -4,7 +4,9 @@
 // maps, and read capabilities. This package performs only deterministic,
 // in-memory operations. It does not access files, networks, or other streams.
 //
-// The format is specified at https://eris.codeberg.page/eer/cbor.xml.
+// See the [ERIS CBOR serialization recommendation].
+//
+// [ERIS CBOR serialization recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/cbor/index.md
 package cbor
 
 const (

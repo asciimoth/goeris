@@ -1,7 +1,8 @@
 # Go ERIS
 
-This repository provides a Go library for
-[ERIS 1.0.0](https://eris.codeberg.page/).
+This repository provides a Go library for [ERIS 1.0.0](specs/eris-v1.0.0.html).
+Local copies of the specification and ERIS extension documents are in
+[specs](specs/README.md).
 
 Install this library with `go get github.com/asciimoth/goeris`.
 
@@ -14,14 +15,16 @@ The `eris` package implements:
 - verified decoding from an in-memory block set, with abstract block storage
   interfaces.
 
-The `cbor` package implements the ERIS CBOR transport format:
+The `cbor` package implements the
+[ERIS CBOR transport format](specs/eer/cbor/index.md):
 
 - deterministic tagged, untagged, and self-described arrays;
 - tagged and untagged CBOR sequences;
 - definite-length and indefinite-length decoding; and
 - typed blocks, references, verified block maps, and read capabilities.
 
-The `fs` package implements ERIS-FS version 1:
+The `fs` package implements
+[ERIS-FS version 1](specs/eer/eris-fs/index.md#version-1):
 
 - canonical deterministic CBOR index encoding and strict decoding;
 - low-level index and ERIS reader APIs;
@@ -31,7 +34,7 @@ The `fs` package implements ERIS-FS version 1:
 - a high-level read-only `FileSystem` interface based on `io/fs`; and
 - verified random-access file reads through `io.ReaderAt` and `io.Seeker`.
 
-The `dns` package implements ERIS DNSLink records:
+The `dns` package implements [ERIS DNSLink records](specs/eer/dnslink/index.md):
 
 - canonical `eris` and `erisfs` namespace encoding and decoding;
 - extraction from multiple or whitespace-concatenated TXT values;
@@ -43,7 +46,7 @@ interface lets applications supply standard DNS, DNS over HTTPS, or an in-memory
 implementation. Resolver implementations must follow CNAME chains, as
 `*net.Resolver` does for TXT lookups.
 
-The `http` package implements ERIS over HTTP:
+The `http` package implements [ERIS over HTTP](specs/eer/http/index.md):
 
 - low-level RFC 2169 N2R URL and request construction;
 - a chainable HTTP handler for encrypted blocks and decoded content;
@@ -54,7 +57,8 @@ The HTTP package does not create or configure a network client or server.
 Applications supply the HTTP request executor, block source, handler chain, and
 server registration.
 
-The `s3` package implements the ERIS object-storage recommendation:
+The `s3` package implements the
+[ERIS object-storage recommendation](specs/eer/object-storage/index.md):
 
 - canonical `s3://ENDPOINT/BUCKET/` store URLs and path-style object URLs;
 - public block reads and authenticated single-request block writes;
@@ -66,7 +70,7 @@ The S3 package intentionally omits credential discovery, IAM, bucket
 administration, object listing, and multipart uploads. It uses only the Go
 standard library and the existing ERIS block APIs.
 
-The `coap` package implements ERIS over CoAP:
+The `coap` package implements [ERIS over CoAP](specs/eer/coap/index.md):
 
 - canonical `coap` and `coap+tcp` store URLs;
 - raw and Base32 block-reference queries;
@@ -85,6 +89,10 @@ CoAP PUT handlers return the computed reference as 32 raw octets in the
 `2.01 Created` payload. A PUT request can include an expected reference as a URI
 query. For an older server with an empty success payload, the client computes
 the reference locally when no expected reference was supplied.
+
+The `link` and `magnet` packages implement the
+[ERIS link file](specs/eer/linkfile/index.md) and
+[ERIS Magnet URI](specs/eer/magnet-uri/index.md) recommendations.
 
 The core `eris` package does not implement storage, file or stream I/O,
 networking, random-secret generation, or ERIS extensions.
@@ -151,7 +159,9 @@ just check
 
 ## License
 
-Files in this repository are distributed under the CC0 license.
+The Go library and this README are distributed under the CC0 license. The copied
+ERIS specifications in [specs](specs/README.md) retain their CC BY-SA 4.0
+license.
 
 <p xmlns:dct="http://purl.org/dc/terms/">
   <a rel="license"
@@ -164,5 +174,5 @@ Files in this repository are distributed under the CC0 license.
      href="https://github.com/asciimoth">
     <span property="dct:title">ASCIIMoth</span></a>
   has waived all copyright and related or neighboring rights to
-  <span property="dct:title">goeris</span>.
+  <span property="dct:title">goeris's original code and documentation</span>.
 </p>

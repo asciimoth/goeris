@@ -6,5 +6,5 @@
 //
 // See the [ERIS link file recommendation].
 //
-// [ERIS link file recommendation]: https://eris.codeberg.page/eer/linkfile.xml
+// [ERIS link file recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/linkfile/index.md
 package link

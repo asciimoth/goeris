@@ -1,5 +1,8 @@
 // Package fs implements version 1 of the ERIS-FS format.
 //
+// The [ERIS-FS recommendation] now describes version 2 and includes the
+// version 1 format in its deprecated versions section.
+//
 // The low-level API contains Index, Entry, the index codecs, and Reader. It uses
 // the block source and sink interfaces in the eris package so applications can
 // control storage and transport.
@@ -11,6 +14,8 @@
 // The package operates only on io.Reader values and abstract ERIS block
 // stores. It does not access the host file system, network, clock, or random
 // source.
+//
+// [ERIS-FS recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/eris-fs/index.md#version-1
 package fs
 
 const (

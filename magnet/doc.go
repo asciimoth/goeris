@@ -6,5 +6,5 @@
 //
 // See the [ERIS Magnet recommendation].
 //
-// [ERIS Magnet recommendation]: https://eris.codeberg.page/eer/magnet-uri.xml
+// [ERIS Magnet recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/magnet-uri/index.md
 package magnet

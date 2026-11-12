@@ -2,3 +2,8 @@
 eris = "eris"
 BVE = "BVE" # Part of an official Base32 test vector.
 MEK = "MEK" # Part of an official Base32 test vector.
+
+[files]
+extend-exclude = [
+  "specs/",
+]

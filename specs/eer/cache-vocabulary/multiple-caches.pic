@@ -1,0 +1,10 @@
+Original: box at (0,0) "original content" fit
+CreateCache1: oval at (2.5,0.5) "ec:CreateCache activity (1)" fit fill goldenrod
+CreateCache2: oval at (2.5,-0.5) "ec:CreateCache activity (2)" fit fill goldenrod
+Cache: oval at (5,0) "ERIS encoded content" fit fill goldenrod
+
+arrow from  Original.e to CreateCache1.w "prov:used" aligned above <-
+arrow from CreateCache1.e to Cache.w "prov:generated" aligned above
+
+arrow from  Original.e to CreateCache2.w "prov:used" aligned above <-
+arrow from CreateCache2.e to Cache.w "prov:generated" aligned above
