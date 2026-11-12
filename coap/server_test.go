@@ -210,6 +210,32 @@ func baseWithoutOptions(t *testing.T, store StoreURL, block []byte) *protocol.Me
 	return request
 }
 
+func TestHandlerRejectsUnassembledPut(t *testing.T) {
+	t.Parallel()
+	block, _ := makeBlock(int(eris.BlockSize1KiB), 17)
+	store := mustStore(t, "coap://example/")
+	for _, fragment := range []protocol.Block{
+		{Number: 0, More: true, Size: 1024},
+		{Number: 31, More: false, Size: 1024},
+		{Number: 0, More: false, Size: 1024},
+	} {
+		blocks := make(eris.BlockSet)
+		handler := Handler{Blocks: blocks, AllowPut: true}
+		request := baseWithoutOptions(t, store, block)
+		option, err := fragment.Option(protocol.OptionBlock1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = addOption(request, option)
+		if response := serve(t, handler, request); response.Code != protocol.BadOption {
+			t.Errorf("fragment %+v: response = %s, want BadOption", fragment, response.Code)
+		}
+		if len(blocks) != 0 {
+			t.Fatal("stored a fragment as a complete ERIS block")
+		}
+	}
+}
+
 func replaceOption(message *protocol.Message, option protocol.Option) *protocol.Message {
 	clone := message.Clone()
 	for index := range clone.Options {
@@ -280,7 +306,6 @@ func TestHandlerContextNextAndValidation(t *testing.T) {
 
 func TestBlockWiseClientHandler(t *testing.T) {
 	t.Parallel()
-	block, ref := makeBlock(int(eris.BlockSize32KiB), 11)
 	blocks := make(eris.BlockSet)
 	server, err := (Handler{Blocks: blocks, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{BlockSize: 1024})
 	if err != nil {
@@ -293,11 +318,14 @@ func TestBlockWiseClientHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PutBlock(block, ref); err != nil {
-		t.Fatal(err)
-	}
-	got, err := client.GetBlock(ref)
-	if err != nil || !bytes.Equal(got, block) {
-		t.Fatalf("GetBlock() = %x, %v", got, err)
+	for _, size := range []eris.BlockSize{eris.BlockSize1KiB, eris.BlockSize32KiB} {
+		block, ref := makeBlock(int(size), 11)
+		if _, err := client.PutBlock(block, ref); err != nil {
+			t.Fatal(err)
+		}
+		got, err := client.GetBlock(ref)
+		if err != nil || !bytes.Equal(got, block) {
+			t.Fatalf("GetBlock() = %x, %v", got, err)
+		}
 	}
 }

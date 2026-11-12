@@ -239,7 +239,8 @@ func ParseDiscoveryResponse(response *protocol.Message) ([]Advertisement, error)
 }
 
 // DiscoveryHandler serves a discovery document. Callers must not mutate
-// Advertisements while ServeCOAP is active.
+// Advertisements while ServeCOAP is active. Unsupported critical options
+// are rejected before the document is built.
 type DiscoveryHandler struct {
 	// Advertisements are returned in their current order.
 	Advertisements []Advertisement
@@ -258,6 +259,9 @@ func (handler DiscoveryHandler) ServeCOAP(ctx context.Context, request *protocol
 			return handler.Next.ServeCOAP(ctx, request)
 		}
 		return &protocol.Message{Code: protocol.NotFound}, nil
+	}
+	if response, rejected := rejectCriticalOptions(request); rejected {
+		return response, nil
 	}
 	if err := validateHopLimit(request); err != nil {
 		return &protocol.Message{Code: protocol.BadRequest}, nil

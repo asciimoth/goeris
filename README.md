@@ -101,6 +101,13 @@ CoAP PUT handlers return the computed reference as 32 raw octets in the
 query. For an older server with an empty success payload, the client computes
 the reference locally when no expected reference was supplied.
 
+Use `coap.Handler.BlockWise` for block-wise uploads. The direct handler rejects
+PUT requests with a Block1 option, so a fragment cannot be stored as a complete
+block. The block and discovery handlers reject unsupported critical options,
+including conditional request options and Accept. Confirmable requests receive
+4.02 Bad Option; non-confirmable requests are discarded. Unknown elective
+options are ignored.
+
 The `link` and `magnet` packages implement the
 [ERIS link file](specs/eer/linkfile/index.md) and
 [ERIS Magnet URI](specs/eer/magnet-uri/index.md) recommendations.
@@ -237,6 +244,11 @@ Run the complete checks with:
 ```sh
 just check
 ```
+
+Go 1.26.10 can report a false `context deadline exceeded` failure when a timed
+fuzz run ends. This is a [Go fuzz-runner race](https://go.dev/issue/75804). Use
+`GOTOOLCHAIN=go1.27.4 just check` to run the checks with a toolchain that
+includes the fix. Do not ignore a failing fuzz input.
 
 The `vulncheck` check accepts
 [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859) while the scanned packages

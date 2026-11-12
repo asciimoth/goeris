@@ -15,8 +15,10 @@ import (
 // endpoint-wide root store.
 //
 // Handler expects complete request bodies. Use BlockWise to add RFC 7959
-// reassembly and response segmentation. Callers must not mutate Path or the
-// handler fields while ServeCOAP is active.
+// reassembly and response segmentation. Direct PUT requests with a Block1
+// option are rejected with 4.02 Bad Option. Callers must not mutate Path or
+// the handler fields while ServeCOAP is active.
+// Unsupported critical options are rejected before storage is called.
 type Handler struct {
 	// Path contains the store path before its final blocks segment.
 	Path []string
@@ -63,6 +65,9 @@ func (handler Handler) ServeCOAP(ctx context.Context, request *protocol.Message)
 	}
 	if !handler.matches(request.URIPath()) {
 		return handler.next(ctx, request)
+	}
+	if response, rejected := rejectCriticalOptions(request); rejected {
+		return response, nil
 	}
 	if handler.Blocks == nil {
 		return &protocol.Message{Code: protocol.InternalServerError}, nil
@@ -123,6 +128,12 @@ func (handler Handler) get(ctx context.Context, request *protocol.Message) *prot
 func (handler Handler) put(ctx context.Context, request *protocol.Message) *protocol.Message {
 	if !handler.AllowPut {
 		return &protocol.Message{Code: protocol.Unauthorized}
+	}
+	// A fragment can have a valid ERIS block length. Only the transfer wrapper
+	// can establish that the complete body was received; it removes Block1
+	// before calling this handler.
+	if _, present := request.Option(protocol.OptionBlock1); present {
+		return &protocol.Message{Code: protocol.BadOption}
 	}
 	var expected []eris.Reference
 	if len(request.URIQueries()) != 0 {
