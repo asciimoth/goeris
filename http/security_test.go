@@ -6,6 +6,7 @@ import (
 	"io"
 	nethttp "net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -124,5 +125,37 @@ func TestHandlerMultipartContent(t *testing.T) {
 	}
 	if response.Header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatal("missing nosniff header")
+	}
+}
+
+func TestResponseErrorDoesNotExposeServerText(t *testing.T) {
+	err := &ResponseError{StatusCode: 503, Status: "503 \x1b[2Jprivate server details"}
+	if got := err.Error(); got != "eris http: response status 503 (Service Unavailable)" {
+		t.Fatalf("unsafe error text: %q", got)
+	}
+}
+
+func TestClientRejectsUnexpectedSuccessStatus(t *testing.T) {
+	capability, blocks, _ := testData(t)
+	ref := capability.Root.Reference
+	base, _ := url.Parse("http://example.test")
+	for _, status := range []int{201, 202, 204, 206, 299} {
+		body := &trackingBody{Reader: bytes.NewReader(blocks[ref])}
+		client, err := NewClient(clientFunc(func(*nethttp.Request) (*nethttp.Response, error) {
+			res := response(status, ContentType, nil)
+			res.Body = body
+			return res, nil
+		}), base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block, err := client.GetBlock(ref)
+		var statusErr *ResponseError
+		if block != nil || !errors.As(err, &statusErr) || statusErr.StatusCode != status {
+			t.Fatalf("status %d: block %x, error %v", status, block, err)
+		}
+		if !body.closed {
+			t.Fatalf("status %d: response body was not closed", status)
+		}
 	}
 }

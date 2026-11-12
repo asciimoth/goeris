@@ -21,12 +21,15 @@ type HTTPClient interface {
 // ResponseError reports a non-successful HTTP response.
 type ResponseError struct {
 	StatusCode int
-	Status     string
+	// Status is the raw status text from the server. It is untrusted input.
+	// Error uses the standard status text instead.
+	Status string
 }
 
 // Error implements error.
 func (err *ResponseError) Error() string {
-	return fmt.Sprintf("eris http: response status %s", err.Status)
+	// The server controls Status. Do not copy it into logs or terminal output.
+	return fmt.Sprintf("eris http: response status %d (%s)", err.StatusCode, nethttp.StatusText(err.StatusCode))
 }
 
 // Client retrieves ERIS resources through a caller-supplied HTTP client.
@@ -78,6 +81,7 @@ func (client *Client) GetBlock(ref eris.Reference) ([]byte, error) {
 }
 
 // GetBlockContext retrieves and verifies one encrypted ERIS block.
+// It requires a 200 OK response with the application/octet-stream media type.
 func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error) {
 	response, err := client.Resolve(ctx, ref.URN())
 	if err != nil {
@@ -87,7 +91,7 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 	if response.StatusCode == nethttp.StatusNotFound {
 		return nil, eris.ErrMissingBlock
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
+	if response.StatusCode != nethttp.StatusOK {
 		return nil, &ResponseError{StatusCode: response.StatusCode, Status: response.Status}
 	}
 	mediaType, _, parseErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
