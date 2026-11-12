@@ -227,6 +227,35 @@ func TestResponseErrorDoesNotExposeServerText(t *testing.T) {
 	}
 }
 
+func TestClientRequestErrorsDoNotExposeURLs(t *testing.T) {
+	capability, _, _ := testData(t)
+	transportErr := errors.New("untrusted transport details\x1b[2J")
+	base, _ := url.Parse("http://user:password@example.test")
+	client, err := NewClient(&nethttp.Client{Transport: roundTripFunc(func(*nethttp.Request) (*nethttp.Response, error) {
+		return nil, transportErr
+	})}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Resolve(context.Background(), capability.String())
+	if err == nil || err.Error() != "eris http: request failed" {
+		t.Fatalf("unsafe request error: %v", err)
+	}
+	var urlErr *url.Error
+	if !errors.Is(err, transportErr) || !errors.As(err, &urlErr) {
+		t.Fatal("request error lost its cause")
+	}
+	// URL parse errors also contain the full query, including the key.
+	client, err = NewClient(nethttp.DefaultClient, &url.URL{Scheme: "http", Host: "example.test:bad"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.NewRequest(context.Background(), capability.String())
+	if err == nil || err.Error() != "eris http: request failed" || !errors.As(err, &urlErr) {
+		t.Fatalf("unsafe URL parse error: %v", err)
+	}
+}
+
 func TestClientRejectsUnexpectedSuccessStatus(t *testing.T) {
 	capability, blocks, _ := testData(t)
 	ref := capability.Root.Reference
@@ -323,5 +352,74 @@ func TestClientBoundsDecompressedBlockResponse(t *testing.T) {
 	block, err := client.GetBlock(eris.Reference{})
 	if block != nil || !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("block size %d, error %v", len(block), err)
+	}
+}
+
+type contextSourceFunc func(context.Context, eris.Reference) ([]byte, error)
+
+func (source contextSourceFunc) GetBlock(ref eris.Reference) ([]byte, error) {
+	return source(context.Background(), ref)
+}
+
+func (source contextSourceFunc) GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error) {
+	return source(ctx, ref)
+}
+
+type failedStreamWriter struct {
+	*httptest.ResponseRecorder
+	started <-chan struct{}
+	ctx     context.Context
+}
+
+func (writer failedStreamWriter) Write([]byte) (int, error) {
+	// The multipart producer can start the block read after the pipe has
+	// delivered the part header, while the response write is still pending.
+	select {
+	case <-writer.started:
+	case <-writer.ctx.Done():
+	}
+	return 0, io.ErrClosedPipe
+}
+
+func TestHandlerCancelsMultipartReadAfterWriteFailure(t *testing.T) {
+	capability, blocks, _ := testData(t)
+	root, err := eris.DecryptNode(blocks[capability.Root.Reference], capability.Root, capability.Level)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairs, err := eris.ParseInternalNode(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	handler := Handler{Blocks: contextSourceFunc(func(ctx context.Context, ref eris.Reference) ([]byte, error) {
+		if ref == pairs[0].Reference {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return blocks.GetBlock(ref)
+	})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil).WithContext(ctx)
+	request.Header.Set("Range", "bytes=0-10,1024-1030")
+	done := make(chan any, 1)
+	go func() {
+		defer func() { done <- recover() }()
+		handler.ServeHTTP(failedStreamWriter{httptest.NewRecorder(), started, ctx}, request)
+	}()
+	select {
+	case result := <-done:
+		if result != nil && result != nethttp.ErrAbortHandler {
+			t.Fatalf("unexpected panic: %v", result)
+		}
+		if ctx.Err() != nil {
+			t.Fatal("handler canceled the caller's context")
+		}
+	case <-time.After(5 * time.Second):
+		cancel() // Release the blocked read before reporting the failure.
+		<-done
+		t.Fatal("handler did not cancel the pending read after a response write failed")
 	}
 }

@@ -67,7 +67,7 @@ func (source *contextSource) GetBlock(ref eris.Reference) ([]byte, error) {
 
 func (source *contextSource) GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error) {
 	source.contextCalls++
-	if ctx != source.wantContext {
+	if ctx.Value(requestContextKey{}) != source.wantContext.Value(requestContextKey{}) {
 		return nil, errors.New("incorrect request context")
 	}
 	return source.blocks.GetBlock(ref)

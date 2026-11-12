@@ -79,7 +79,9 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 	if limit == 0 {
 		limit = -1
 	}
-	reader, err := erisreader.NewReaderWithLimit(capability, requestBlockSource{ctx: request.Context(), source: handler.Blocks}, limit)
+	ctx, cancel := context.WithCancel(request.Context())
+	defer cancel()
+	reader, err := erisreader.NewReaderWithLimit(capability, requestBlockSource{ctx: ctx, source: handler.Blocks}, limit)
 	if err != nil {
 		if errors.Is(err, erisreader.ErrTooLarge) {
 			writer.WriteHeader(nethttp.StatusRequestEntityTooLarge)
@@ -88,7 +90,13 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 		writeSourceError(writer, err)
 		return
 	}
-	defer func() { _ = reader.Close() }()
+	defer func() {
+		// ServeContent can return on a failed response write while its
+		// multipart goroutine is still reading a block. Cancel that read
+		// before Close waits for the reader's lock.
+		cancel()
+		_ = reader.Close()
+	}()
 	setResourceHeaders(writer)
 	stream := &checkedContent{ReadSeeker: reader}
 	nethttp.ServeContent(writer, request, "", time.Time{}, stream)

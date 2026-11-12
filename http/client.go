@@ -32,6 +32,13 @@ func (err *ResponseError) Error() string {
 	return fmt.Sprintf("eris http: response status %d (%s)", err.StatusCode, nethttp.StatusText(err.StatusCode))
 }
 
+// requestError keeps request URLs and untrusted transport text out of logs.
+// Callers can still inspect the cause with errors.Is and errors.As.
+type requestError struct{ cause error }
+
+func (err *requestError) Error() string { return "eris http: request failed" }
+func (err *requestError) Unwrap() error { return err.cause }
+
 // Client retrieves ERIS resources through a caller-supplied HTTP client.
 type Client struct {
 	httpClient HTTPClient
@@ -52,6 +59,7 @@ func NewClient(httpClient HTTPClient, baseURL *url.URL) (*Client, error) {
 }
 
 // NewRequest returns a GET request for urn. It does not execute the request.
+// URL parse errors are wrapped to keep capability keys out of error text.
 func (client *Client) NewRequest(ctx context.Context, urn string) (*nethttp.Request, error) {
 	if client == nil || client.httpClient == nil {
 		return nil, ErrNilHTTPClient
@@ -60,17 +68,27 @@ func (client *Client) NewRequest(ctx context.Context, urn string) (*nethttp.Requ
 	if err != nil {
 		return nil, err
 	}
-	return nethttp.NewRequestWithContext(ctx, nethttp.MethodGet, resourceURL.String(), nil)
+	request, err := nethttp.NewRequestWithContext(ctx, nethttp.MethodGet, resourceURL.String(), nil)
+	if err != nil {
+		return nil, &requestError{cause: err}
+	}
+	return request, nil
 }
 
 // Resolve sends a GET request for urn. The caller must close the response body.
 // Resolve returns all HTTP statuses without interpreting them.
+// Request errors are wrapped to omit URLs and transport details from error
+// text. The original cause is available through errors.Is and errors.As.
 func (client *Client) Resolve(ctx context.Context, urn string) (*nethttp.Response, error) {
 	request, err := client.NewRequest(ctx, urn)
 	if err != nil {
 		return nil, err
 	}
-	return client.httpClient.Do(request)
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return response, &requestError{cause: err}
+	}
+	return response, nil
 }
 
 // GetBlock retrieves and verifies one encrypted ERIS block. It uses a

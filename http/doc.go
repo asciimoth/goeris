@@ -13,7 +13,8 @@
 // unlimited decoded content. The handler scans the tree to find its size, even
 // for HEAD and range requests. Block sources must verify blocks as required by
 // eris.BlockSource. Sources that implement eris.ContextBlockSource can stop
-// pending reads when a request is canceled.
+// pending reads when a request is canceled or a response write fails. Sources
+// without context support must bound their own read time.
 //
 // If a block read fails after response headers are sent, Handler panics with
 // net/http.ErrAbortHandler to abort the response. Middleware must preserve this
@@ -23,6 +24,8 @@
 // OpenContent returns unverified bytes and has no response size limit. An ERIS
 // capability contains a decryption key; remote decoding sends that key in the
 // URL query. Use a trusted resolver and protect request URLs in access logs.
+// Client wraps request errors to omit URLs and transport text from their Error
+// output. Unwrapped errors can still contain keys and untrusted server text.
 //
 // [ERIS over HTTP recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/http/index.md
 package http
