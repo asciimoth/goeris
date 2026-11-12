@@ -2,6 +2,7 @@ package erisreader
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	stdfs "io/fs"
@@ -81,6 +82,43 @@ func TestReaderRandomAccess(t *testing.T) {
 	}
 	if _, err = reader.Seek(0, io.SeekStart); !errors.Is(err, stdfs.ErrClosed) {
 		t.Fatalf("closed Seek error = %v", err)
+	}
+}
+
+func TestScannedReaderCacheBound(t *testing.T) {
+	// Distinct leaves produce more than 64 distinct internal nodes.
+	content := make([]byte, 1200*1024+17)
+	for i := 0; i+8 <= len(content); i += 1024 {
+		binary.LittleEndian.PutUint64(content[i:], uint64(i))
+	}
+	capability, blocks, err := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewReader(capability, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+	if reader.CacheSize() > 64 {
+		t.Fatalf("cache after scan has %d nodes", reader.CacheSize())
+	}
+	if len(reader.summaries) != 0 {
+		t.Fatal("reader retained scan summaries")
+	}
+	var buffer [8]byte
+	for i := 1199; i >= 0; i -= 16 {
+		offset := i * 1024
+		if _, err := reader.ReadAt(buffer[:], int64(offset)); err != nil || !bytes.Equal(buffer[:], content[offset:offset+8]) {
+			t.Fatalf("read at %d: %v", offset, err)
+		}
+		if reader.CacheSize() > 64 {
+			t.Fatalf("cache after read has %d nodes", reader.CacheSize())
+		}
+	}
+	got, err := io.ReadAll(reader)
+	if err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("read after cache eviction: %v", err)
 	}
 }
 

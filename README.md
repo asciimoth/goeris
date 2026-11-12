@@ -168,7 +168,9 @@ no content reads. Random reads fetch only the required tree paths and leaf
 blocks. Each reader caches at most 64 internal nodes and one leaf. A reader
 checks the shape of each visited path and checks padding when it reads the file
 end. Unvisited blocks are not checked. V1 files first scan internal nodes and
-the final leaf to obtain the content length.
+the final leaf to obtain the content length. This scan uses temporary summaries
+that grow with the number of distinct internal nodes. The reader releases these
+summaries after the scan and applies the same 64-node cache limit during reads.
 
 The generic ERIS reader is a shared internal helper used by `fs` and `http`.
 Applications use `OpenFile` for random access to files in an image.

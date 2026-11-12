@@ -31,8 +31,9 @@ type treeSummary struct {
 }
 
 // Reader decodes one ERIS byte sequence and supports random access. Operations
-// on one reader are safe for concurrent use. Internal nodes and the most recent
-// leaf are cached. Use NewReaderWithSize to avoid scanning the tree on open.
+// on one reader are safe for concurrent use. At most 64 internal nodes and the
+// most recent leaf are cached. Use NewReaderWithSize to avoid scanning the tree
+// on open.
 type Reader struct {
 	mu          sync.Mutex
 	source      eris.BlockSource
@@ -52,7 +53,8 @@ type Reader struct {
 
 // NewReader opens an ERIS byte sequence from an abstract block source. It
 // scans internal nodes and the final leaf to obtain the decoded length and
-// check the tree shape. Other leaf blocks are fetched when read. Use
+// check the tree shape. The scan keeps one temporary summary per distinct
+// internal node. Other leaf blocks are fetched when read. Use
 // NewReaderWithSize when a v2 index already supplies the decoded length.
 func NewReader(capability eris.Capability, source eris.BlockSource) (*Reader, error) {
 	return NewReaderWithLimit(capability, source, -1)
@@ -98,6 +100,9 @@ func NewReaderWithLimit(capability eris.Capability, source eris.BlockSource, max
 	if err != nil {
 		return nil, err
 	}
+	// Summaries prevent repeated subtrees from expanding the scan work. They
+	// are not needed for reads and must not keep the full tree in memory.
+	reader.summaries = nil
 	lastNode, err := reader.decrypt(last, 0)
 	if err != nil {
 		return nil, err
@@ -310,7 +315,7 @@ func (reader *Reader) internal(pair eris.Pair, level eris.Level, root bool) ([]e
 	if err != nil {
 		return nil, err
 	}
-	if reader.sized && len(reader.cache) >= 64 {
+	if len(reader.cache) >= 64 {
 		// Clear a bounded cache instead of retaining an entire large tree.
 		clear(reader.cache)
 	}
