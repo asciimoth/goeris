@@ -15,6 +15,9 @@ import (
 // create a Value from CBOR data. ParseValue also requires valid UTF-8 in every
 // CBOR text string. It does not replace non-preferred CBOR representations
 // with preferred representations. A Value does not alias its input or output.
+// This is a structural check: it does not check tag semantics or detect
+// duplicate keys in maps inside a Value. Applications must check these when
+// interpreting a value. The link's own Attributes map rejects duplicate keys.
 // The zero Value is not valid.
 type Value struct {
 	data []byte
@@ -22,9 +25,12 @@ type Value struct {
 
 // ParseValue verifies exactly one well-formed CBOR data item and returns an
 // immutable copy. It accepts definite and indefinite-length CBOR forms.
+// Nesting is limited to 256 levels below the root item; tags count toward
+// this limit. There is no byte limit. See the package documentation for
+// handling untrusted input.
 func ParseValue(data []byte) (Value, error) {
 	decoder := valueDecoder{data: data}
-	if err := decoder.item(0, false); err != nil || decoder.offset != len(data) {
+	if err := decoder.item(0); err != nil || decoder.offset != len(data) {
 		return Value{}, ErrInvalidValue
 	}
 	return Value{data: append([]byte(nil), data...)}, nil
@@ -84,17 +90,13 @@ type valueDecoder struct {
 	offset int
 }
 
-func (decoder *valueDecoder) item(depth int, allowBreak bool) error {
+func (decoder *valueDecoder) item(depth int) error {
 	if depth > maxCBORDepth || decoder.offset >= len(decoder.data) {
 		return ErrInvalidValue
 	}
 	initial := decoder.data[decoder.offset]
 	if initial == 0xff {
-		if !allowBreak {
-			return ErrInvalidValue
-		}
-		decoder.offset++
-		return nil
+		return ErrInvalidValue
 	}
 	decoder.offset++
 	major := initial >> 5
@@ -119,7 +121,7 @@ func (decoder *valueDecoder) item(depth int, allowBreak bool) error {
 		if indefinite {
 			return ErrInvalidValue
 		}
-		return decoder.item(depth+1, false)
+		return decoder.item(depth + 1)
 	case 7:
 		if additional == 24 && value < 32 {
 			return ErrInvalidValue
@@ -212,22 +214,25 @@ func (decoder *valueDecoder) items(depth int, count uint64, indefinite bool, wid
 	}
 	if indefinite {
 		for {
-			start := decoder.offset
-			if err := decoder.item(depth+1, true); err != nil {
-				return err
+			if decoder.offset >= len(decoder.data) {
+				return ErrInvalidValue
 			}
-			if decoder.data[start] == 0xff {
+			if decoder.data[decoder.offset] == 0xff {
+				decoder.offset++
 				return nil
 			}
+			if err := decoder.item(depth + 1); err != nil {
+				return err
+			}
 			if width == 2 {
-				if err := decoder.item(depth+1, false); err != nil {
+				if err := decoder.item(depth + 1); err != nil {
 					return err
 				}
 			}
 		}
 	}
 	for range count * width {
-		if err := decoder.item(depth+1, false); err != nil {
+		if err := decoder.item(depth + 1); err != nil {
 			return err
 		}
 	}

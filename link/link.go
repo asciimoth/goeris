@@ -22,7 +22,7 @@ const (
 var (
 	// ErrInvalidLink means that input is not a valid ERIS link file.
 	ErrInvalidLink = errors.New("eris link: invalid link")
-	// ErrInvalidValue means that input is not exactly one valid CBOR data item.
+	// ErrInvalidValue means that input fails the structural checks in ParseValue.
 	ErrInvalidValue = errors.New("eris link: invalid CBOR value")
 )
 
@@ -30,8 +30,9 @@ var header = [...]byte{0xd9, 0xd9, 0xf7, 0x84, 0xd9, 0x01, 0x14, 0x58, 0x42}
 
 // Link identifies ERIS content and describes its decoded representation.
 //
-// Size is the size of the decoded content in bytes. MIME is a media type, but
-// this package only requires valid UTF-8. The Attributes field maps text keys
+// Size is the declared size of the decoded content in bytes. It is not verified.
+// MIME is a media type, but this package only requires valid UTF-8.
+// The Attributes field maps text keys
 // to arbitrary CBOR values. MarshalBinary orders attributes by their encoded
 // CBOR keys, so map iteration order does not affect its output.
 type Link struct {
@@ -56,7 +57,8 @@ func HasHeader(data []byte) bool {
 	return len(data) >= len(header) && bytes.Equal(data[:len(header)], header[:])
 }
 
-// Validate checks all fields of link.
+// Validate checks the structure of all fields of link. It does not check the
+// referenced content or the meaning of metadata.
 func (link Link) Validate() error {
 	if link.Capability.Validate() != nil || !utf8.ValidString(link.MIME) {
 		return ErrInvalidLink
@@ -142,7 +144,7 @@ func (link *Link) UnmarshalBinary(data []byte) error {
 		}
 		start := decoder.offset
 		valueDecoder := valueDecoder{data: data, offset: start}
-		if valueDecoder.item(0, false) != nil {
+		if valueDecoder.item(0) != nil {
 			return ErrInvalidLink
 		}
 		decoder.offset = valueDecoder.offset
@@ -164,7 +166,7 @@ func Parse(data []byte) (Link, error) {
 
 func validateValue(value Value) error {
 	decoder := valueDecoder{data: value.data}
-	if decoder.item(0, false) != nil || decoder.offset != len(value.data) {
+	if decoder.item(0) != nil || decoder.offset != len(value.data) {
 		return ErrInvalidValue
 	}
 	return nil
