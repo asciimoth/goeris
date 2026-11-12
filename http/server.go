@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	nethttp "net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/asciimoth/goeris"
@@ -88,7 +90,28 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 	}
 	defer func() { _ = reader.Close() }()
 	setResourceHeaders(writer)
-	nethttp.ServeContent(writer, request, "", time.Time{}, reader)
+	stream := &checkedContent{ReadSeeker: reader}
+	nethttp.ServeContent(writer, request, "", time.Time{}, stream)
+	if stream.failed.Load() {
+		panic(nethttp.ErrAbortHandler)
+	}
+}
+
+// ServeContent does not report copy errors. Abort the response so a failed
+// block fetch cannot produce a complete multipart response with missing data.
+type checkedContent struct {
+	io.ReadSeeker
+	// ServeContent reads multipart ranges in a separate goroutine. Record
+	// errors here, then abort from the handler goroutine.
+	failed atomic.Bool
+}
+
+func (reader *checkedContent) Read(buffer []byte) (int, error) {
+	n, err := reader.ReadSeeker.Read(buffer)
+	if err != nil && err != io.EOF {
+		reader.failed.Store(true)
+	}
+	return n, err
 }
 
 type requestBlockSource struct {
@@ -115,6 +138,7 @@ func (handler Handler) next() nethttp.Handler {
 
 func setResourceHeaders(writer nethttp.ResponseWriter) {
 	writer.Header().Set("Content-Type", ContentType)
+	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	writer.Header().Set("Cache-Control", "max-age=31536000, immutable")
 }
 

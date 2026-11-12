@@ -37,15 +37,17 @@ func FuzzHandler(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	f.Add(nethttp.MethodGet, N2RPath, capability.String())
-	f.Add(nethttp.MethodHead, N2RPath, capability.Root.Reference.URN())
-	f.Add(nethttp.MethodPost, "/other", "urn:other:value")
-	f.Fuzz(func(t *testing.T, method, path, query string) {
+	f.Add(nethttp.MethodGet, N2RPath, capability.String(), "")
+	f.Add(nethttp.MethodGet, N2RPath, capability.String(), "bytes=0-1,3-4")
+	f.Add(nethttp.MethodHead, N2RPath, capability.Root.Reference.URN(), "bytes=0-")
+	f.Add(nethttp.MethodPost, "/other", "urn:other:value", "")
+	f.Fuzz(func(t *testing.T, method, path, query, byteRange string) {
 		if method == "" || bytes.ContainsAny([]byte(method), " \t\r\n") {
 			return
 		}
 		target := &url.URL{Scheme: "http", Host: "example.test", Path: path, RawQuery: query}
 		request := &nethttp.Request{Method: method, URL: target, Header: make(nethttp.Header), Body: nethttp.NoBody}
+		request.Header.Set("Range", byteRange)
 		recorder := httptest.NewRecorder()
 		Handler{Blocks: blocks}.ServeHTTP(recorder, request)
 		if recorder.Code < 100 || recorder.Code > 599 {
