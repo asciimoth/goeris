@@ -16,6 +16,72 @@ type intermittentReader struct {
 	empty  int
 }
 
+// A read after EOF can block on a live source. Fail here to detect that read
+// without blocking the test.
+type terminalEOFReader struct {
+	data []byte
+	done bool
+}
+
+func (reader *terminalEOFReader) Read(p []byte) (int, error) {
+	if reader.done {
+		return 0, errors.New("read after EOF")
+	}
+	n := copy(p, reader.data)
+	reader.data = reader.data[n:]
+	if len(reader.data) == 0 {
+		reader.done = true
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func TestEncodingStopsAtEOFWithData(t *testing.T) {
+	for _, size := range []int{0, 1023, 1024, 16383, 16384, 32768, 65536} {
+		content := autoRandomBytes(size)
+		for _, blockSize := range []eris.BlockSize{eris.BlockSize1KiB, eris.BlockSize32KiB} {
+			want, _, err := eris.Encode(content, eris.Secret{}, blockSize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := EncodeContent(&terminalEOFReader{data: content}, eris.Secret{}, blockSize, make(eris.BlockSet))
+			if err != nil || got != want {
+				t.Errorf("size %d, block size %d: %v", size, blockSize, err)
+			}
+		}
+		for _, mode := range []string{"plain", "compressed", "auto", "auto-compressed"} {
+			t.Run(fmt.Sprintf("%s/%d", mode, size), func(t *testing.T) {
+				content := content
+				if mode == "auto-compressed" {
+					content = make([]byte, size)
+				}
+				var capabilities [2]eris.Capability
+				for i, input := range []io.Reader{bytes.NewReader(content), &terminalEOFReader{data: content}} {
+					builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
+					add := builder.AddFile
+					switch mode {
+					case "compressed":
+						add = builder.AddCompressedFile
+					case "auto", "auto-compressed":
+						add = builder.AddAutoFile
+					}
+					if err := add("file", input, false); err != nil {
+						t.Fatal(err)
+					}
+					var err error
+					capabilities[i], err = builder.Finish()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if capabilities[0] != capabilities[1] {
+					t.Fatal("EOF with data changed the image capability")
+				}
+			})
+		}
+	}
+}
+
 func (reader *intermittentReader) Read(p []byte) (int, error) {
 	if reader.empty > 0 {
 		reader.empty--

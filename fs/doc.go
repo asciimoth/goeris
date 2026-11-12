@@ -19,6 +19,20 @@
 // source.
 // Encoding returns io.ErrNoProgress after 100 consecutive empty reads from
 // an input. Temporary empty reads below this limit do not change the output.
+// Encoding stops at the first io.EOF, including EOF returned with data.
+//
+// For untrusted images, DecodeIndex and OpenFS limit the encoded CBOR bytes
+// of each index. This limit does not bound the memory used by the parsed tree
+// or the total size of nested indexes. ParseIndex and UnmarshalBinary do not
+// apply a size limit to their input slices. Applications must bound those
+// inputs before parsing them.
+//
+// File sizes from version 2 indexes are untrusted metadata. Stat does not
+// validate file content. Read through EOF to check the complete file, including
+// compression checksums. ReadFile has no content size limit; use Open with a
+// bounded reader when only a limited amount of output is needed. Block sources
+// must verify that each returned block matches its requested ERIS reference,
+// as required by eris.BlockSource.
 //
 // [ERIS-FS recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/eris-fs/index.md
 package fs

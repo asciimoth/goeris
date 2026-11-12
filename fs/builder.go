@@ -58,7 +58,7 @@ func (builder *Builder) AddFile(path string, content io.Reader, executable bool)
 		blockSize = eris.BlockSize32KiB
 		input = io.MultiReader(bytes.NewReader(prefix), content)
 	case io.EOF:
-		blockSize = eris.BlockSize1KiB
+		blockSize = eris.ChooseBlockSize(n)
 		input = bytes.NewReader(prefix[:n])
 	default:
 		return readErr

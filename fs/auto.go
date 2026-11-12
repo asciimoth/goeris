@@ -1,7 +1,7 @@
 package fs
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/binary"
 	"io"
 )
@@ -50,13 +50,17 @@ func (builder *Builder) AddAutoFile(path string, content io.Reader, executable b
 	if err := builder.checkPath(components); err != nil {
 		return err
 	}
-	input := bufio.NewReaderSize(content, AutoCompressionSampleSize)
-	prefix, err := input.Peek(AutoCompressionSampleSize)
+	prefix := make([]byte, AutoCompressionSampleSize)
+	n, err := readFullContent(content, prefix)
 	if err != nil && err != io.EOF {
 		return err
 	}
-	// Peek leaves the sample unread. It also retains an error returned with
-	// a full sample, so the selected encoder will receive that error later.
+	prefix = prefix[:n]
+	var input io.Reader = bytes.NewReader(prefix)
+	if err != io.EOF {
+		input = io.MultiReader(input, content)
+	}
+	// Replay the sample, but do not read the source again after EOF.
 	if ChooseCompression(prefix) == Lzip {
 		return builder.AddCompressedFile(path, input, executable)
 	}

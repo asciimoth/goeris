@@ -18,38 +18,40 @@ func EncodeContent(content io.Reader, secret eris.Secret, blockSize eris.BlockSi
 		return eris.Capability{}, ErrInvalidEntry
 	}
 	encoder := treeEncoder{secret: secret, blockSize: blockSize, sink: sink}
+	ended := false
 	for {
 		node := make([]byte, int(blockSize))
-		n, err := readFullContent(content, node)
-		switch err {
-		case nil:
-			pair, putErr := putNode(node, secret, 0, sink)
-			if putErr != nil {
-				return eris.Capability{}, putErr
+		n := 0
+		if !ended {
+			var err error
+			n, err = readFullContent(content, node)
+			if err != nil && err != io.EOF {
+				return eris.Capability{}, err
 			}
-			if putErr = encoder.add(0, pair); putErr != nil {
-				return eris.Capability{}, putErr
-			}
-		case io.EOF:
+			ended = err == io.EOF
+		}
+		if n < len(node) {
 			node[n] = 0x80
-			pair, putErr := putNode(node, secret, 0, sink)
-			if putErr != nil {
-				return eris.Capability{}, putErr
-			}
-			if putErr = encoder.add(0, pair); putErr != nil {
-				return eris.Capability{}, putErr
-			}
-			return encoder.finish()
-		default:
+		}
+		pair, err := putNode(node, secret, 0, sink)
+		if err != nil {
 			return eris.Capability{}, err
 		}
+		if err = encoder.add(0, pair); err != nil {
+			return eris.Capability{}, err
+		}
+		if ended && n < len(node) {
+			return encoder.finish()
+		}
+		// EOF with a full block needs one more block for padding, but must
+		// not cause another read from the source.
 	}
 }
 
 // readFullContent fills a buffer or returns the source's terminal error.
-// Unlike io.ReadFull, a short normal EOF stays EOF, and a source error is
-// preserved even when it accompanies a full buffer. This keeps a truncated
-// source's ErrUnexpectedEOF from being mistaken for a valid file ending.
+// Unlike io.ReadFull, EOF and other errors are preserved even when they
+// accompany a full buffer. Thus a source's ErrUnexpectedEOF cannot be mistaken
+// for a valid file ending.
 // Only io.EOF itself is a normal end; wrapped or joined errors must propagate.
 func readFullContent(content io.Reader, buffer []byte) (int, error) {
 	n, empty := 0, 0
@@ -57,9 +59,6 @@ func readFullContent(content io.Reader, buffer []byte) (int, error) {
 		count, err := content.Read(buffer[n:])
 		n += count
 		if err != nil {
-			if n == len(buffer) && err == io.EOF {
-				return n, nil
-			}
 			return n, err
 		}
 		if count == 0 {
