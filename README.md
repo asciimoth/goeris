@@ -157,6 +157,13 @@ Run the complete checks with:
 just check
 ```
 
+The `vulncheck` check accepts
+[GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859) while the scanned packages
+do not use `http.MaxBytesReader` or `http.MaxBytesHandler`. The affected race
+needs one of these body-limit APIs and concurrent request-body reads and
+response-header writes. The check fails if a scanned package starts using either
+API. Applications that add one of these APIs must use a patched Go toolchain.
+
 ## License
 
 The Go library and this README are distributed under the CC0 license. The copied

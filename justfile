@@ -31,7 +31,7 @@ vet:
 
 # Find known vulnerabilities in Go dependencies and call paths.
 vulncheck:
-  govulncheck ./...
+  go run ./internal/vulncheck
 
 # Run all tests with the race detector and coverage measurement.
 test:
