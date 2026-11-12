@@ -34,6 +34,19 @@
 // must verify that each returned block matches its requested ERIS reference,
 // as required by eris.BlockSource.
 //
+// An output limit does not limit all input work. Opening a compressed file or
+// finding a version 1 file's size scans its ERIS tree. A Lzip stream can also
+// contain many empty members. Applications that need a total I/O budget or a
+// deadline must enforce it in their block source and return an error when it
+// is reached. MaxLzipDictionarySize limits each decoder, not total process
+// memory or the number of open files.
+//
+// Paths use io/fs rules. Backslashes and names that are special on a host
+// operating system are not converted or filtered. Applications that extract
+// an image must check native paths and symlink targets before writing them.
+// Open follows links only inside the image, but Sub does not confine links to
+// the selected subdirectory.
+//
 // [ERIS-FS recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/eris-fs/index.md
 package fs
 
