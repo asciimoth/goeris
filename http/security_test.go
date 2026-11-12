@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"math"
+	"mime"
+	"mime/multipart"
 	nethttp "net/http"
 	"net/http/httptest"
 	"net/url"
@@ -192,8 +194,26 @@ func TestHandlerMultipartContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != nethttp.StatusPartialContent || !bytes.Contains(body, content[:11]) || !bytes.Contains(body, content[1024:1031]) {
-		t.Fatalf("invalid multipart response: %d %q", response.StatusCode, body)
+	if response.StatusCode != nethttp.StatusPartialContent || response.ContentLength != int64(len(body)) {
+		t.Fatalf("invalid multipart response: status %d, length %d, bytes %d", response.StatusCode, response.ContentLength, len(body))
+	}
+	mediaType, params, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || mediaType != "multipart/byteranges" || params["boundary"] == "" {
+		t.Fatalf("invalid multipart content type: %q", response.Header.Get("Content-Type"))
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	for i, want := range [][]byte{content[:11], content[1024:1031]} {
+		part, err := reader.NextPart()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := io.ReadAll(part)
+		if err != nil || !bytes.Equal(got, want) || part.Header.Get("Content-Type") != ContentType {
+			t.Fatalf("part %d: bytes %q, headers %v, error %v", i, got, part.Header, err)
+		}
+	}
+	if _, err := reader.NextPart(); err != io.EOF {
+		t.Fatalf("multipart ending = %v; want EOF", err)
 	}
 	if response.Header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatal("missing nosniff header")

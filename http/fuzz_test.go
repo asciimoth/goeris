@@ -41,6 +41,10 @@ func FuzzHandler(f *testing.F) {
 	f.Add(nethttp.MethodGet, N2RPath, capability.String(), "bytes=0-1,3-4")
 	f.Add(nethttp.MethodHead, N2RPath, capability.Root.Reference.URN(), "bytes=0-")
 	f.Add(nethttp.MethodPost, "/other", "urn:other:value", "")
+	f.Add(nethttp.MethodPost, N2RPath, capability.String(), "")
+	f.Add(nethttp.MethodGet, N2RPath, capability.String()+"&x=1", "")
+	f.Add(nethttp.MethodGet, N2RPath, "urn:blake2b:bad", "")
+	f.Add(nethttp.MethodGet, N2RPath, capability.String(), "bytes=9223372036854775808-")
 	f.Fuzz(func(t *testing.T, method, path, query, byteRange string) {
 		if method == "" || bytes.ContainsAny([]byte(method), " \t\r\n") {
 			return
@@ -52,6 +56,17 @@ func FuzzHandler(f *testing.F) {
 		Handler{Blocks: blocks}.ServeHTTP(recorder, request)
 		if recorder.Code < 100 || recorder.Code > 599 {
 			t.Fatalf("invalid status %d", recorder.Code)
+		}
+		if recorder.Code == nethttp.StatusOK || recorder.Code == nethttp.StatusPartialContent {
+			if path != N2RPath || !validURN(query) || (method != nethttp.MethodGet && method != nethttp.MethodHead) {
+				t.Fatal("invalid request returned a resource")
+			}
+			if recorder.Header().Get("X-Content-Type-Options") != "nosniff" {
+				t.Fatal("resource response does not disable content sniffing")
+			}
+			if method == nethttp.MethodHead && recorder.Body.Len() != 0 {
+				t.Fatal("HEAD response contains a body")
+			}
 		}
 	})
 }
