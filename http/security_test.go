@@ -3,6 +3,7 @@ package http
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"errors"
 	"io"
 	"math"
@@ -11,9 +12,78 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/asciimoth/goeris"
 )
+
+func TestClientCancelsPartialResponse(t *testing.T) {
+	capability, blocks, _ := testData(t)
+	for _, decoded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "block", true: "content"}[decoded], func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			started := make(chan struct{})
+			stopped := make(chan struct{})
+			server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+				defer close(stopped)
+				w.Header().Set("Content-Type", ContentType)
+				// Send only part of a block, then stall until cancellation.
+				_, _ = w.Write(blocks[capability.Root.Reference][:16])
+				w.(nethttp.Flusher).Flush()
+				close(started)
+				select {
+				case <-r.Context().Done():
+				case <-time.After(5 * time.Second):
+					t.Error("server request context was not canceled")
+				}
+			}))
+			defer server.Close()
+			base, _ := url.Parse(server.URL)
+			client, err := NewClient(server.Client(), base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := make(chan error, 1)
+			go func() {
+				if decoded {
+					body, err := client.OpenContent(ctx, capability)
+					if err == nil {
+						_, err = io.Copy(io.Discard, body)
+						_ = body.Close()
+					}
+					result <- err
+					return
+				}
+				block, err := client.GetBlockContext(ctx, capability.Root.Reference)
+				if block != nil {
+					result <- errors.New("partial block accepted")
+					return
+				}
+				result <- err
+			}()
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("response did not start")
+			}
+			cancel()
+			select {
+			case err := <-result:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("read error = %v; want context.Canceled", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("read did not stop after cancellation")
+			}
+			select {
+			case <-stopped:
+			case <-time.After(5 * time.Second):
+				t.Fatal("server request did not stop")
+			}
+		})
+	}
+}
 
 func TestHandlerAbortsFailedStream(t *testing.T) {
 	capability, blocks, _ := testData(t)
