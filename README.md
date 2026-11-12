@@ -61,6 +61,13 @@ The HTTP package does not create or configure a network client or server.
 Applications supply the HTTP request executor, block source, handler chain, and
 server registration.
 
+Set `http.Handler.MaxContentSize` to a positive byte limit when clients can
+request untrusted capabilities. The handler checks the full decoded size before
+sending content, including for HEAD and range requests. It returns HTTP 413 for
+content above the limit. Zero leaves the size unlimited. Encrypted block reads
+are unaffected. The handler checks request cancellation before each block fetch;
+use a `ContextBlockSource` to cancel a fetch that is already in progress.
+
 The `s3` package implements the
 [ERIS object-storage recommendation](specs/eer/object-storage/index.md):
 

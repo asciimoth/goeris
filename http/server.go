@@ -20,6 +20,10 @@ import (
 type Handler struct {
 	Blocks eris.BlockSource
 	Next   nethttp.Handler
+	// MaxContentSize limits the full decoded resource size, including for HEAD
+	// and range requests. Zero disables the limit. A negative value is invalid.
+	// Encrypted block requests are not subject to this limit.
+	MaxContentSize int64
 }
 
 // ServeHTTP implements net/http.Handler.
@@ -60,13 +64,25 @@ func (handler Handler) serveBlock(writer nethttp.ResponseWriter, request *nethtt
 }
 
 func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *nethttp.Request) {
+	if handler.MaxContentSize < 0 {
+		writer.WriteHeader(nethttp.StatusInternalServerError)
+		return
+	}
 	capability, err := eris.ParseURN(request.URL.RawQuery)
 	if err != nil {
 		writer.WriteHeader(nethttp.StatusBadRequest)
 		return
 	}
-	reader, err := erisreader.NewReader(capability, requestBlockSource{ctx: request.Context(), source: handler.Blocks})
+	limit := handler.MaxContentSize
+	if limit == 0 {
+		limit = -1
+	}
+	reader, err := erisreader.NewReaderWithLimit(capability, requestBlockSource{ctx: request.Context(), source: handler.Blocks}, limit)
 	if err != nil {
+		if errors.Is(err, erisreader.ErrTooLarge) {
+			writer.WriteHeader(nethttp.StatusRequestEntityTooLarge)
+			return
+		}
 		writeSourceError(writer, err)
 		return
 	}
@@ -81,6 +97,9 @@ type requestBlockSource struct {
 }
 
 func (source requestBlockSource) GetBlock(ref eris.Reference) ([]byte, error) {
+	if err := source.ctx.Err(); err != nil {
+		return nil, err
+	}
 	if contextual, ok := source.source.(eris.ContextBlockSource); ok {
 		return contextual.GetBlockContext(source.ctx, ref)
 	}

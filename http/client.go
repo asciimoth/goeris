@@ -13,7 +13,7 @@ import (
 
 // HTTPClient executes HTTP requests. *net/http.Client implements HTTPClient.
 // A custom implementation can execute requests without TCP or other network
-// access.
+// access. Implementations must follow the response guarantees of http.Client.Do.
 type HTTPClient interface {
 	Do(request *nethttp.Request) (*nethttp.Response, error)
 }
