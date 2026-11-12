@@ -15,6 +15,7 @@ import (
 
 	"github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/internal/cborwire"
+	"github.com/asciimoth/goeris/internal/erisreader"
 )
 
 func TestIndexCanonicalRoundTrip(t *testing.T) {
@@ -25,8 +26,8 @@ func TestIndexCanonicalRoundTrip(t *testing.T) {
 	}
 	index := Index{Entries: []Entry{
 		{Path: []string{"z"}, Type: Symlink, Target: "../outside"},
-		{Path: []string{"bin", "tool"}, Type: Executable, Capability: fileCap},
-		{Path: []string{"a"}, Type: Regular, Capability: fileCap},
+		{Path: []string{"bin", "tool"}, Type: Executable, Capability: fileCap, Size: 4},
+		{Path: []string{"a"}, Type: Regular, Capability: fileCap, Size: 4},
 	}}
 	encoded, err := index.MarshalBinary()
 	if err != nil {
@@ -59,7 +60,7 @@ func TestIndexWireVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const expectedHex = "da657269748201a181616182026162"
+	const expectedHex = "da657269748202a18161618202816162"
 	if hex.EncodeToString(encoded) != expectedHex {
 		t.Fatalf("encoded index = %x, want %s", encoded, expectedHex)
 	}
@@ -152,7 +153,7 @@ func TestIndexRejectsInvalidCBOR(t *testing.T) {
 		append([]byte{0}, valid[1:]...),
 		append(bytes.Clone(valid), 0),
 		append(bytes.Clone(valid[:5]), 0x81, 0x01),
-		append(bytes.Clone(valid[:5]), 0x82, 0x02, 0xa0),
+		append(bytes.Clone(valid[:5]), 0x82, 0x03, 0xa0),
 		append(bytes.Clone(valid[:5]), 0x82, 0x01, 0xbf, 0xff),
 	}
 	for _, data := range mutations {
@@ -217,14 +218,14 @@ func TestCBORRejectsMalformedEntries(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			decoder := cborDecoder{data: data}
-			if _, err := decoder.entry(); err == nil {
+			if _, _, err := decoder.entry(1); err == nil {
 				t.Fatalf("accepted %x", data)
 			}
 		})
 	}
 	for _, data := range [][]byte{validFile, validLink} {
 		decoder := cborDecoder{data: data}
-		if _, err := decoder.entry(); err != nil || decoder.offset != len(data) {
+		if _, _, err := decoder.entry(1); err != nil || decoder.offset != len(data) {
 			t.Fatalf("rejected valid entry: %v", err)
 		}
 	}
@@ -319,62 +320,6 @@ func TestNestedIndexUsesConfiguredLimit(t *testing.T) {
 	}
 	if _, err = image.ReadDir("nested"); !errors.Is(err, ErrIndexTooLarge) {
 		t.Fatalf("nested limit error = %v", err)
-	}
-}
-
-func TestReaderRandomAccess(t *testing.T) {
-	t.Parallel()
-	content := deterministicBytes(int(eris.BlockSize1KiB)*40 + 123)
-	blocks := make(eris.BlockSet)
-	capability, err := EncodeContent(bytes.NewReader(content), eris.Secret{8}, eris.BlockSize1KiB, blocks)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader, err := NewReader(capability, blocks)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reader.Size() != int64(len(content)) {
-		t.Fatalf("Size() = %d", reader.Size())
-	}
-	buffer := make([]byte, 3000)
-	n, err := reader.ReadAt(buffer, 900)
-	if err != nil || !bytes.Equal(buffer[:n], content[900:3900]) {
-		t.Fatalf("ReadAt = (%d, %v)", n, err)
-	}
-	n, err = reader.ReadAt(buffer, int64(len(content)-100))
-	if n != 100 || !errors.Is(err, io.EOF) || !bytes.Equal(buffer[:n], content[len(content)-100:]) {
-		t.Fatalf("end ReadAt = (%d, %v)", n, err)
-	}
-	if position, err := reader.Seek(-10, io.SeekEnd); err != nil || position != int64(len(content)-10) {
-		t.Fatalf("Seek = (%d, %v)", position, err)
-	}
-	buffer = make([]byte, 20)
-	n, err = reader.Read(buffer)
-	if n != 10 || !errors.Is(err, io.EOF) || !bytes.Equal(buffer[:n], content[len(content)-10:]) {
-		t.Fatalf("Read = (%d, %v)", n, err)
-	}
-	if _, err = reader.Seek(-1, io.SeekStart); err == nil {
-		t.Fatal("negative seek accepted")
-	}
-	if _, err = reader.Seek(0, 99); err == nil {
-		t.Fatal("invalid seek origin accepted")
-	}
-	if position, seekErr := reader.Seek(0, io.SeekCurrent); seekErr != nil || position != int64(len(content)) {
-		t.Fatalf("current Seek = (%d, %v)", position, seekErr)
-	}
-	if err = reader.Close(); err != nil {
-		t.Fatal(err)
-	}
-	_ = reader.Close()
-	if _, err = reader.Read(buffer); !errors.Is(err, ErrClosed) {
-		t.Fatalf("closed Read error = %v", err)
-	}
-	if _, err = reader.ReadAt(buffer, 0); !errors.Is(err, ErrClosed) {
-		t.Fatalf("closed ReadAt error = %v", err)
-	}
-	if _, err = reader.Seek(0, io.SeekStart); !errors.Is(err, ErrClosed) {
-		t.Fatalf("closed Seek error = %v", err)
 	}
 }
 
@@ -486,10 +431,13 @@ func TestBuilderBlockSizeBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 		entry := builder.Index().Entries[0]
+		if entry.Size != int64(length) {
+			t.Fatalf("entry size = %d; want %d", entry.Size, length)
+		}
 		if entry.Capability.BlockSize != eris.ChooseBlockSize(length) {
 			t.Errorf("length %d block size = %d", length, entry.Capability.BlockSize)
 		}
-		reader, err := NewReader(entry.Capability, blocks)
+		reader, err := erisreader.NewReader(entry.Capability, blocks)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -538,6 +486,66 @@ func TestDirectoryReadDirLargeCountAfterOffset(t *testing.T) {
 	rest, err := file.ReadDir(math.MaxInt)
 	if err != nil || names(rest) != "b,c" {
 		t.Fatalf("large ReadDir = (%v, %v)", names(rest), err)
+	}
+}
+
+func TestDirectoryReadDirReturnedSliceIsIndependent(t *testing.T) {
+	blocks := make(eris.BlockSet)
+	builder := NewBuilder(blocks, eris.Secret{})
+	for _, name := range []string{"c", "a", "b"} {
+		if err := builder.AddSymlink(name, "target"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capability, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := OpenFS(capability, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := image.Open(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	directory := file.(stdfs.ReadDirFile)
+	first, err := directory.ReadDir(1)
+	if err != nil || names(first) != "a" {
+		t.Fatalf("first entries: %v, %v", first, err)
+	}
+	// Callers own the returned slice and can append or change its elements.
+	first = append(first, first[0])
+	first[0] = nil
+	rest, err := directory.ReadDir(0)
+	if err != nil || names(rest) != "b,c" {
+		t.Fatalf("remaining entries: %v, %v", rest, err)
+	}
+	again, err := image.ReadDir(".")
+	if err != nil || names(again) != "a,b,c" {
+		t.Fatalf("independent listing: %v, %v", again, err)
+	}
+}
+
+func TestOpenReturnsNilOnContentError(t *testing.T) {
+	blocks := make(eris.BlockSet)
+	// A leaf capability cannot hold the advertised 1024 bytes plus padding.
+	index := Index{Entries: []Entry{{Path: []string{"file"}, Size: 1024,
+		Capability: eris.Capability{BlockSize: eris.BlockSize1KiB}}}}
+	capability, err := EncodeIndex(index, eris.Secret{}, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := OpenFS(capability, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file, err := image.Open("file"); file != nil || !errors.Is(err, ErrSizeMismatch) {
+		t.Fatalf("Open: %v, %v", file, err)
+	}
+	if file, err := image.OpenFile("file"); file != nil || !errors.Is(err, ErrSizeMismatch) {
+		t.Fatalf("OpenFile: %v, %v", file, err)
 	}
 }
 
@@ -658,12 +666,6 @@ func (source *flakySource) GetBlock(ref eris.Reference) ([]byte, error) {
 
 type errorSink struct{ err error }
 
-type malformedSource []byte
-
-func (source malformedSource) GetBlock(eris.Reference) ([]byte, error) {
-	return source, nil
-}
-
 func (sink errorSink) PutBlock([]byte, ...eris.Reference) (eris.Reference, error) {
 	return eris.Reference{}, sink.err
 }
@@ -719,7 +721,7 @@ func TestCodecErrors(t *testing.T) {
 	if _, err := encoder.parent(255); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatalf("excessive parent level error = %v", err)
 	}
-	if _, err := NewReader(eris.Capability{}, make(eris.BlockSet)); !errors.Is(err, eris.ErrInvalidCapability) {
+	if _, err := erisreader.NewReader(eris.Capability{}, make(eris.BlockSet)); !errors.Is(err, eris.ErrInvalidCapability) {
 		t.Fatalf("invalid capability error = %v", err)
 	}
 	if _, err := DecodeIndex(eris.Capability{}, make(eris.BlockSet)); err == nil {
@@ -840,7 +842,7 @@ func TestFileSystemErrorsAndMetadata(t *testing.T) {
 	missingContentCap, _, _ := eris.Encode([]byte("missing"), eris.Secret{}, eris.BlockSize1KiB)
 	missingIndex := Index{Entries: []Entry{{Path: []string{"file"}, Type: Regular, Capability: missingContentCap}}}
 	missingStore := make(eris.BlockSet)
-	missingIndexCap, _ := EncodeIndex(missingIndex, eris.Secret{}, missingStore)
+	missingIndexCap := storeV1Index(t, missingIndex, missingStore)
 	missingImage, err := OpenFS(missingIndexCap, missingStore)
 	if err != nil {
 		t.Fatal(err)
@@ -854,139 +856,6 @@ func TestFileSystemErrorsAndMetadata(t *testing.T) {
 	}
 	if _, err = missingEntries[0].Info(); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("DirEntry.Info missing content error = %v", err)
-	}
-}
-
-func TestReaderRejectsBadBlocks(t *testing.T) {
-	t.Parallel()
-	content := deterministicBytes(3000)
-	capability, blocks, _ := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
-	missing := cloneBlockSet(blocks)
-	delete(missing, capability.Root.Reference)
-	if _, err := NewReader(capability, missing); !errors.Is(err, eris.ErrMissingBlock) {
-		t.Fatalf("missing root error = %v", err)
-	}
-	wrongSize := cloneBlockSet(blocks)
-	wrongSize[capability.Root.Reference] = []byte{1}
-	if _, err := NewReader(capability, wrongSize); !errors.Is(err, eris.ErrInvalidBlockSize) {
-		t.Fatalf("short root error = %v", err)
-	}
-	if _, err := NewReader(capability, malformedSource(make([]byte, eris.BlockSize32KiB))); !errors.Is(err, eris.ErrInvalidBlockSize) {
-		t.Fatalf("wrong size from source error = %v", err)
-	}
-	corrupt := cloneBlockSet(blocks)
-	corrupt[capability.Root.Reference][0] ^= 1
-	if _, err := NewReader(capability, corrupt); !errors.Is(err, eris.ErrInvalidBlock) {
-		t.Fatalf("corrupt root error = %v", err)
-	}
-	leafCap, leafBlocks, _ := eris.Encode([]byte("x"), eris.Secret{}, eris.BlockSize1KiB)
-	leafBlocks[leafCap.Root.Reference] = make([]byte, eris.BlockSize1KiB)
-	if _, err := NewReader(leafCap, leafBlocks); !errors.Is(err, eris.ErrInvalidBlock) {
-		t.Fatalf("corrupt leaf error = %v", err)
-	}
-	reader, _ := NewReader(capability, blocks)
-	if _, err := reader.ReadAt(nil, -1); !errors.Is(err, stdfs.ErrInvalid) {
-		t.Fatalf("negative ReadAt error = %v", err)
-	}
-	if n, err := reader.ReadAt(nil, 0); n != 0 || err != nil {
-		t.Fatalf("empty ReadAt = (%d, %v)", n, err)
-	}
-	if n, err := reader.ReadAt(make([]byte, 1), int64(len(content))); n != 0 || !errors.Is(err, io.EOF) {
-		t.Fatalf("end ReadAt = (%d, %v)", n, err)
-	}
-	if _, err := reader.leafPair(-1); !errors.Is(err, io.EOF) {
-		t.Fatalf("negative leaf error = %v", err)
-	}
-	firstPair, _ := reader.leafPair(0)
-	delete(blocks, firstPair.Reference)
-	if _, err := reader.ReadAt(make([]byte, 1), 0); !errors.Is(err, eris.ErrMissingBlock) {
-		t.Fatalf("missing leaf read error = %v", err)
-	}
-}
-
-func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
-	t.Parallel()
-	blocks := make(eris.BlockSet)
-	badLeaf := make([]byte, eris.BlockSize1KiB)
-	badLeafBlock, badLeafPair, _ := eris.EncryptNode(badLeaf, eris.Secret{}, 0)
-	blocks[badLeafPair.Reference] = badLeafBlock
-	if _, err := NewReader(eris.Capability{BlockSize: eris.BlockSize1KiB, Root: badLeafPair}, blocks); !errors.Is(err, eris.ErrInvalidPadding) {
-		t.Fatalf("bad padding error = %v", err)
-	}
-
-	validLeaf := make([]byte, eris.BlockSize1KiB)
-	validLeaf[0] = 0x80
-	leafBlock, leafPair, _ := eris.EncryptNode(validLeaf, eris.Secret{}, 0)
-	blocks[leafPair.Reference] = leafBlock
-	oneChildNode := makeNode(leafPair)
-	oneBlock, onePair, _ := eris.EncryptNode(oneChildNode, eris.Secret{}, 1)
-	blocks[onePair.Reference] = oneBlock
-	oneCap := eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 1, Root: onePair}
-	if _, err := NewReader(oneCap, blocks); !errors.Is(err, eris.ErrInvalidNode) {
-		t.Fatalf("one-child root error = %v", err)
-	}
-	levelTwoNode := makeNode(onePair, onePair)
-	levelTwoBlock, levelTwoPair, _ := eris.EncryptNode(levelTwoNode, eris.Secret{}, 2)
-	blocks[levelTwoPair.Reference] = levelTwoBlock
-	if _, err := NewReader(eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 2, Root: levelTwoPair}, blocks); !errors.Is(err, eris.ErrInvalidNode) {
-		t.Fatalf("short non-final subtree error = %v", err)
-	}
-	fullChildren := make([]eris.Pair, 16)
-	for i := range fullChildren {
-		fullChildren[i] = leafPair
-	}
-	fullNode := makeNode(fullChildren...)
-	fullBlock, fullPair, _ := eris.EncryptNode(fullNode, eris.Secret{}, 1)
-	blocks[fullPair.Reference] = fullBlock
-	repeatedNode := makeNode(fullPair, fullPair)
-	repeatedBlock, repeatedPair, _ := eris.EncryptNode(repeatedNode, eris.Secret{}, 2)
-	blocks[repeatedPair.Reference] = repeatedBlock
-	if _, err := NewReader(eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 2, Root: repeatedPair}, blocks); err != nil {
-		t.Fatalf("repeated valid subtree error = %v", err)
-	}
-	missingInternal := eris.Pair{Reference: eris.Reference{9}, Key: eris.Key{8}}
-	missingNode := makeNode(missingInternal, onePair)
-	missingBlock, missingPair, _ := eris.EncryptNode(missingNode, eris.Secret{}, 2)
-	blocks[missingPair.Reference] = missingBlock
-	if _, err := NewReader(eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 2, Root: missingPair}, blocks); !errors.Is(err, eris.ErrMissingBlock) {
-		t.Fatalf("missing internal error = %v", err)
-	}
-
-	emptyNode := make([]byte, eris.BlockSize1KiB)
-	emptyBlock, emptyPair, _ := eris.EncryptNode(emptyNode, eris.Secret{}, 1)
-	blocks[emptyPair.Reference] = emptyBlock
-	if _, err := NewReader(eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 1, Root: emptyPair}, blocks); !errors.Is(err, eris.ErrInvalidNode) {
-		t.Fatalf("empty root error = %v", err)
-	}
-
-	twoChildren := makeNode(leafPair, leafPair)
-	rootBlock, rootPair, _ := eris.EncryptNode(twoChildren, eris.Secret{}, 1)
-	blocks[rootPair.Reference] = rootBlock
-	badKeyCap := eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 1, Root: rootPair}
-	badKeyCap.Root.Key[0] ^= 1
-	if _, err := NewReader(badKeyCap, blocks); !errors.Is(err, eris.ErrInvalidRootKey) {
-		t.Fatalf("bad root key error = %v", err)
-	}
-
-	brokenSlots := makeNode(leafPair)
-	copy(brokenSlots[2*eris.PairSize:], brokenSlots[:eris.PairSize])
-	brokenBlock, brokenPair, _ := eris.EncryptNode(brokenSlots, eris.Secret{}, 1)
-	blocks[brokenPair.Reference] = brokenBlock
-	if _, err := NewReader(eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 1, Root: brokenPair}, blocks); !errors.Is(err, eris.ErrInvalidNode) {
-		t.Fatalf("non-contiguous pairs error = %v", err)
-	}
-
-	if _, err := eris.ParseInternalNode([]byte{1}); !errors.Is(err, eris.ErrInvalidNode) {
-		t.Fatalf("short pairs error = %v", err)
-	}
-	if _, err := paddedLength([]byte{1}); !errors.Is(err, eris.ErrInvalidPadding) {
-		t.Fatalf("bad padded byte error = %v", err)
-	}
-	if _, err := paddedLength(nil); !errors.Is(err, eris.ErrInvalidPadding) {
-		t.Fatalf("empty padded data error = %v", err)
-	}
-	if subtreeCapacity(eris.BlockSize32KiB, 100) != int64(^uint64(0)>>1) {
-		t.Fatal("capacity did not saturate")
 	}
 }
 
@@ -1116,24 +985,6 @@ func names(entries []stdfs.DirEntry) string {
 		values[i] = entry.Name()
 	}
 	return strings.Join(values, ",")
-}
-
-func cloneBlockSet(blocks eris.BlockSet) eris.BlockSet {
-	clone := make(eris.BlockSet, len(blocks))
-	for ref, block := range blocks {
-		clone[ref] = bytes.Clone(block)
-	}
-	return clone
-}
-
-func makeNode(pairs ...eris.Pair) []byte {
-	node := make([]byte, eris.BlockSize1KiB)
-	for i, pair := range pairs {
-		offset := i * eris.PairSize
-		copy(node[offset:offset+32], pair.Reference[:])
-		copy(node[offset+32:offset+eris.PairSize], pair.Key[:])
-	}
-	return node
 }
 
 func TestLinksToImageRoot(t *testing.T) {
@@ -1301,10 +1152,7 @@ func TestStatSourceErrorHasPath(t *testing.T) {
 	}
 	blocks := make(eris.BlockSet)
 	index := Index{Entries: []Entry{{Path: []string{"file"}, Type: Regular, Capability: capability}}}
-	root, err := EncodeIndex(index, eris.Secret{}, blocks)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := storeV1Index(t, index, blocks)
 	image, err := OpenFS(root, blocks)
 	if err != nil {
 		t.Fatal(err)

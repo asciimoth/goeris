@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/asciimoth/goeris"
@@ -20,7 +21,8 @@ func HasIndexHeader(data []byte) bool {
 	return len(data) >= len(indexTagHeader) && bytes.Equal(data[:len(indexTagHeader)], indexTagHeader[:])
 }
 
-// MarshalBinary returns the canonical deterministic CBOR representation.
+// MarshalBinary returns the version 2 representation in RFC 8949 section
+// 4.2.1 bytewise map order. Files with an unknown size return ErrUnknownSize.
 func (index Index) MarshalBinary() ([]byte, error) {
 	if err := index.Validate(); err != nil {
 		return nil, err
@@ -35,21 +37,35 @@ func (index Index) MarshalBinary() ([]byte, error) {
 		for _, component := range entry.Path {
 			key = appendText(key, component)
 		}
-		value := cborwire.AppendHead(nil, 4, 2)
+		fields := uint64(2)
+		if entry.Type == Regular || entry.Type == Executable {
+			if entry.Size < 0 {
+				return nil, ErrUnknownSize
+			}
+			fields = 3
+		}
+		value := cborwire.AppendHead(nil, 4, fields)
 		value = cborwire.AppendHead(value, 0, uint64(entry.Type))
 		if entry.Type == Symlink {
-			value = appendText(value, entry.Target)
+			parts := strings.Split(entry.Target, "/")
+			value = cborwire.AppendHead(value, 4, uint64(len(parts)))
+			for _, part := range parts {
+				value = appendText(value, part)
+			}
 		} else {
 			capability, _ := entry.Capability.MarshalBinary()
 			value = cborwire.AppendHead(value, 6, eris.CapabilityCBORTag)
 			value = appendBytes(value, capability)
+			if fields == 3 {
+				if entry.Compression == Lzip {
+					value = cborwire.AppendHead(value, 6, LzipLengthTag)
+				}
+				value = cborwire.AppendHead(value, 0, uint64(entry.Size))
+			}
 		}
 		encoded[i] = encodedEntry{key: key, value: value}
 	}
 	slices.SortFunc(encoded, func(a, b encodedEntry) int {
-		if len(a.key) != len(b.key) {
-			return len(a.key) - len(b.key)
-		}
 		return bytes.Compare(a.key, b.key)
 	})
 	out := append([]byte(nil), indexTagHeader[:]...)
@@ -63,7 +79,9 @@ func (index Index) MarshalBinary() ([]byte, error) {
 	return out, nil
 }
 
-// UnmarshalBinary parses a canonical deterministic ERIS-FS version 1 index.
+// UnmarshalBinary parses a deterministic ERIS-FS version 1 or 2 index.
+// Version 1 also accepts the text targets and length-first key order written
+// by older releases. Version 1 file sizes are set to -1.
 // The receiver is not changed on failure.
 func (index *Index) UnmarshalBinary(data []byte) error {
 	if index == nil || !HasIndexHeader(data) {
@@ -75,7 +93,7 @@ func (index *Index) UnmarshalBinary(data []byte) error {
 		return ErrInvalidIndex
 	}
 	version, err := decoder.head(0)
-	if err != nil || version != SpecificationVersion {
+	if err != nil || (version != 1 && version != SpecificationVersion) {
 		return ErrInvalidIndex
 	}
 	count, err := decoder.head(5)
@@ -85,18 +103,30 @@ func (index *Index) UnmarshalBinary(data []byte) error {
 	// Grow only after entries are parsed. An untrusted count must not cause
 	// allocation for entries that are absent or invalid.
 	next := Index{Entries: []Entry{}}
+	var previous []byte
+	bytewise, lengthFirst := true, true
 	for range count {
-		entry, decodeErr := decoder.entry()
+		start := decoder.offset
+		entry, keyEnd, decodeErr := decoder.entry(version)
 		if decodeErr != nil {
 			return ErrInvalidIndex
 		}
+		key := data[start:keyEnd]
+		if previous != nil {
+			order := bytes.Compare(previous, key)
+			bytewise = bytewise && order < 0
+			lengthFirst = lengthFirst && (len(previous) < len(key) || (len(previous) == len(key) && order < 0))
+			// Stop as soon as no permitted ordering can accept this map.
+			// Otherwise repeated keys can allocate entries for the entire
+			// input before validation rejects the duplicate paths.
+			if !bytewise && (version != 1 || !lengthFirst) {
+				return ErrInvalidIndex
+			}
+		}
+		previous = key
 		next.Entries = append(next.Entries, entry)
 	}
 	if decoder.offset != len(data) || next.Validate() != nil {
-		return ErrInvalidIndex
-	}
-	canonical, err := next.MarshalBinary()
-	if err != nil || !bytes.Equal(canonical, data) {
 		return ErrInvalidIndex
 	}
 	*index = next
@@ -115,44 +145,97 @@ type cborDecoder struct {
 	offset int
 }
 
-func (decoder *cborDecoder) entry() (Entry, error) {
+func (decoder *cborDecoder) entry(version uint64) (Entry, int, error) {
 	pathLength, err := decoder.head(4)
 	if err != nil || pathLength == 0 || pathLength > uint64(len(decoder.data)) {
-		return Entry{}, ErrInvalidIndex
+		return Entry{}, 0, ErrInvalidIndex
 	}
 	var entry Entry
 	for range pathLength {
 		component, err := decoder.text()
 		if err != nil {
-			return Entry{}, err
+			return Entry{}, 0, err
+		}
+		// Reject invalid components before allocating the rest of an
+		// untrusted path array. Validate uses the same component rules.
+		if !validPathComponent(component) {
+			return Entry{}, 0, ErrInvalidIndex
 		}
 		entry.Path = append(entry.Path, component)
 	}
+	keyEnd := decoder.offset
 	length, err := decoder.head(4)
-	if err != nil || length != 2 {
-		return Entry{}, ErrInvalidIndex
+	if err != nil {
+		return Entry{}, 0, ErrInvalidIndex
 	}
 	kind, err := decoder.head(0)
 	if err != nil || kind > math.MaxUint8 {
-		return Entry{}, ErrInvalidIndex
+		return Entry{}, 0, ErrInvalidIndex
 	}
 	entry.Type = EntryType(kind)
+	fields := uint64(2)
+	if version == 2 && (entry.Type == Regular || entry.Type == Executable) {
+		fields = 3
+	}
+	if length != fields {
+		return Entry{}, 0, ErrInvalidIndex
+	}
 	if entry.Type == Symlink {
-		entry.Target, err = decoder.text()
-		return entry, err
+		if version == 1 && decoder.offset < len(decoder.data) && decoder.data[decoder.offset]>>5 == 3 {
+			entry.Target, err = decoder.text()
+		} else {
+			entry.Target, err = decoder.target()
+		}
+		return entry, keyEnd, err
 	}
 	if entry.Type != Regular && entry.Type != Executable && entry.Type != Subdirectory {
-		return Entry{}, ErrInvalidIndex
+		return Entry{}, 0, ErrInvalidIndex
 	}
 	tag, err := decoder.head(6)
 	if err != nil || tag != eris.CapabilityCBORTag {
-		return Entry{}, ErrInvalidIndex
+		return Entry{}, 0, ErrInvalidIndex
 	}
 	capability, err := decoder.byteString()
 	if err != nil || entry.Capability.UnmarshalBinary(capability) != nil {
-		return Entry{}, ErrInvalidIndex
+		return Entry{}, 0, ErrInvalidIndex
 	}
-	return entry, nil
+	if entry.Type == Regular || entry.Type == Executable {
+		entry.Size = -1
+		if version == 2 {
+			if decoder.offset < len(decoder.data) && decoder.data[decoder.offset]>>5 == 6 {
+				tag, err = decoder.head(6)
+				if err != nil || tag != LzipLengthTag {
+					return Entry{}, 0, ErrInvalidIndex
+				}
+				entry.Compression = Lzip
+			}
+			size, err := decoder.head(0)
+			if err != nil || size > math.MaxInt64 {
+				return Entry{}, 0, ErrInvalidIndex
+			}
+			entry.Size = int64(size)
+		}
+	}
+	return entry, keyEnd, nil
+}
+
+func (decoder *cborDecoder) target() (string, error) {
+	count, err := decoder.head(4)
+	if err != nil || count > uint64(len(decoder.data)-decoder.offset) {
+		return "", ErrInvalidIndex
+	}
+	var target strings.Builder
+	for i := uint64(0); i < count; i++ {
+		part, err := decoder.text()
+		if err != nil || strings.Contains(part, "/") {
+			return "", ErrInvalidIndex
+		}
+		if i != 0 {
+			target.WriteByte('/')
+		}
+		target.WriteString(part)
+	}
+	return target.String(), nil
 }
 
 func (decoder *cborDecoder) text() (string, error) {

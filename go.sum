@@ -1,5 +1,7 @@
 github.com/asciimoth/coaperation v0.1.0 h1:KAXW5CPHNsKNa7VJjQC+vtEh5v0aDC73vcdZnSXaACQ=
 github.com/asciimoth/coaperation v0.1.0/go.mod h1:j6lKomdH7GjqqYVqOolHjjRy94gOehd13eV8WrSDQI0=
+github.com/ulikunitz/xz v0.5.15 h1:9DNdB5s+SgV3bQ2ApL10xRc35ck0DuIX/isZvIk+ubY=
+github.com/ulikunitz/xz v0.5.15/go.mod h1:nbz6k7qbPmH4IRqmfOplQw/tblSgqTqBwxkY0oWt/14=
 golang.org/x/crypto v0.56.0 h1:GUh5Ii4J5jtcseSMiRqr1jXCNHoxjeV9Fmekc2oLy6Y=
 golang.org/x/crypto v0.56.0/go.mod h1:OMW5y6CY9l38uPLmxU6l6pwcXp1obtLo3e6gT7gQR2I=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=

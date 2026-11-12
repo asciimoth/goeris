@@ -1,3 +1,7 @@
+[default]
+# Capabilities are Base32 data, not words. Keep their exact fixture bytes.
+extend-ignore-re = ['urn:eris:[A-Z2-7]+']
+
 [default.extend-words]
 eris = "eris"
 BVE = "BVE" # Part of an official Base32 test vector.

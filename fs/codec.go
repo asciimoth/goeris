@@ -1,10 +1,10 @@
 package fs
 
 import (
-	"errors"
 	"io"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/erisreader"
 )
 
 // EncodeContent reads content, encodes it with ERIS, and writes each encrypted
@@ -20,9 +20,9 @@ func EncodeContent(content io.Reader, secret eris.Secret, blockSize eris.BlockSi
 	encoder := treeEncoder{secret: secret, blockSize: blockSize, sink: sink}
 	for {
 		node := make([]byte, int(blockSize))
-		n, err := io.ReadFull(content, node)
-		switch {
-		case err == nil:
+		n, err := readFullContent(content, node)
+		switch err {
+		case nil:
 			pair, putErr := putNode(node, secret, 0, sink)
 			if putErr != nil {
 				return eris.Capability{}, putErr
@@ -30,7 +30,7 @@ func EncodeContent(content io.Reader, secret eris.Secret, blockSize eris.BlockSi
 			if putErr = encoder.add(0, pair); putErr != nil {
 				return eris.Capability{}, putErr
 			}
-		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		case io.EOF:
 			node[n] = 0x80
 			pair, putErr := putNode(node, secret, 0, sink)
 			if putErr != nil {
@@ -44,6 +44,34 @@ func EncodeContent(content io.Reader, secret eris.Secret, blockSize eris.BlockSi
 			return eris.Capability{}, err
 		}
 	}
+}
+
+// readFullContent fills a buffer or returns the source's terminal error.
+// Unlike io.ReadFull, a short normal EOF stays EOF, and a source error is
+// preserved even when it accompanies a full buffer. This keeps a truncated
+// source's ErrUnexpectedEOF from being mistaken for a valid file ending.
+// Only io.EOF itself is a normal end; wrapped or joined errors must propagate.
+func readFullContent(content io.Reader, buffer []byte) (int, error) {
+	n, empty := 0, 0
+	for n < len(buffer) {
+		count, err := content.Read(buffer[n:])
+		n += count
+		if err != nil {
+			if n == len(buffer) && err == io.EOF {
+				return n, nil
+			}
+			return n, err
+		}
+		if count == 0 {
+			empty++
+			if empty == 100 {
+				return n, io.ErrNoProgress
+			}
+		} else {
+			empty = 0
+		}
+	}
+	return n, nil
 }
 
 // EncodeIndex encodes a canonical ERIS-FS index and writes its ERIS blocks.
@@ -66,7 +94,7 @@ func DecodeIndexWithLimit(capability eris.Capability, source eris.BlockSource, l
 	if limit <= 0 {
 		return Index{}, ErrInvalidLimit
 	}
-	reader, err := newReader(capability, source, limit)
+	reader, err := erisreader.NewReaderWithLimit(capability, source, limit)
 	if err != nil {
 		return Index{}, err
 	}

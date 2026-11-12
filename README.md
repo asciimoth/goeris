@@ -23,16 +23,20 @@ The `cbor` package implements the
 - definite-length and indefinite-length decoding; and
 - typed blocks, references, verified block maps, and read capabilities.
 
-The `fs` package implements
-[ERIS-FS version 1](specs/eer/eris-fs/index.md#version-1):
+The `fs` package implements [ERIS-FS version 2](specs/eer/eris-fs/index.md),
+with version 1 read support:
 
 - canonical deterministic CBOR index encoding and strict decoding;
-- low-level index and ERIS reader APIs;
-- regular, executable, symbolic-link, and nested-image entries;
+- low-level index codecs and streaming content encoding;
+- regular, executable, symbolic-link, and nested-image entries with file
+  lengths;
 - host-independent builders that accept `io.Reader` values and abstract block
   stores;
-- a high-level read-only `FileSystem` interface based on `io/fs`; and
-- verified random-access file reads through `io.ReaderAt` and `io.Seeker`.
+- a high-level read-only `FileSystem` interface based on `io/fs`;
+- verified random-access reads of uncompressed files through `io.ReaderAt` and
+  `io.Seeker`, with bounded caching; and
+- deterministic Lzip compression and sequential reads with checksum and length
+  checks.
 
 The `dns` package implements [ERIS DNSLink records](specs/eer/dnslink/index.md):
 
@@ -140,12 +144,80 @@ if err != nil {
 defer file.Close()
 ```
 
-Use `Index`, `EncodeIndex`, `DecodeIndex`, and `NewReader` for low-level ERIS-FS
-plumbing. Use `Builder`, `OpenFS`, and `FileSystem` for the high-level
-file-system API.
+`eris.BlockSet` is an example store. You can pass any `eris.BlockSink` to
+`NewBuilder` and any `eris.BlockSource` to `OpenFS`. The `io/fs` methods expose
+the decoded image; they do not open paths on the host file system. An
+application can supply a file-backed or remote block store outside this package.
+
+Use `Index`, `EncodeIndex`, and `DecodeIndex` for the low-level ERIS-FS API. Use
+`Builder`, `OpenFS`, and `FileSystem` for the file-system API. All writers
+create version 2 indexes. `Builder.AddFile` counts the content bytes while it
+encodes them and selects the recommended ERIS block size.
+
+When constructing an `Entry` directly, set `Size` to the file length in bytes.
+Zero means an empty file. `DecodeIndex` sets v1 file sizes to `-1` because v1
+does not store lengths. To encode such an index as v2, open the original image
+with `OpenFS` and use `Stat` to obtain each missing length, then set
+`Entry.Size`. Encoding fails with `ErrUnknownSize` until all file lengths are
+known. Nested indexes can use either version. Existing v1 images with text
+symlink targets or length-first CBOR map order remain readable; new indexes use
+arrays of target components and RFC 8949 section 4.2.1 bytewise key order.
+
+For uncompressed v2 files, `Stat`, directory entry metadata, and `OpenFile` need
+no content reads. Random reads fetch only the required tree paths and leaf
+blocks. Each reader caches at most 64 internal nodes and one leaf. A reader
+checks the shape of each visited path and checks padding when it reads the file
+end. Unvisited blocks are not checked. V1 files first scan internal nodes and
+the final leaf to obtain the content length.
+
+The generic ERIS reader is a shared internal helper used by `fs` and `http`.
+Applications use `OpenFile` for random access to files in an image.
+
+`Builder.AddCompressedFile` reads a file once and writes a deterministic Lzip
+stream with the recommended 8 MiB dictionary. It stores the uncompressed size in
+a v2 entry. The encoder uses bounded memory and selects the ERIS block size from
+the compressed length. For an existing Lzip stream, use `Builder.AddLzipFile`
+with its uncompressed size. This method stores the supplied stream without
+checking it. A low-level caller can set `Entry.Compression` to `Lzip` and
+`Entry.Size` to the uncompressed length. Use `Open` to read compressed files.
+Reads decode members in order and check their CRC, member length, and total
+output length. `OpenFile` returns `ErrNotSeekable` for compressed files. The
+decoder accepts dictionaries up to 64 MiB and limits the allocated dictionary to
+the remaining output size, plus one probe byte, with a 4 KiB minimum. It does
+not buffer a whole file. The ERIS-FS recommendation advises compression only for
+small files or files read in sequence, and advises against compressing files
+smaller than 1 KiB. Leave files uncompressed when they need random access.
+
+`Builder.AddAutoFile` selects either mode with the fixed
+[ERIS-FS-AUTO-1 policy](specs/eris-fs-auto-compression.md). It samples the first
+32 KiB, leaves files below 1 KiB uncompressed, and selects Lzip when a specified
+LZ77 probe estimates at least 12.5% savings, including 26 bytes of container
+cost. `ChooseCompression` exposes the same decision for a supplied prefix. The
+choice does not depend on a Lzip implementation. The sample is replayed into the
+chosen encoder, so the source is read once and need not support seeking. Later
+content does not change the decision, and actual savings can differ from the
+estimate. The policy document includes pseudocode and portable conformance
+vectors.
+
+For the same file bytes, secret, file tree, and compression choices, the builder
+produces the same ERIS blocks and v2 index. Entry insertion order and input read
+chunk sizes do not change the result. The spec does not prescribe one
+compression choice for a given file. The same logical tree can therefore have
+different valid ERIS-FS capabilities. A different secret also changes the file
+blocks by design.
+
+The [encoding profile](specs/eris-fs-encoding.md) specifies all Lzip settings
+and the pinned encoder algorithm. Fixed regression vectors check compressed
+bytes, file capabilities, and complete image capabilities. Other Lzip encoders
+can produce different valid streams; ERIS-FS does not prescribe a unique Lzip
+bitstream. The streaming encoder also passes all 25 official base ERIS vectors.
 
 `OpenFS` and `DecodeIndex` limit each decoded index to 64 MiB. Use
 `OpenFSWithLimit` or `DecodeIndexWithLimit` to select another application limit.
+File sizes in v2 indexes are untrusted metadata until the content is read.
+`ReadFile` grows its buffer from the bytes read, rather than the declared size.
+It still reads the whole file into memory. Use `Open` with `io.LimitReader` when
+file content also needs an application size limit.
 
 Callers that need stronger resistance to confirmation attacks must generate a
 cryptographically secure, unique `eris.Secret` outside this package. ERIS does

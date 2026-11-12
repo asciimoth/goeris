@@ -1,0 +1,132 @@
+[
+  {
+    "name": "empty",
+    "length": 0,
+    "recipe": "zeros",
+    "random_prefix": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "probe_size": 0,
+    "score": 26,
+    "compression": "uncompressed"
+  },
+  {
+    "name": "one-zero",
+    "length": 1,
+    "recipe": "zeros",
+    "random_prefix": 0,
+    "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+    "probe_size": 2,
+    "score": 28,
+    "compression": "uncompressed"
+  },
+  {
+    "name": "below-minimum",
+    "length": 1023,
+    "recipe": "zeros",
+    "random_prefix": 0,
+    "sha256": "5724796860baa23469b3118eff2567c96a0b64b7dadaf99eafb7ba3c65b9aa56",
+    "probe_size": 26,
+    "score": 52,
+    "compression": "uncompressed"
+  },
+  {
+    "name": "minimum-zeros",
+    "length": 1024,
+    "recipe": "zeros",
+    "random_prefix": 0,
+    "sha256": "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+    "probe_size": 26,
+    "score": 52,
+    "compression": "lzip"
+  },
+  {
+    "name": "full-zeros",
+    "length": 32768,
+    "recipe": "zeros",
+    "random_prefix": 0,
+    "sha256": "c35020473aed1b4642cd726cad727b63fff2824ad68cedd7ffb73c7cbd890479",
+    "probe_size": 755,
+    "score": 781,
+    "compression": "lzip"
+  },
+  {
+    "name": "literal-128",
+    "length": 128,
+    "recipe": "cycle",
+    "random_prefix": 0,
+    "sha256": "471fb943aa23c511f6f72f8d1652d9c880cfa392ad80503120547703e56a2be5",
+    "probe_size": 129,
+    "score": 155,
+    "compression": "uncompressed"
+  },
+  {
+    "name": "cycle-1024",
+    "length": 1024,
+    "recipe": "cycle",
+    "random_prefix": 0,
+    "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9",
+    "probe_size": 276,
+    "score": 302,
+    "compression": "lzip"
+  },
+  {
+    "name": "cycle-full",
+    "length": 32768,
+    "recipe": "cycle",
+    "random_prefix": 0,
+    "sha256": "e11360251d1173650cdcd20f111d8f1ca2e412f572e8b36a4dc067121c1799b8",
+    "probe_size": 1005,
+    "score": 1031,
+    "compression": "lzip"
+  },
+  {
+    "name": "random-1024",
+    "length": 1024,
+    "recipe": "xorshift32",
+    "random_prefix": 0,
+    "sha256": "d282e9c97b74f8fc63dbda178fe65a364f5e6e45d02c9c928898c62997772fa3",
+    "probe_size": 1032,
+    "score": 1058,
+    "compression": "uncompressed"
+  },
+  {
+    "name": "random-full",
+    "length": 32768,
+    "recipe": "xorshift32",
+    "random_prefix": 0,
+    "sha256": "681d171021a3a7d99b9304331fabc99df7a7e73283be2463f00df1b870d292f4",
+    "probe_size": 33024,
+    "score": 33050,
+    "compression": "uncompressed"
+  },
+  {
+    "name": "threshold-895",
+    "length": 1024,
+    "recipe": "random-prefix",
+    "random_prefix": 855,
+    "sha256": "390188f60badbd174c841aa69ad0414c98e912297b9c3c333ecac87ba45d34f2",
+    "probe_size": 869,
+    "score": 895,
+    "compression": "lzip"
+  },
+  {
+    "name": "threshold-896",
+    "length": 1024,
+    "recipe": "random-prefix",
+    "random_prefix": 856,
+    "sha256": "23d75b28e3a126911c4c7b35db6044463c0350ba5b4b8462f027c978573a48c3",
+    "probe_size": 870,
+    "score": 896,
+    "compression": "lzip"
+  },
+  {
+    "name": "threshold-897",
+    "length": 1024,
+    "recipe": "random-prefix",
+    "random_prefix": 857,
+    "sha256": "925ce2c16690a2263889bf2cad4ec3fe5da7ba00f369f2aa76faadb32dd7087a",
+    "probe_size": 871,
+    "score": 897,
+    "compression": "uncompressed"
+  }
+]

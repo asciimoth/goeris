@@ -5,7 +5,10 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/asciimoth/goeris"
 )
@@ -14,6 +17,21 @@ func FuzzIndexDecode(f *testing.F) {
 	valid, _ := (Index{}).MarshalBinary()
 	f.Add(valid)
 	f.Add([]byte{})
+	f.Add([]byte{0xda, 0x65, 0x72, 0x69, 0x74, 0x82, 1, 0xa0})
+	f.Add([]byte{0xda, 0x65, 0x72, 0x69, 0x74, 0x82, 2, 0xa1, 0x81, 0x61, 'a', 0x82, 2, 0x80})
+	capability := eris.Capability{BlockSize: eris.BlockSize1KiB}
+	for _, compression := range []Compression{Uncompressed, Lzip} {
+		data, err := (Index{Entries: []Entry{{Path: []string{"file"}, Capability: capability, Size: 42, Compression: compression}}}).MarshalBinary()
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(data)
+		if compression == Uncompressed {
+			legacy := bytes.Clone(data[:len(data)-2]) // Remove the two-byte size.
+			legacy[6], legacy[14] = 1, 0x82
+			f.Add(legacy)
+		}
+	}
 	// Counts fit in the input length, but the declared items are absent.
 	f.Add(append([]byte{0xda, 0x65, 0x72, 0x69, 0x74, 0x82, 0x01, 0xb9, 0x01, 0x00}, make([]byte, 256)...))
 	f.Add(append([]byte{0xda, 0x65, 0x72, 0x69, 0x74, 0x82, 0x01, 0xa1, 0x99, 0x01, 0x00}, make([]byte, 256)...))
@@ -23,8 +41,25 @@ func FuzzIndexDecode(f *testing.F) {
 			return
 		}
 		encoded, err := index.MarshalBinary()
-		if err != nil || !bytes.Equal(encoded, data) {
-			t.Fatalf("accepted index is not canonical: %v", err)
+		unknown := false
+		for _, entry := range index.Entries {
+			unknown = unknown || entry.Size == -1
+		}
+		if unknown {
+			if !errors.Is(err, ErrUnknownSize) {
+				t.Fatalf("v1 file rewrite: %v", err)
+			}
+			return
+		}
+		if err != nil || encoded[6] != 2 {
+			t.Fatalf("accepted index cannot be written as v2: %v", err)
+		}
+		decoded, err := ParseIndex(encoded)
+		less := func(a, b Entry) int { return strings.Compare(strings.Join(a.Path, "/"), strings.Join(b.Path, "/")) }
+		slices.SortFunc(decoded.Entries, less)
+		slices.SortFunc(index.Entries, less)
+		if err != nil || !reflect.DeepEqual(decoded, index) {
+			t.Fatalf("normalized index changed: %v", err)
 		}
 	})
 }
@@ -43,6 +78,9 @@ func FuzzIndexRoundTrip(f *testing.F) {
 			entry.Target = target
 		} else {
 			entry.Capability, _, _ = eris.Encode([]byte("seed"), eris.Secret{}, eris.BlockSize1KiB)
+			if kind != Subdirectory {
+				entry.Size = 4
+			}
 		}
 		index := Index{Entries: []Entry{entry}}
 		encoded, err := index.MarshalBinary()
@@ -56,101 +94,126 @@ func FuzzIndexRoundTrip(f *testing.F) {
 	})
 }
 
-func FuzzReaderRandomAccess(f *testing.F) {
-	f.Add([]byte{}, uint16(0), uint16(1))
-	f.Add([]byte("content"), uint16(0), uint16(20))
-	f.Add(make([]byte, 2049), uint16(1000), uint16(2000))
-	f.Add(make([]byte, 16385), uint16(16380), uint16(16))
-	f.Fuzz(func(t *testing.T, content []byte, offset, length uint16) {
-		if len(content) > 1<<18 {
+func FuzzLzipFile(f *testing.F) {
+	f.Add(lzipMember(f, []byte("hello")), uint16(5))
+	f.Add(lzipMember(f, nil), uint16(0))
+	f.Add(append(lzipMember(f, []byte("one")), lzipMember(f, []byte("two"))...), uint16(6))
+	f.Add([]byte("LZIP\x01\x0c"), uint16(0))
+	f.Fuzz(func(t *testing.T, data []byte, size uint16) {
+		if len(data) > 1<<18 {
 			t.Skip()
 		}
-		blocks := make(eris.BlockSet)
-		capability, err := EncodeContent(bytes.NewReader(content), eris.Secret{1}, eris.BlockSize1KiB, blocks)
+		image := compressedImage(t, data, int64(size))
+		file, err := image.Open("file")
 		if err != nil {
-			t.Fatal(err)
+			return
 		}
-		reader, err := NewReader(capability, blocks)
-		if err != nil {
-			t.Fatal(err)
+		defer func() { _ = file.Close() }()
+		// Read in small buffers, without trusting the declared size to allocate.
+		got, err := io.ReadAll(io.LimitReader(file, int64(size)+1))
+		if len(got) > int(size) {
+			t.Fatal("returned more than declared size")
 		}
-		position := int(offset)
-		if position > len(content) {
-			position = len(content)
-		}
-		buffer := make([]byte, int(length))
-		n, readErr := reader.ReadAt(buffer, int64(position))
-		end := min(len(content), position+len(buffer))
-		if n != end-position || !bytes.Equal(buffer[:n], content[position:end]) {
-			t.Fatalf("random read returned %d bytes; want %d matching bytes", n, end-position)
-		}
-		if len(buffer) > n && !errors.Is(readErr, io.EOF) {
-			t.Fatalf("short read error = %v; want EOF", readErr)
-		}
-		if len(buffer) == n && readErr != nil {
-			t.Fatalf("complete read error = %v; want nil", readErr)
+		if err == nil && len(got) != int(size) {
+			t.Fatal("accepted wrong length")
 		}
 	})
 }
 
-// Build encrypted trees directly so invalid shapes pass block verification
-// and reach both decoders' structural checks.
-func FuzzTreeShape(f *testing.F) {
-	f.Add([]byte{16, 1}, uint16(17))
-	f.Add([]byte{1, 16}, uint16(17))
-	f.Add([]byte{16, 0}, uint16(17))
-	f.Add([]byte{16}, uint16(17))
-	f.Add([]byte{16, 16}, uint16(1))
-	f.Fuzz(func(t *testing.T, counts []byte, limitBlocks uint16) {
-		if len(counts) > 16 {
+func FuzzCompressedFile(f *testing.F) {
+	f.Add([]byte{}, uint16(1))
+	f.Add([]byte("hello"), uint16(3))
+	f.Add(bytes.Repeat([]byte("abc"), 1024), uint16(37))
+	f.Add(autoRandomBytes(32769), uint16(4095))
+	f.Fuzz(func(t *testing.T, content []byte, chunk uint16) {
+		if len(content) > 1<<18 {
 			t.Skip()
 		}
-		blocks := make(eris.BlockSet)
-		store := func(node []byte, level eris.Level) eris.Pair {
-			block, pair, err := eris.EncryptNode(node, eris.Secret{}, level)
-			if err != nil {
-				t.Fatal(err)
-			}
-			blocks[pair.Reference] = block
-			return pair
+		var first, second bytes.Buffer
+		if _, err := writeLzip(&first, bytes.NewReader(content)); err != nil {
+			t.Fatal(err)
 		}
-		putPair := func(node []byte, index int, pair eris.Pair) {
-			copy(node[index*eris.PairSize:], pair.Reference[:])
-			copy(node[index*eris.PairSize+32:], pair.Key[:])
+		input := iotest.DataErrReader(smallChunkReader{Reader: bytes.NewReader(content), max: int(chunk) + 1})
+		if _, err := writeLzip(&second, input); err != nil {
+			t.Fatal(err)
 		}
-		leaf := make([]byte, eris.BlockSize1KiB)
-		leaf[0] = 0x80
-		leafPair := store(leaf, 0)
-		root := make([]byte, eris.BlockSize1KiB)
-		valid := len(counts) >= 2
-		leaves := 0
-		for index, value := range counts {
-			count := int(value % 17)
-			valid = valid && count > 0 && (index == len(counts)-1 || count == 16)
-			leaves += count
-			parent := make([]byte, eris.BlockSize1KiB)
-			for child := range count {
-				putPair(parent, child, leafPair)
-			}
-			putPair(root, index, store(parent, 1))
+		if !bytes.Equal(first.Bytes(), second.Bytes()) {
+			t.Fatal("compression depends on read chunk size")
 		}
-		capability := eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 2, Root: store(root, 2)}
-		limit := int64(limitBlocks%257) * int64(eris.BlockSize1KiB)
-		wantSize := (leaves - 1) * int(eris.BlockSize1KiB)
-		valid = valid && int64(wantSize) <= limit
-		decoded, coreErr := eris.DecodeWithLimit(capability, blocks, limit)
-		reader, readerErr := newReader(capability, blocks, limit)
-		if (coreErr == nil) != valid || (readerErr == nil) != valid {
-			t.Fatalf("counts %v, limit %d: core = %v, reader = %v; valid = %t", counts, limit, coreErr, readerErr, valid)
+		image := compressedImage(t, first.Bytes(), int64(len(content)))
+		file, err := image.Open("file")
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !valid {
-			return
+		defer func() { _ = file.Close() }()
+		got, err := io.ReadAll(file)
+		if err != nil || !bytes.Equal(got, content) {
+			t.Fatalf("compressed round trip: %v", err)
 		}
-		defer func() { _ = reader.Close() }()
-		got, err := io.ReadAll(reader)
-		want := bytes.Repeat(leaf, leaves-1)
-		if err != nil || !bytes.Equal(decoded, want) || !bytes.Equal(got, want) || reader.Size() != int64(wantSize) {
-			t.Fatalf("tree content mismatch: size = %d, want %d, error = %v", reader.Size(), wantSize, err)
+	})
+}
+
+func FuzzAutoCompressionProbe(f *testing.F) {
+	f.Add([]byte{})
+	f.Add([]byte("abcdabcd"))
+	f.Add(make([]byte, 1024))
+	f.Add(autoRandomBytes(2048))
+	f.Add(append(autoRandomBytes(856), make([]byte, 168)...))
+	f.Fuzz(func(t *testing.T, sample []byte) {
+		// The backward-search oracle is quadratic. Full-size samples have
+		// separate golden vectors and are also used by FuzzAutoFile.
+		if len(sample) > 2048 {
+			t.Skip()
+		}
+		encoded := referenceAutoProbe(sample)
+		if got := autoProbeSize(sample); got != len(encoded) {
+			t.Fatalf("probe size %d; reference size %d", got, len(encoded))
+		}
+		if !bytes.Equal(decodeAutoProbe(t, encoded), sample) {
+			t.Fatal("probe token round trip failed")
+		}
+		want := Uncompressed
+		if len(sample) >= 1024 && 8*(len(encoded)+26) <= 7*len(sample) {
+			want = Lzip
+		}
+		if ChooseCompression(sample) != want {
+			t.Fatal("decision differs from reference")
+		}
+	})
+}
+
+func FuzzAutoFile(f *testing.F) {
+	f.Add([]byte{}, uint16(1), false)
+	f.Add(make([]byte, 1023), uint16(37), false)
+	f.Add(make([]byte, 1024), uint16(1), true)
+	f.Add(autoRandomBytes(1024), uint16(13), true)
+	f.Add(autoRandomBytes(AutoCompressionSampleSize), uint16(7), false)
+	f.Add(make([]byte, AutoCompressionSampleSize+1), uint16(1023), true)
+	f.Fuzz(func(t *testing.T, content []byte, chunk uint16, executable bool) {
+		if len(content) > 2*AutoCompressionSampleSize+17 {
+			t.Skip()
+		}
+		cap, blocks, entry := buildAutoImage(t, bytes.NewReader(content), executable, false)
+		input := smallChunkReader{Reader: iotest.DataErrReader(bytes.NewReader(content)), max: int(chunk) + 1}
+		otherCap, otherBlocks, otherEntry := buildAutoImage(t, input, executable, true)
+		if cap != otherCap || !reflect.DeepEqual(blocks, otherBlocks) || !reflect.DeepEqual(entry, otherEntry) {
+			t.Fatal("chunk boundaries or entry order changed auto image")
+		}
+		if entry.Size != int64(len(content)) || entry.Compression != ChooseCompression(content) {
+			t.Fatal("incorrect auto metadata")
+		}
+		image, err := OpenFS(cap, blocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, err := image.Open("file")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = file.Close() }()
+		decoded, err := io.ReadAll(file)
+		if err != nil || !bytes.Equal(decoded, content) {
+			t.Fatalf("auto round trip: %v", err)
 		}
 	})
 }

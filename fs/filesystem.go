@@ -10,12 +10,16 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/erisreader"
 )
 
 const directoryType EntryType = 255
 
 // FS exposes an ERIS-FS image through the standard library file-system
 // interfaces. Nested ERIS-FS indexes are loaded when a caller enters them.
+// Its methods are safe for concurrent use when the block source supports
+// concurrent calls. Each Open call returns a separate file position. Calls on
+// the same open directory must be serialized by the caller.
 type FS struct {
 	source     eris.BlockSource
 	root       *node
@@ -24,17 +28,18 @@ type FS struct {
 }
 
 type node struct {
-	mu         sync.Mutex
-	source     eris.BlockSource
-	name       string
-	kind       EntryType
-	capability eris.Capability
-	target     string
-	children   map[string]*node
-	loaded     bool
-	indexLimit int64
-	size       int64
-	sizeKnown  bool
+	mu          sync.Mutex
+	source      eris.BlockSource
+	name        string
+	kind        EntryType
+	capability  eris.Capability
+	target      string
+	children    map[string]*node
+	loaded      bool
+	indexLimit  int64
+	size        int64
+	sizeKnown   bool
+	compression Compression
 }
 
 // OpenFS decodes the top-level index and returns a read-only virtual file
@@ -50,17 +55,12 @@ func OpenFSWithLimit(capability eris.Capability, source eris.BlockSource, limit 
 	if err != nil {
 		return nil, err
 	}
-	root, err := buildTree(index, source, ".", limit)
-	if err != nil {
-		return nil, err
-	}
+	root := buildTree(index, source, ".", limit)
 	return &FS{source: source, root: root, prefix: ".", indexLimit: limit}, nil
 }
 
-func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit int64) (*node, error) {
-	if err := index.Validate(); err != nil {
-		return nil, err
-	}
+// buildTree consumes an index that DecodeIndexWithLimit has already validated.
+func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit int64) *node {
 	root := &node{
 		name: rootName, kind: directoryType, source: source, children: make(map[string]*node),
 		loaded: true, indexLimit: indexLimit,
@@ -82,13 +82,14 @@ func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit
 		child := &node{
 			name: name, kind: entry.Type, source: source, capability: entry.Capability,
 			target: entry.Target, loaded: entry.Type != Subdirectory, indexLimit: indexLimit,
+			size: entry.Size, sizeKnown: entry.Size >= 0, compression: entry.Compression,
 		}
 		if entry.Type == Subdirectory {
 			child.children = make(map[string]*node)
 		}
 		parent.children[name] = child
 	}
-	return root, nil
+	return root
 }
 
 func (item *node) load() error {
@@ -104,10 +105,7 @@ func (item *node) load() error {
 	if err != nil {
 		return err
 	}
-	root, err := buildTree(index, item.source, item.name, item.indexLimit)
-	if err != nil {
-		return err
-	}
+	root := buildTree(index, item.source, item.name, item.indexLimit)
 	item.children = root.children
 	item.loaded = true
 	return nil
@@ -184,7 +182,43 @@ func (fileSystem *FS) Open(path string) (stdfs.File, error) {
 		}
 		return &directoryFile{node: item}, nil
 	}
-	reader, err := NewReader(item.capability, fileSystem.source)
+	if item.compression == Lzip {
+		file, err := openLzipFile(item)
+		if err != nil {
+			return nil, pathError("open", path, err)
+		}
+		return file, nil
+	}
+	return fileSystem.openRegular(item, path)
+}
+
+// ReadFile implements io/fs.ReadFileFS. It grows the buffer as content is read,
+// without allocating from the untrusted size in the index. To limit memory for
+// large content, use Open and read through an io.LimitReader instead.
+func (fileSystem *FS) ReadFile(name string) ([]byte, error) {
+	file, err := fileSystem.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return data, pathError("read", name, err)
+	}
+	return data, nil
+}
+
+func (fileSystem *FS) openRegular(item *node, path string) (ReadSeekCloser, error) {
+	var reader *erisreader.Reader
+	var err error
+	item.mu.Lock()
+	size, known := item.size, item.sizeKnown
+	item.mu.Unlock()
+	if known {
+		reader, err = erisreader.NewReaderWithSize(item.capability, fileSystem.source, size)
+	} else {
+		reader, err = erisreader.NewReader(item.capability, fileSystem.source)
+	}
 	if err != nil {
 		return nil, pathError("open", path, err)
 	}
@@ -193,18 +227,20 @@ func (fileSystem *FS) Open(path string) (stdfs.File, error) {
 }
 
 // OpenFile opens a regular file and returns its random-access interface. It
-// follows links within this image. Opening a directory returns fs.ErrInvalid.
+// follows links within this image. A directory returns fs.ErrInvalid and a
+// compressed file returns ErrNotSeekable; use Open to read compressed files.
 func (fileSystem *FS) OpenFile(name string) (ReadSeekCloser, error) {
-	file, err := fileSystem.Open(name)
+	item, err := fileSystem.find(name, true)
 	if err != nil {
-		return nil, err
+		return nil, pathError("open", name, err)
 	}
-	randomAccessFile, ok := file.(ReadSeekCloser)
-	if !ok {
-		_ = file.Close()
+	if item.isDir() {
 		return nil, pathError("open", name, stdfs.ErrInvalid)
 	}
-	return randomAccessFile, nil
+	if item.compression == Lzip {
+		return nil, pathError("open", name, ErrNotSeekable)
+	}
+	return fileSystem.openRegular(item, name)
 }
 
 // Stat implements io/fs.StatFS. It follows links within this image.
@@ -319,7 +355,7 @@ func (node *node) contentSize() (int64, error) {
 		return size, nil
 	}
 	node.mu.Unlock()
-	reader, err := NewReader(node.capability, node.source)
+	reader, err := erisreader.NewReader(node.capability, node.source)
 	if err != nil {
 		return 0, err
 	}
@@ -366,22 +402,21 @@ func (node *node) isDir() bool                   { return node.kind == directory
 
 type regularFile struct {
 	node *node
-	*Reader
+	*erisreader.Reader
 }
 
 func (file *regularFile) Stat() (stdfs.FileInfo, error) {
-	file.mu.Lock()
-	defer file.mu.Unlock()
-	if file.closed {
+	if file.IsClosed() {
 		return nil, ErrClosed
 	}
 	return file.node.info()
 }
 
 type directoryFile struct {
-	node   *node
-	offset int
-	closed bool
+	node    *node
+	entries []stdfs.DirEntry
+	offset  int
+	closed  bool
 }
 
 func (file *directoryFile) Stat() (stdfs.FileInfo, error) {
@@ -402,7 +437,10 @@ func (file *directoryFile) ReadDir(count int) ([]stdfs.DirEntry, error) {
 	if file.closed {
 		return nil, ErrClosed
 	}
-	entries := file.node.dirEntries()
+	if file.entries == nil {
+		file.entries = file.node.dirEntries()
+	}
+	entries := file.entries
 	if file.offset == len(entries) && count > 0 {
 		return nil, io.EOF
 	}
@@ -410,13 +448,15 @@ func (file *directoryFile) ReadDir(count int) ([]stdfs.DirEntry, error) {
 	if count > 0 {
 		end = file.offset + min(count, len(entries)-file.offset)
 	}
-	result := entries[file.offset:end]
+	// Do not let append on the returned slice overwrite unread entries.
+	result := entries[file.offset:end:end]
 	file.offset = end
 	return result, nil
 }
 
 func (file *directoryFile) Close() error {
 	file.closed = true
+	file.entries = nil
 	return nil
 }
 
@@ -427,6 +467,7 @@ func pathError(operation, path string, err error) error {
 var (
 	_ FileSystem        = (*FS)(nil)
 	_ stdfs.FS          = (*FS)(nil)
+	_ stdfs.ReadFileFS  = (*FS)(nil)
 	_ stdfs.ReadDirFS   = (*FS)(nil)
 	_ stdfs.ReadLinkFS  = (*FS)(nil)
 	_ stdfs.StatFS      = (*FS)(nil)

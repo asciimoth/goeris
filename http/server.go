@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
-	erisfs "github.com/asciimoth/goeris/fs"
+	"github.com/asciimoth/goeris/internal/erisreader"
 )
 
 // Handler serves ERIS resources from an abstract block source. It processes
@@ -65,7 +65,7 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 		writer.WriteHeader(nethttp.StatusBadRequest)
 		return
 	}
-	reader, err := erisfs.NewReader(capability, requestBlockSource{ctx: request.Context(), source: handler.Blocks})
+	reader, err := erisreader.NewReader(capability, requestBlockSource{ctx: request.Context(), source: handler.Blocks})
 	if err != nil {
 		writeSourceError(writer, err)
 		return

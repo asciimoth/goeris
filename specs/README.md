@@ -6,8 +6,7 @@ them when the upstream pages are unavailable.
 
 - [ERIS 1.0.0 specification](eris-v1.0.0.html)
 - [CBOR serialization](eer/cbor/index.md)
-- [ERIS-FS](eer/eris-fs/index.md) (this library implements
-  [version 1](eer/eris-fs/index.md#version-1))
+- [ERIS-FS](eer/eris-fs/index.md) (version 2, with version 1 read support)
 - [DNSLink records](eer/dnslink/index.md)
 - [ERIS over HTTP](eer/http/index.md)
 - [Object storage](eer/object-storage/index.md)
@@ -18,6 +17,12 @@ them when the upstream pages are unavailable.
 - [RDF](eer/rdf/index.md)
 - [Canons](eer/canons/index.md)
 - [Cache vocabulary](eer/cache-vocabulary/index.md)
+
+This repository also defines original encoding policies under the repository's
+CC0 license:
+
+- [ERIS-FS automatic compression policy v1](eris-fs-auto-compression.md)
+- [ERIS-FS v2 encoding and reproducibility](eris-fs-encoding.md)
 
 The ERIS 1.0.0 HTML file comes from the
 [ERIS specification repository](https://codeberg.org/eris/spec) at commit
