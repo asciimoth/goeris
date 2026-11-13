@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	protocol "github.com/asciimoth/coaperation"
@@ -22,8 +23,8 @@ type StoreURL struct {
 }
 
 // ParseStoreURL parses a coap or coap+tcp block-store URL. It rejects user
-// information, queries, and fragments. It resolves dot segments and removes a
-// trailing path separator.
+// information, queries, fragments, and control characters in the host. It
+// resolves dot segments and removes a trailing path separator.
 func ParseStoreURL(text string) (StoreURL, error) {
 	if strings.ContainsAny(text, "?#") || !validRawAuthority(text) {
 		return StoreURL{}, ErrInvalidStoreURL
@@ -95,7 +96,7 @@ func (store StoreURL) String() string {
 }
 
 func (store StoreURL) validate() error {
-	if store.scheme != "coap" && store.scheme != "coap+tcp" || store.host == "" || !utf8.ValidString(store.host) || store.port == 0 {
+	if store.scheme != "coap" && store.scheme != "coap+tcp" || store.host == "" || !utf8.ValidString(store.host) || strings.IndexFunc(store.host, unicode.IsControl) >= 0 || store.port == 0 {
 		return ErrInvalidStoreURL
 	}
 	for index, segment := range store.path {

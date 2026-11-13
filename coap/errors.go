@@ -32,7 +32,7 @@ var (
 	// Hop-Limit option.
 	ErrInvalidHopLimit = errors.New("eris coap: invalid Hop-Limit")
 	// ErrInvalidProxyURI means that a request configuration has no valid,
-	// absolute Proxy-Uri value or has no Hop-Limit.
+	// absolute Proxy-Uri value without a fragment or has no Hop-Limit.
 	ErrInvalidProxyURI = errors.New("eris coap: invalid Proxy-Uri")
 	// ErrHopLimitReached means that forwarding would exhaust Hop-Limit.
 	ErrHopLimitReached = errors.New("eris coap: Hop-Limit reached")

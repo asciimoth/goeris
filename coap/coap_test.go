@@ -85,6 +85,7 @@ func TestStoreURL(t *testing.T) {
 		"coap://example.net/a?x", "coap://example.net/a?", "coap://example.net/a#x",
 		"coap://example.net/a#", "coap://[fe80::1%25]/",
 		"coap://[example%25zone]/", "coap://example.net/%FF",
+		"coap://exa%00mple.net/", "coap://exa%0Ample.net/", "coap://exa%C2%85mple.net/",
 	}
 	for _, text := range invalid {
 		if store, err := ParseStoreURL(text); !errors.Is(err, ErrInvalidStoreURL) || store.String() != "" {
@@ -100,6 +101,9 @@ func TestStoreURL(t *testing.T) {
 		if _, err := NewStoreURL(target, nil); !errors.Is(err, ErrInvalidStoreURL) {
 			t.Errorf("NewStoreURL(%+v) error = %v", target, err)
 		}
+	}
+	if _, err := NewStoreURL(protocol.Target{Scheme: "coap", Host: "bad\x00host", Port: 5683}, nil); !errors.Is(err, ErrInvalidStoreURL) {
+		t.Errorf("host with control byte: error = %v", err)
 	}
 	if _, err := NewStoreURL(protocol.Target{Scheme: "coap", Host: "x", Port: 1}, []string{"."}); !errors.Is(err, ErrInvalidStoreURL) {
 		t.Errorf("invalid path error = %v", err)
@@ -200,6 +204,11 @@ func TestRequestConstruction(t *testing.T) {
 	}
 	if _, err := NewGetRequest(store, ref, RequestConfig{ProxyURI: "ocapn://peer"}); !errors.Is(err, ErrInvalidProxyURI) {
 		t.Errorf("proxy without Hop-Limit error = %v", err)
+	}
+	for _, proxyURI := range []string{"ocapn://peer/store#part", "ocapn://peer/store#"} {
+		if _, err := NewGetRequest(store, ref, RequestConfig{ProxyURI: proxyURI, HopLimit: 1}); !errors.Is(err, ErrInvalidProxyURI) {
+			t.Errorf("proxy URI with fragment %q: error = %v", proxyURI, err)
+		}
 	}
 
 	put, err := NewPutRequest(store, block, RequestConfig{HopLimit: 3})

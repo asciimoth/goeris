@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strings"
 
 	protocol "github.com/asciimoth/coaperation"
 	"github.com/asciimoth/goeris"
@@ -37,7 +38,8 @@ type RequestConfig struct {
 	ReferenceEncoding ReferenceEncoding
 	// SizeHint adds Size1 to a GET request. Zero omits it.
 	SizeHint eris.BlockSize
-	// ProxyURI adds Proxy-Uri. HopLimit must also be nonzero.
+	// ProxyURI adds an absolute Proxy-Uri without a fragment. HopLimit must
+	// also be nonzero.
 	ProxyURI string
 	// HopLimit adds Hop-Limit. Valid values are from 1 through 255.
 	HopLimit uint8
@@ -119,7 +121,7 @@ func referenceQuery(ref eris.Reference, encoding ReferenceEncoding) ([]byte, err
 func addRoutingOptions(options []protocol.Option, config RequestConfig) ([]protocol.Option, error) {
 	if config.ProxyURI != "" {
 		parsed, err := url.Parse(config.ProxyURI)
-		if err != nil || parsed.Scheme == "" || !parsed.IsAbs() || config.HopLimit == 0 {
+		if err != nil || parsed.Scheme == "" || !parsed.IsAbs() || strings.Contains(config.ProxyURI, "#") || config.HopLimit == 0 {
 			return nil, ErrInvalidProxyURI
 		}
 		options = append(options, protocol.StringOption(protocol.OptionProxyURI, config.ProxyURI))
