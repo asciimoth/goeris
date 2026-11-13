@@ -57,18 +57,6 @@ func (handler Handler) ServeHTTP(writer nethttp.ResponseWriter, request *nethttp
 	handler.serveContent(writer, request)
 }
 
-func tooManyRanges(values []string) bool {
-	const maxRanges = 16
-	count := 0
-	for _, value := range values {
-		count += strings.Count(value, ",") + 1
-		if count > maxRanges {
-			return true
-		}
-	}
-	return false
-}
-
 func (handler Handler) serveBlock(writer nethttp.ResponseWriter, request *nethttp.Request) {
 	ref, err := eris.ParseReferenceURN(request.URL.RawQuery)
 	if err != nil {
@@ -118,6 +106,7 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 	}()
 	setResourceHeaders(writer)
 	stream := &checkedContent{ReadSeeker: reader}
+	request = safeRangeRequest(request, reader.Size())
 	nethttp.ServeContent(writer, request, "", time.Time{}, stream)
 	if stream.failed.Load() {
 		panic(nethttp.ErrAbortHandler)
