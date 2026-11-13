@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -55,6 +56,13 @@ func validEndpointHost(parsed *url.URL) bool {
 				char >= '0' && char <= '9' || char == '.' || char == '-' || char == '_' {
 				continue
 			}
+			return false
+		}
+	} else {
+		address, err := netip.ParseAddr(parsed.Hostname())
+		// HTTP removes IPv6 zones from Host on the wire. Reject them so
+		// the signed authority and transmitted authority cannot differ.
+		if err != nil || !address.Is6() || address.Zone() != "" {
 			return false
 		}
 	}

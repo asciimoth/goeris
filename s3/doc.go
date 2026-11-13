@@ -10,6 +10,8 @@
 //
 // Client and Handler do not create network clients or servers. Applications
 // supply an HTTPClient, block store, credentials, and clocks as applicable.
+// Handler checks cancellation before each storage call. Use context-aware
+// block stores to cancel storage calls that are already in progress.
 //
 // [ERIS object-storage recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/object-storage/index.md
 package s3

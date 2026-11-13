@@ -359,3 +359,47 @@ func FuzzHandlerPath(f *testing.F) {
 		}
 	})
 }
+
+func TestHandlerCanceledStorage(t *testing.T) {
+	t.Parallel()
+	ref, block := testBlock(t)
+	for _, contextual := range []bool{false, true} {
+		for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut} {
+			ctx, cancel := context.WithCancel(context.Background())
+			contextualStore := &contextStore{block: block, ref: ref}
+			var store eris.BlockSource = storeFunc{
+				get: func(eris.Reference) ([]byte, error) {
+					t.Fatal("canceled request reached storage read")
+					return nil, nil
+				},
+				put: func(eris.Reference, []byte) error {
+					t.Fatal("canceled request reached storage write")
+					return nil
+				},
+			}
+			if contextual {
+				store = contextualStore
+			}
+			handler := Handler{
+				Blocks: store, Bucket: "blocks", AllowPut: true,
+				Auth: RequestAuthenticatorFunc(func(*http.Request, []byte) (string, error) {
+					// Cancellation can occur after the body has been read.
+					cancel()
+					return "writer", nil
+				}),
+			}
+			request := httptest.NewRequest(method, "https://example/blocks/"+ref.String(), bytes.NewReader(block)).WithContext(ctx)
+			request.Header.Set("x-amz-acl", "public-read")
+			if method != http.MethodPut {
+				cancel()
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			cancel()
+			if recorder.Code != http.StatusInternalServerError || contextualStore.reads != 0 || contextualStore.writes != 0 {
+				t.Fatalf("contextual=%t method=%s: status %d, reads %d, writes %d", contextual, method,
+					recorder.Code, contextualStore.reads, contextualStore.writes)
+			}
+		}
+	}
+}

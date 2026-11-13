@@ -15,6 +15,7 @@ func TestStoreURL(t *testing.T) {
 		"s3://s3.example/blocks/",
 		"s3://localhost:9000/eris/",
 		"s3://[::1]:9000/eris/",
+		"s3://[2001:db8::1]/eris/",
 		"s3://s3.eu-central-1.wasabisys.com/eris/",
 		"s3://s3.amazonaws.com/my-block-bucket/",
 	} {
@@ -67,6 +68,8 @@ func TestStoreURLErrors(t *testing.T) {
 		"s3://s3.example:1:2/eris/", "s3://bücher.example/eris/",
 		"s3://example\"evil/eris/", "s3://example;evil/eris/", "s3://example]evil/eris/",
 		"S3://s3.example/eris/",
+		"s3://[example]/eris/", "s3://[127.0.0.1]/eris/",
+		"s3://[:::1]/eris/", "s3://[fe80::1%25eth0]/eris/",
 	}
 	for _, text := range invalid {
 		if store, err := ParseStoreURL(text); err == nil || store.String() != "" {

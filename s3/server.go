@@ -179,6 +179,9 @@ func publicReadACL(headers http.Header) bool {
 }
 
 func (handler Handler) getBlock(ctx context.Context, ref eris.Reference) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if source, ok := handler.Blocks.(eris.ContextBlockSource); ok {
 		return source.GetBlockContext(ctx, ref)
 	}
@@ -186,6 +189,9 @@ func (handler Handler) getBlock(ctx context.Context, ref eris.Reference) ([]byte
 }
 
 func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var stored eris.Reference
 	var err error
 	if contextual, ok := handler.Blocks.(eris.ContextBlockSink); ok {
