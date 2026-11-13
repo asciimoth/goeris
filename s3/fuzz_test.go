@@ -1,11 +1,49 @@
 package s3
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"net/http"
 	"testing"
 	"time"
 )
+
+// Check the signature after HTTP serialization as well as in memory. The HTTP
+// writer and parser can change escaping and header whitespace.
+func FuzzSignV4WireRoundTrip(f *testing.F) {
+	f.Add("https://example/a%2Fb?x=a+b", " a  b\t c ")
+	f.Add("https://example/a:b?x=%20&x=+", "\u00a0value\u00a0")
+	f.Add("https://[::1]:9000/", "value")
+	f.Fuzz(func(t *testing.T, target, header string) {
+		request, err := http.NewRequest(http.MethodGet, target, nil)
+		if err != nil || request.URL.Scheme != "https" || request.URL.User != nil {
+			return
+		}
+		request.Header.Set("X-Amz-Meta-Test", header)
+		if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
+			return
+		}
+		var wire bytes.Buffer
+		if err := request.Write(&wire); err != nil {
+			t.Fatalf("signed request cannot be written: %v", err)
+		}
+		received, err := http.ReadRequest(bufio.NewReader(&wire))
+		if err != nil {
+			t.Fatalf("signed request cannot be parsed: %v", err)
+		}
+		defer func() { _ = received.Body.Close() }()
+		auth := V4Authenticator{
+			Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+				return testCredentials, nil
+			}),
+			Region: "region", Clock: func() time.Time { return testTime },
+		}
+		if _, err := auth.Authenticate(received, nil); err != nil {
+			t.Fatalf("signature failed after HTTP serialization: %v", err)
+		}
+	})
+}
 
 func FuzzSignV4Authentication(f *testing.F) {
 	f.Add("https://example/a%2Fb?x=1&x=2", "a  b", []byte("body"))
