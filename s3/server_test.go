@@ -91,6 +91,24 @@ func TestHandlerReads(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsInvalidStoredBlock(t *testing.T) {
+	t.Parallel()
+	ref, block := testBlock(t)
+	bad := append([]byte(nil), block...)
+	bad[0] ^= 1
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		handler := Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) {
+			return bad, nil
+		}), Bucket: "blocks"}
+		request := httptest.NewRequest(method, "https://example/blocks/"+ref.String(), nil)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusInternalServerError || recorder.Header().Get("Cache-Control") != "" {
+			t.Errorf("%s returned status %d, headers %v", method, recorder.Code, recorder.Header())
+		}
+	}
+}
+
 func TestHandlerRoutingAndReadErrors(t *testing.T) {
 	t.Parallel()
 	ref, block := testBlock(t)
@@ -148,6 +166,7 @@ func TestHandlerWriteChecks(t *testing.T) {
 		{"bad auth", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: deny}, base, 403},
 		{"denied", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow, Authorize: func(_ context.Context, _, _, _ string, _ eris.Reference) bool { return false }}, base, 403},
 		{"bad acl", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request { request := base(); request.Header.Del("x-amz-acl"); return request }, 400},
+		{"duplicate acl", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request { request := base(); request.Header.Add("x-amz-acl", "private"); return request }, 400},
 		{"bad block", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Body = io.NopCloser(bytes.NewReader(make([]byte, eris.BlockSize1KiB)))
@@ -261,6 +280,27 @@ func TestHandlerAuthenticatedWrite(t *testing.T) {
 	stored, err := blocks.GetBlock(ref)
 	if err != nil || !bytes.Equal(stored, block) {
 		t.Fatalf("stored block = %x, %v", stored, err)
+	}
+}
+
+func TestHandlerRejectsInvalidBlockBeforeSink(t *testing.T) {
+	t.Parallel()
+	ref, block := testBlock(t)
+	store := &contextStore{ref: ref}
+	handler := Handler{
+		Blocks: store, Bucket: "blocks", AllowPut: true,
+		Auth: RequestAuthenticatorFunc(func(*http.Request, []byte) (string, error) {
+			return "writer", nil
+		}),
+	}
+	bad := append([]byte(nil), block...)
+	bad[0] ^= 1
+	request := httptest.NewRequest(http.MethodPut, "https://example/blocks/"+ref.String(), bytes.NewReader(bad))
+	request.Header.Set("x-amz-acl", "public-read")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || store.writes != 0 {
+		t.Fatalf("invalid PUT returned status %d and called sink %d times", recorder.Code, store.writes)
 	}
 }
 

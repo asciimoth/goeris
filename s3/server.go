@@ -97,12 +97,20 @@ func (handler Handler) get(writer http.ResponseWriter, request *http.Request, re
 		}
 		return
 	}
+	if err := eris.VerifyBlock(block, ref); err != nil {
+		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store returned an invalid block.")
+		return
+	}
 	writer.Header().Set("Content-Type", "application/octet-stream")
 	writer.Header().Set("Cache-Control", "max-age=31536000, immutable")
 	http.ServeContent(writer, request, ref.String(), time.Time{}, bytes.NewReader(block))
 }
 
 func (handler Handler) put(writer http.ResponseWriter, request *http.Request, ref eris.Reference) {
+	if handler.Auth == nil {
+		writeS3Error(writer, http.StatusUnauthorized, "AccessDenied", "Write authentication is required.")
+		return
+	}
 	if request.Body == nil {
 		writeS3Error(writer, http.StatusBadRequest, "InvalidRequest", "The request body is missing.")
 		return
@@ -117,10 +125,6 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusRequestEntityTooLarge, "EntityTooLarge", "The block is too large.")
 		return
 	}
-	if handler.Auth == nil {
-		writeS3Error(writer, http.StatusUnauthorized, "AccessDenied", "Write authentication is required.")
-		return
-	}
 	identity, err := handler.Auth.Authenticate(request, block)
 	if err != nil {
 		writeS3Error(writer, http.StatusForbidden, "SignatureDoesNotMatch", "The request signature is invalid.")
@@ -130,8 +134,13 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusForbidden, "AccessDenied", "The identity cannot write this block.")
 		return
 	}
-	if request.Header.Get("x-amz-acl") != "public-read" {
+	acl := request.Header.Values("x-amz-acl")
+	if len(acl) != 1 || acl[0] != "public-read" {
 		writeS3Error(writer, http.StatusBadRequest, "InvalidArgument", "x-amz-acl must be public-read.")
+		return
+	}
+	if err := eris.VerifyBlock(block, ref); err != nil {
+		writeS3Error(writer, http.StatusBadRequest, "BadDigest", "The block does not match its key.")
 		return
 	}
 	_, sinkOK := handler.Blocks.(eris.BlockSink)

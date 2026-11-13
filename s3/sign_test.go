@@ -55,7 +55,7 @@ func TestCanonicalRequest(t *testing.T) {
 	if headers != "host;x-amz-meta-test" {
 		t.Fatalf("headers = %q", headers)
 	}
-	want := "GET\n/a%20b\na=1&a=2&empty=&z=a%20b\nhost:override.example\nx-amz-meta-test:a b,c\n\nhost;x-amz-meta-test\n" + payloadHash
+	want := "GET\n/a%20b\na=1&a=2&empty=&z=a%2Bb\nhost:override.example\nx-amz-meta-test:a b,c\n\nhost;x-amz-meta-test\n" + payloadHash
 	if canonical != want {
 		t.Fatalf("canonical request =\n%s\nwant\n%s", canonical, want)
 	}
@@ -75,6 +75,32 @@ func TestCanonicalRequest(t *testing.T) {
 	values["empty"] = nil
 	if got := canonicalQuery(values); got != "empty=" {
 		t.Errorf("empty canonical query value = %q", got)
+	}
+}
+
+func TestQuerySignatureDistinguishesPlusFromSpace(t *testing.T) {
+	t.Parallel()
+	request, err := http.NewRequest(http.MethodGet, "https://example/key?name=a+b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
+		t.Fatal(err)
+	}
+	authenticator := V4Authenticator{
+		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+			return testCredentials, nil
+		}),
+		Region: "region",
+		Clock:  func() time.Time { return testTime },
+	}
+	if _, err := authenticator.Authenticate(request, nil); err != nil {
+		t.Fatal(err)
+	}
+	changed := request.Clone(context.Background())
+	changed.URL.RawQuery = "name=a%20b"
+	if _, err := authenticator.Authenticate(changed, nil); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("space replaced signed plus: %v", err)
 	}
 }
 
@@ -197,6 +223,10 @@ func TestSignAndAuthenticate(t *testing.T) {
 
 	mutations := []func(*http.Request){
 		func(req *http.Request) { req.Header.Set("x-amz-date", "bad") },
+		func(req *http.Request) { req.Header.Add("x-amz-date", "bad") },
+		func(req *http.Request) { req.Header.Add("x-amz-content-sha256", "bad") },
+		func(req *http.Request) { req.Header.Add("x-amz-security-token", "bad") },
+		func(req *http.Request) { req.Header.Add("Authorization", "bad") },
 		func(req *http.Request) { req.Header.Set("x-amz-security-token", "bad") },
 		func(req *http.Request) { req.Header.Set("x-amz-unsigned", "value") },
 		func(req *http.Request) { req.Header.Set("Authorization", "bad") },

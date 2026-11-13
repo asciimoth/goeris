@@ -148,7 +148,7 @@ func canonicalRequest(request *http.Request, payloadHash string) (string, string
 	}
 	signedHeaders := strings.Join(names, ";")
 	canonical := request.Method + "\n" + canonicalURI(request.URL.EscapedPath()) + "\n" +
-		canonicalQuery(request.URL.Query()) + "\n" + headers.String() + "\n" + signedHeaders + "\n" + payloadHash
+		canonicalRawQuery(request.URL.RawQuery) + "\n" + headers.String() + "\n" + signedHeaders + "\n" + payloadHash
 	return canonical, signedHeaders
 }
 
@@ -257,6 +257,13 @@ func canonicalQuery(values url.Values) string {
 	return strings.Join(encoded, "&")
 }
 
+func canonicalRawQuery(raw string) string {
+	// ParseQuery applies form encoding, where '+' means a space. In an S3
+	// request target, '+' is a literal byte and must be signed as %2B.
+	values, _ := url.ParseQuery(strings.ReplaceAll(raw, "+", "%2B"))
+	return canonicalQuery(values)
+}
+
 func uriEncode(value string, encodeSlash bool) string {
 	const hexadecimal = "0123456789ABCDEF"
 	var encoded strings.Builder
@@ -336,11 +343,18 @@ func (authenticator V4Authenticator) Authenticate(request *http.Request, payload
 	clone := *request
 	clone.Header = headers
 	request = &clone
-	parsed, err := parseAuthorization(request.Header.Get("Authorization"))
+	authorizationValues := request.Header.Values("Authorization")
+	dateValues := request.Header.Values("x-amz-date")
+	hashValues := request.Header.Values("x-amz-content-sha256")
+	tokenValues := request.Header.Values("x-amz-security-token")
+	if len(authorizationValues) != 1 || len(dateValues) != 1 || len(hashValues) != 1 || len(tokenValues) > 1 {
+		return "", ErrAuthentication
+	}
+	parsed, err := parseAuthorization(authorizationValues[0])
 	if err != nil {
 		return "", err
 	}
-	date, err := time.Parse(amzDateFormat, request.Header.Get("x-amz-date"))
+	date, err := time.Parse(amzDateFormat, dateValues[0])
 	if err != nil {
 		return "", ErrAuthentication
 	}
@@ -361,10 +375,14 @@ func (authenticator V4Authenticator) Authenticate(request *http.Request, payload
 	if err != nil || !credentials.Valid() || credentials.AccessKey != parsed.accessKey {
 		return "", ErrAuthentication
 	}
-	if !validSessionToken(request.Header.Get("x-amz-security-token"), credentials.SessionToken) {
+	token := ""
+	if len(tokenValues) == 1 {
+		token = tokenValues[0]
+	}
+	if !validSessionToken(token, credentials.SessionToken) {
 		return "", ErrAuthentication
 	}
-	if request.Header.Get("x-amz-content-sha256") != sha256Hex(payload) {
+	if hashValues[0] != sha256Hex(payload) {
 		return "", ErrAuthentication
 	}
 	canonical, _, err := canonicalRequestForVerification(request, parsed.signedHeaders)
@@ -454,6 +472,6 @@ func canonicalRequestForVerification(request *http.Request, names string) (strin
 	}
 	payloadHash := request.Header.Get("x-amz-content-sha256")
 	canonical := request.Method + "\n" + canonicalURI(request.URL.EscapedPath()) + "\n" +
-		canonicalQuery(request.URL.Query()) + "\n" + headers.String() + "\n" + names + "\n" + payloadHash
+		canonicalRawQuery(request.URL.RawQuery) + "\n" + headers.String() + "\n" + names + "\n" + payloadHash
 	return canonical, names, nil
 }
