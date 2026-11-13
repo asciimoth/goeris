@@ -115,7 +115,12 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusBadRequest, "InvalidRequest", "The request body is missing.")
 		return
 	}
-	limit := int64(eris.BlockSize32KiB) + 1
+	maxSize := int64(eris.BlockSize32KiB)
+	if request.ContentLength > maxSize {
+		writeS3Error(writer, http.StatusRequestEntityTooLarge, "EntityTooLarge", "The block is too large.")
+		return
+	}
+	limit := maxSize + 1
 	block, err := io.ReadAll(io.LimitReader(request.Body, limit))
 	if err != nil {
 		writeS3Error(writer, http.StatusBadRequest, "InvalidRequest", "The request body could not be read.")

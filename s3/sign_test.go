@@ -658,6 +658,7 @@ func TestSigV4RejectsInvalidRequestTarget(t *testing.T) {
 		{"host with userinfo", func(request *http.Request) { request.Host = "user@example" }},
 		{"host with ambiguous port", func(request *http.Request) { request.Host = "example:1:2" }},
 		{"unicode host", func(request *http.Request) { request.Host = "bücher.example" }},
+		{"punctuated host", func(request *http.Request) { request.Host = "example\"evil" }},
 		{"query space", func(request *http.Request) { request.URL.RawQuery = "a=b c" }},
 		{"query newline", func(request *http.Request) { request.URL.RawQuery = "a=b\n" }},
 		{"query fragment", func(request *http.Request) { request.URL.RawQuery = "a=b#c" }},

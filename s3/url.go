@@ -15,8 +15,9 @@ type StoreURL struct {
 	bucket string
 }
 
-// ParseStoreURL parses a canonical s3://ENDPOINT/BUCKET/ URL. ENDPOINT can
-// include a port. Bucket names are restricted to one non-empty path segment.
+// ParseStoreURL parses a canonical s3://ENDPOINT/BUCKET/ URL. ENDPOINT is an
+// ASCII hostname or IP address and can include a port. Bucket names are
+// restricted to one non-empty path segment.
 func ParseStoreURL(text string) (StoreURL, error) {
 	parsed, err := url.Parse(text)
 	if err != nil || parsed.Scheme != "s3" || parsed.Host == "" || parsed.User != nil ||
@@ -45,6 +46,17 @@ func validEndpointHost(parsed *url.URL) bool {
 	if parsed.Hostname() == "" || invalidPort(parsed) ||
 		(!strings.HasPrefix(parsed.Host, "[") && strings.Contains(parsed.Hostname(), ":")) {
 		return false
+	}
+	// net/url accepts punctuation in a reg-name that HTTP clients and proxies
+	// can interpret differently. Permit common ASCII hostname characters.
+	if !strings.HasPrefix(parsed.Host, "[") {
+		for _, char := range parsed.Hostname() {
+			if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' ||
+				char >= '0' && char <= '9' || char == '.' || char == '-' || char == '_' {
+				continue
+			}
+			return false
+		}
 	}
 	// Keep the signed Host value equal to the authority sent on the wire.
 	// Unicode hostnames can be converted to IDNA names by an HTTP client.

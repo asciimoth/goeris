@@ -65,6 +65,7 @@ func TestStoreURLErrors(t *testing.T) {
 		"s3://s3.example/eris/#x", "s3://s3.example:/eris/", "s3://s3.example:0/eris/",
 		"s3://s3.example:65536/eris/", "s3://s3.example/bad bucket/", "s3://s3.example/bücket/",
 		"s3://s3.example:1:2/eris/", "s3://bücher.example/eris/",
+		"s3://example\"evil/eris/", "s3://example;evil/eris/", "s3://example]evil/eris/",
 		"S3://s3.example/eris/",
 	}
 	for _, text := range invalid {

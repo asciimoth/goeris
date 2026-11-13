@@ -183,6 +183,12 @@ func TestHandlerWriteChecks(t *testing.T) {
 			request.Body = io.NopCloser(bytes.NewReader(make([]byte, int(eris.BlockSize32KiB)+1)))
 			return request
 		}, 413},
+		{"declared too large", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
+			request := base()
+			request.ContentLength = int64(eris.BlockSize32KiB) + 1
+			request.Body = io.NopCloser(errorReader{sentinel})
+			return request
+		}, 413},
 		{"body error", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Body = io.NopCloser(errorReader{sentinel})
