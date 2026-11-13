@@ -124,6 +124,13 @@ checks write permission and critical options before accepting fragments and
 rejects repeated Block1, Block2, Size1, and Size2 options. Requests for other
 paths go directly to `Next`; that handler controls its own transfer policy.
 
+Reassembled bodies cannot exceed 32 KiB, even if `MaxBodySize` is larger.
+Invalid reference queries, content formats, and size hints are rejected before
+upload fragments reserve transfer state. GET validation also applies to cached
+download fragments. Clients limit response bodies to 32 KiB and response options
+to 64 KiB, counting eight bytes per option in addition to its value, before
+reassembly copies them. Discovery response parsing uses the same option limit.
+
 The `link` and `magnet` packages implement the
 [ERIS link file](specs/eer/linkfile/index.md) and
 [ERIS Magnet URI](specs/eer/magnet-uri/index.md) recommendations.

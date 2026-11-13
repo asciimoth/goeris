@@ -69,3 +69,33 @@ func TestHandlersIgnoreUnknownElectiveOptions(t *testing.T) {
 		t.Fatalf("discovery with elective option: %s", response.Code)
 	}
 }
+
+func TestResponseMetadataLimits(t *testing.T) {
+	block, ref := makeBlock(int(eris.BlockSize1KiB), 22)
+	for _, options := range [][]protocol.Option{
+		{protocol.NewOption(65000, make([]byte, MaxResponseOptionSize))},
+		make([]protocol.Option, MaxResponseOptionSize/8+1),
+		{protocol.UintOption(protocol.OptionContentFormat, 42), protocol.UintOption(protocol.OptionContentFormat, 42)},
+		{protocol.NewOption(protocol.OptionContentFormat, []byte{1, 0, 0})},
+	} {
+		calls := 0
+		client, err := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
+			calls++
+			fragment, _ := (protocol.Block{More: true, Size: 16}).Option(protocol.OptionBlock2)
+			return &protocol.Message{Code: protocol.Content, Options: append(options, fragment), Payload: block[:16]}, nil
+		}), mustStore(t, "coap://example/"), ClientConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.GetBlock(ref); err == nil {
+			t.Fatal("invalid response metadata accepted")
+		}
+		if calls != 1 {
+			t.Fatalf("invalid response caused %d requests", calls)
+		}
+	}
+	response := &protocol.Message{Options: []protocol.Option{protocol.NewOption(65000, make([]byte, MaxResponseOptionSize-8))}}
+	if err := validateResponseOptions(response); err != nil {
+		t.Fatalf("metadata at limit rejected: %v", err)
+	}
+}

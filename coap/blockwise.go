@@ -96,13 +96,28 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 		}
 		seen[option.Number] = true
 	}
-	if _, _, err := oneUintOption(request, protocol.OptionSize1); err != nil {
+	if size, present, err := oneUintOption(request, protocol.OptionSize1); err != nil || present && size != uint32(eris.BlockSize1KiB) && size != uint32(eris.BlockSize32KiB) {
 		return &protocol.Message{Code: protocol.BadRequest}, nil
 	}
 	// GET bodies are not supported. Reject fragments before retaining them.
 	if request.Code == protocol.GET {
 		if _, present := request.Option(protocol.OptionBlock1); present {
 			return &protocol.Message{Code: protocol.BadOption}, nil
+		}
+		if len(request.Payload) != 0 {
+			return &protocol.Message{Code: protocol.BadRequest}, nil
+		}
+	}
+	// Check application metadata before a fragment can reserve a transfer
+	// slot or a continuation can read a cached response.
+	if request.Code == protocol.GET || len(request.URIQueries()) != 0 {
+		if _, err := parseReferenceQuery(request); err != nil {
+			return &protocol.Message{Code: protocol.BadRequest}, nil
+		}
+	}
+	if request.Code == protocol.PUT {
+		if err := validateContentFormat(request, ContentFormatOctetStream); err != nil {
+			return &protocol.Message{Code: protocol.BadRequest}, nil
 		}
 	}
 	if len(request.Payload) > int(eris.BlockSize32KiB) {

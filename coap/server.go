@@ -54,11 +54,12 @@ func (handler Handler) Validate() error {
 
 // BlockWise wraps handler with complete-body Block1 and Block2 support. A zero
 // MaxBodySize limits reassembled bodies to the largest valid block size.
+// Larger limits are reduced to that size.
 func (handler Handler) BlockWise(config protocol.BlockWiseConfig) (*BlockWiseHandler, error) {
 	if err := handler.Validate(); err != nil {
 		return nil, err
 	}
-	if config.MaxBodySize == 0 {
+	if config.MaxBodySize == 0 || config.MaxBodySize > int(eris.BlockSize32KiB) {
 		config.MaxBodySize = int(eris.BlockSize32KiB)
 	}
 	return newBlockWiseHandler(handler, config)

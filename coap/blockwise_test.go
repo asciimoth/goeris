@@ -333,3 +333,70 @@ func TestBlockWiseRejectsInvalidBodyMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestBlockWiseRejectsMetadataBeforeKeepingState(t *testing.T) {
+	base := uploadFragment(t, 1, 0)
+	for _, request := range []*protocol.Message{
+		replaceOption(base, protocol.StringOption(protocol.OptionURIQuery, "invalid")),
+		replaceOption(base, protocol.UintOption(protocol.OptionContentFormat, 0)),
+		addOption(base, protocol.UintOption(protocol.OptionContentFormat, ContentFormatOctetStream)),
+		replaceOption(base, protocol.UintOption(protocol.OptionSize1, 2048)),
+	} {
+		handler, err := (Handler{Blocks: make(eris.BlockSet), AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response := serve(t, handler, request); response.Code != protocol.BadRequest {
+			t.Fatalf("invalid metadata: %s", response.Code)
+		}
+		if len(handler.transfers) != 0 {
+			t.Fatal("invalid metadata retained transfer state")
+		}
+	}
+}
+
+func TestBlockWiseValidatesCachedDownloadRequests(t *testing.T) {
+	block, ref := makeBlock(int(eris.BlockSize32KiB), 5)
+	handler, err := (Handler{Blocks: eris.BlockSet{ref: block}}).BlockWise(protocol.BlockWiseConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := NewGetRequest(mustStore(t, "coap://example/"), ref, RequestConfig{})
+	serve(t, handler, request)
+	option, _ := (protocol.Block{Number: 1, Size: 1024}).Option(protocol.OptionBlock2)
+	request = addOption(request, option)
+	withBody := request.Clone()
+	withBody.Payload = []byte{1}
+	for _, invalid := range []*protocol.Message{withBody, addOption(request, protocol.UintOption(protocol.OptionSize1, 7))} {
+		if response := serve(t, handler, invalid); response.Code != protocol.BadRequest {
+			t.Fatalf("invalid cached download request: %s", response.Code)
+		}
+	}
+	if response := serve(t, handler, request); response.Code != protocol.Content {
+		t.Fatalf("valid continuation: %s", response.Code)
+	}
+}
+
+func TestBlockWiseBodyLimitCannotExceedERISBlock(t *testing.T) {
+	handler, err := (Handler{Blocks: make(eris.BlockSet), AllowPut: true}).BlockWise(protocol.BlockWiseConfig{MaxBodySize: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for number := uint32(0); number <= 32; number++ {
+		option, _ := (protocol.Block{Number: number, More: true, Size: 1024}).Option(protocol.OptionBlock1)
+		request := &protocol.Message{Code: protocol.PUT, Options: []protocol.Option{
+			protocol.StringOption(protocol.OptionURIPath, blocksSegment), option,
+		}, Payload: make([]byte, 1024)}
+		response := serve(t, handler, request)
+		want := protocol.Continue
+		if number == 32 {
+			want = protocol.RequestEntityTooLarge
+		}
+		if response.Code != want {
+			t.Fatalf("fragment %d: %s, want %s", number, response.Code, want)
+		}
+	}
+	if len(handler.transfers) != 0 {
+		t.Fatal("oversized upload retained state")
+	}
+}

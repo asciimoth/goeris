@@ -21,7 +21,8 @@ var (
 	// ErrUnexpectedContentFormat means that a response does not have the
 	// content format required by its resource.
 	ErrUnexpectedContentFormat = errors.New("eris coap: unexpected content format")
-	// ErrResponseTooLarge means that a response is larger than an ERIS block.
+	// ErrResponseTooLarge means that a response body exceeds the ERIS block
+	// limit or its options exceed MaxResponseOptionSize.
 	ErrResponseTooLarge = errors.New("eris coap: response is too large")
 	// ErrNoHopLimit means that a request cannot be forwarded because it has no
 	// Hop-Limit option.
