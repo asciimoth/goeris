@@ -75,6 +75,9 @@ func (handler Handler) ServeCOAP(ctx context.Context, request *protocol.Message)
 	if response, rejected := rejectCriticalOptions(request); rejected {
 		return response, nil
 	}
+	if _, present := request.Option(protocol.OptionProxyURI); present {
+		return &protocol.Message{Code: protocol.BadOption}, nil
+	}
 	if handler.Blocks == nil {
 		return &protocol.Message{Code: protocol.InternalServerError}, nil
 	}

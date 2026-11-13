@@ -302,6 +302,9 @@ func (handler DiscoveryHandler) ServeCOAP(ctx context.Context, request *protocol
 	if response, rejected := rejectCriticalOptions(request); rejected {
 		return response, nil
 	}
+	if _, present := request.Option(protocol.OptionProxyURI); present {
+		return &protocol.Message{Code: protocol.BadOption}, nil
+	}
 	if err := validateHopLimit(request); err != nil {
 		return &protocol.Message{Code: protocol.BadRequest}, nil
 	}

@@ -74,6 +74,9 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 	if response, rejected := rejectCriticalOptions(request); rejected {
 		return response, nil
 	}
+	if _, present := request.Option(protocol.OptionProxyURI); present {
+		return &protocol.Message{Code: protocol.BadOption}, nil
+	}
 	if request.Code != protocol.GET && request.Code != protocol.PUT {
 		return &protocol.Message{Code: protocol.MethodNotAllowed}, nil
 	}

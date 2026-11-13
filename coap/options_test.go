@@ -72,6 +72,39 @@ func TestHandlersIgnoreUnknownElectiveOptions(t *testing.T) {
 	}
 }
 
+func TestOriginHandlersRejectProxyURI(t *testing.T) {
+	block, ref := makeBlock(int(eris.BlockSize1KiB), 24)
+	store := mustStore(t, "coap://example/")
+	put, _ := NewPutRequest(store, block, RequestConfig{})
+	get, _ := NewGetRequest(store, ref, RequestConfig{})
+	blocks := make(eris.BlockSet)
+	wrapped, err := (Handler{Blocks: blocks, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		handler protocol.Handler
+		request *protocol.Message
+	}{
+		{"store PUT", Handler{Blocks: blocks, AllowPut: true}, put},
+		{"store GET", Handler{Blocks: blocks}, get},
+		{"block-wise PUT", wrapped, put},
+		{"block-wise fragment", wrapped, uploadFragment(t, 24, 0)},
+		{"discovery", DiscoveryHandler{}, NewDiscoveryRequest()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := addOption(test.request, protocol.StringOption(protocol.OptionProxyURI, "coap://other.example/blocks"))
+			if response := serve(t, test.handler, request); response.Code != protocol.BadOption {
+				t.Fatalf("response = %s, want BadOption", response.Code)
+			}
+			if len(blocks) != 0 || len(wrapped.transfers) != 0 {
+				t.Fatal("proxy request reached storage or retained transfer state")
+			}
+		})
+	}
+}
+
 func TestResponseMetadataLimits(t *testing.T) {
 	block, ref := makeBlock(int(eris.BlockSize1KiB), 22)
 	for _, options := range [][]protocol.Option{
