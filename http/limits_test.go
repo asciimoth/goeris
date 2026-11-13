@@ -5,10 +5,54 @@ import (
 	"context"
 	nethttp "net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/asciimoth/goeris"
 )
+
+func TestHandlerLimitsRangeCount(t *testing.T) {
+	capability, blocks, _ := testData(t)
+	for _, urn := range []string{capability.String(), capability.Root.Reference.URN()} {
+		for _, method := range []string{nethttp.MethodGet, nethttp.MethodHead} {
+			for _, count := range []int{1, 16, 17, 1024} {
+				calls := 0
+				handler := Handler{Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
+					calls++
+					return blocks.GetBlock(ref)
+				})}
+				request := httptest.NewRequest(method, N2RPath+"?"+urn, nil)
+				request.Header.Set("Range", "bytes=0-0"+strings.Repeat(",0-0", count-1))
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, request)
+				if count <= 16 {
+					if recorder.Code != nethttp.StatusPartialContent {
+						t.Fatalf("%s count %d: status %d", method, count, recorder.Code)
+					}
+				} else if recorder.Code != nethttp.StatusRequestedRangeNotSatisfiable || calls != 0 || recorder.Body.Len() != 0 {
+					t.Fatalf("%s count %d: status %d, source calls %d, body bytes %d", method, count, recorder.Code, calls, recorder.Body.Len())
+				}
+			}
+		}
+	}
+}
+
+func TestHandlerCountsRangesAcrossHeaderFields(t *testing.T) {
+	capability, _, _ := testData(t)
+	handler := Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) {
+		t.Fatal("excessive ranges accessed the block source")
+		return nil, nil
+	})}
+	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
+	for range 2 {
+		request.Header.Add("Range", "bytes=0-0"+strings.Repeat(",0-0", 8))
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != nethttp.StatusRequestedRangeNotSatisfiable {
+		t.Fatalf("status %d; want 416", recorder.Code)
+	}
+}
 
 func TestHandlerContentLimit(t *testing.T) {
 	capability, blocks, content := testData(t)

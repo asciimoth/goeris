@@ -439,7 +439,7 @@ func TestClientContentBodyOwnership(t *testing.T) {
 		return response, nil
 	}), base)
 	body, err := client.OpenContent(context.Background(), capability)
-	if err != nil || body != successBody || successBody.closed {
+	if err != nil || body == nil || successBody.closed {
 		t.Fatalf("OpenContent() = %#v, %v; closed = %v", body, err, successBody.closed)
 	}
 	if err := body.Close(); err != nil || !successBody.closed {

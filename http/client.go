@@ -39,6 +39,24 @@ type requestError struct{ cause error }
 func (err *requestError) Error() string { return "eris http: request failed" }
 func (err *requestError) Unwrap() error { return err.cause }
 
+// contentBody keeps transport and trailer errors out of application logs.
+type contentBody struct{ io.ReadCloser }
+
+func (body contentBody) Read(buffer []byte) (int, error) {
+	n, err := body.ReadCloser.Read(buffer)
+	if err != nil && err != io.EOF {
+		err = &requestError{cause: err}
+	}
+	return n, err
+}
+
+func (body contentBody) Close() error {
+	if err := body.ReadCloser.Close(); err != nil {
+		return &requestError{cause: err}
+	}
+	return nil
+}
+
 // Client retrieves ERIS resources through a caller-supplied HTTP client.
 type Client struct {
 	httpClient HTTPClient
@@ -77,6 +95,7 @@ func (client *Client) NewRequest(ctx context.Context, urn string) (*nethttp.Requ
 
 // Resolve sends a GET request for urn. The caller must close the response body.
 // Resolve returns all HTTP statuses without interpreting them.
+// The response body is unchanged; its errors can contain untrusted text.
 // Request errors are wrapped to omit URLs and transport details from error
 // text. The original cause is available through errors.Is and errors.As.
 func (client *Client) Resolve(ctx context.Context, urn string) (*nethttp.Response, error) {
@@ -100,6 +119,7 @@ func (client *Client) GetBlock(ref eris.Reference) ([]byte, error) {
 
 // GetBlockContext retrieves and verifies one encrypted ERIS block.
 // It requires a 200 OK response with the application/octet-stream media type.
+// Request and body read errors omit transport text but retain their causes.
 func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error) {
 	response, err := client.Resolve(ctx, ref.URN())
 	if err != nil {
@@ -122,7 +142,7 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 	limit := int64(eris.BlockSize32KiB) + 1
 	block, err := io.ReadAll(io.LimitReader(response.Body, limit))
 	if err != nil {
-		return nil, err
+		return nil, &requestError{cause: err}
 	}
 	if int64(len(block)) == limit {
 		return nil, ErrResponseTooLarge
@@ -137,6 +157,7 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 // the returned body. OpenContent does not verify the decoded bytes.
 // Applications should prefer local decoding from verified blocks when
 // possible.
+// Body read and close errors omit transport text but retain their causes.
 func (client *Client) OpenContent(ctx context.Context, capability eris.Capability) (io.ReadCloser, error) {
 	if capability.Validate() != nil {
 		return nil, ErrInvalidURN
@@ -153,7 +174,7 @@ func (client *Client) OpenContent(ctx context.Context, capability eris.Capabilit
 		_ = response.Body.Close()
 		return nil, &ResponseError{StatusCode: response.StatusCode, Status: response.Status}
 	}
-	return response.Body, nil
+	return contentBody{response.Body}, nil
 }
 
 func cloneURL(input *url.URL) *url.URL {

@@ -19,6 +19,7 @@ import (
 // Callers can chain handlers for other URN types on the same endpoint.
 //
 // A nil Next handler is equivalent to net/http.NotFoundHandler.
+// Requests with more than 16 range entries receive HTTP 416 before block I/O.
 type Handler struct {
 	Blocks eris.BlockSource
 	Next   nethttp.Handler
@@ -39,6 +40,12 @@ func (handler Handler) ServeHTTP(writer nethttp.ResponseWriter, request *nethttp
 		writer.WriteHeader(nethttp.StatusMethodNotAllowed)
 		return
 	}
+	// ServeContent limits the sum of range lengths, but that does not limit
+	// multipart headers or repeated block fetches for many small ranges.
+	if tooManyRanges(request.Header.Values("Range")) {
+		writer.WriteHeader(nethttp.StatusRequestedRangeNotSatisfiable)
+		return
+	}
 	if handler.Blocks == nil {
 		writer.WriteHeader(nethttp.StatusInternalServerError)
 		return
@@ -48,6 +55,18 @@ func (handler Handler) ServeHTTP(writer nethttp.ResponseWriter, request *nethttp
 		return
 	}
 	handler.serveContent(writer, request)
+}
+
+func tooManyRanges(values []string) bool {
+	const maxRanges = 16
+	count := 0
+	for _, value := range values {
+		count += strings.Count(value, ",") + 1
+		if count > maxRanges {
+			return true
+		}
+	}
+	return false
 }
 
 func (handler Handler) serveBlock(writer nethttp.ResponseWriter, request *nethttp.Request) {

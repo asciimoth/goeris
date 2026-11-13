@@ -11,7 +11,8 @@
 // For untrusted requests, set Handler.MaxContentSize and configure server
 // timeouts, header limits, and concurrency limits. A zero MaxContentSize allows
 // unlimited decoded content. The handler scans the tree to find its size, even
-// for HEAD and range requests. Block sources must verify blocks as required by
+// for HEAD and range requests. Requests with more than 16 range entries receive
+// HTTP 416 before any block reads. Block sources must verify blocks as required by
 // eris.BlockSource. Sources that implement eris.ContextBlockSource can stop
 // pending reads when a request is canceled or a response write fails. Sources
 // without context support must bound their own read time.
@@ -25,7 +26,9 @@
 // capability contains a decryption key; remote decoding sends that key in the
 // URL query. Use a trusted resolver and protect request URLs in access logs.
 // Client wraps request errors to omit URLs and transport text from their Error
-// output. Unwrapped errors can still contain keys and untrusted server text.
+// output. GetBlock and OpenContent also wrap body errors. Resolve returns the
+// original response body. Its errors and all unwrapped errors can still contain
+// keys and untrusted server text.
 //
 // [ERIS over HTTP recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/http/index.md
 package http

@@ -227,6 +227,100 @@ func TestResponseErrorDoesNotExposeServerText(t *testing.T) {
 	}
 }
 
+func TestClientBodyErrorsDoNotExposeServerText(t *testing.T) {
+	capability, _, _ := testData(t)
+	base, _ := url.Parse("http://example.test")
+	bodyErr := errors.New("private server text\x1b[2J")
+	for _, decoded := range []bool{false, true} {
+		body := &failingBody{err: bodyErr}
+		client, err := NewClient(clientFunc(func(*nethttp.Request) (*nethttp.Response, error) {
+			res := response(nethttp.StatusOK, ContentType, nil)
+			res.Body = body
+			return res, nil
+		}), base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check := func(err error) {
+			t.Helper()
+			if !errors.Is(err, bodyErr) || strings.Contains(err.Error(), bodyErr.Error()) {
+				t.Errorf("decoded %v: unsafe body error: %v", decoded, err)
+			}
+		}
+		if decoded {
+			content, err := client.OpenContent(context.Background(), capability)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = io.ReadAll(content)
+			check(err)
+			check(content.Close())
+		} else {
+			block, err := client.GetBlock(capability.Root.Reference)
+			if block != nil {
+				t.Fatal("accepted a failed block read")
+			}
+			check(err)
+		}
+		if !body.closed {
+			t.Fatal("response body was not closed")
+		}
+	}
+}
+
+type failingBody struct {
+	err    error
+	closed bool
+}
+
+func TestClientRejectsMalformedTrailerWithoutExposingText(t *testing.T) {
+	capability, _, _ := testData(t)
+	const privateText = "private-server-details"
+	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		conn, writer, err := w.(nethttp.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = writer.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n" + privateText + "\r\n\r\n")
+		_ = writer.Flush()
+	}))
+	defer server.Close()
+	base, _ := url.Parse(server.URL)
+	httpClient := server.Client()
+	httpClient.Timeout = 5 * time.Second
+	client, err := NewClient(httpClient, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, decoded := range []bool{false, true} {
+		if decoded {
+			body, openErr := client.OpenContent(context.Background(), capability)
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			_, err = io.ReadAll(body)
+			_ = body.Close()
+		} else {
+			_, err = client.GetBlock(capability.Root.Reference)
+		}
+		if err == nil || strings.Contains(err.Error(), privateText) {
+			t.Fatalf("decoded %v: unsafe trailer error: %v", decoded, err)
+		}
+		cause := errors.Unwrap(err)
+		if cause == nil || !strings.Contains(cause.Error(), privateText) {
+			t.Fatalf("decoded %v: original trailer error is unavailable: %v", decoded, cause)
+		}
+	}
+}
+
+func (body *failingBody) Read([]byte) (int, error) { return 0, body.err }
+func (body *failingBody) Close() error {
+	body.closed = true
+	return body.err
+}
+
 func TestClientRequestErrorsDoNotExposeURLs(t *testing.T) {
 	capability, _, _ := testData(t)
 	transportErr := errors.New("untrusted transport details\x1b[2J")
