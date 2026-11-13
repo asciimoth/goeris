@@ -124,6 +124,7 @@ func TestHandlerRoutingAndReadErrors(t *testing.T) {
 		{"bad key", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/bad", 404},
 		{"extra path", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/a/b", 404},
 		{"query", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String() + "?acl", 400},
+		{"empty query marker", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String() + "?", 400},
 		{"nil store", Handler{Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 500},
 		{"missing", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 404},
 		{"source error", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, sentinel }), Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 500},

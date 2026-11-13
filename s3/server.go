@@ -49,8 +49,8 @@ func (handler Handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The handler configuration is invalid.")
 		return
 	}
-	if request.URL.RawQuery != "" {
-		writeS3Error(writer, http.StatusBadRequest, "InvalidRequest", "Query parameters are not supported.")
+	if request.URL.RawQuery != "" || request.URL.ForceQuery {
+		writeS3Error(writer, http.StatusBadRequest, "InvalidRequest", "Queries are not supported.")
 		return
 	}
 	ref, ok := handler.reference(request.URL.Path)

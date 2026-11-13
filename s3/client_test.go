@@ -279,6 +279,22 @@ func TestClientResponseErrors(t *testing.T) {
 	}
 }
 
+func TestClientRejectsPartialContent(t *testing.T) {
+	t.Parallel()
+	ref, block := testBlock(t)
+	client, err := NewClient(httpClientFunc(func(*http.Request) (*http.Response, error) {
+		return response(http.StatusPartialContent, bytes.NewReader(block)), nil
+	}), testStore(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.GetBlock(ref)
+	var responseErr *ResponseError
+	if !errors.As(err, &responseErr) || responseErr.StatusCode != http.StatusPartialContent {
+		t.Fatalf("partial GET = %v", err)
+	}
+}
+
 func TestClientPutResponses(t *testing.T) {
 	t.Parallel()
 	ref, block := testBlock(t)

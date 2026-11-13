@@ -112,7 +112,7 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 	if response.StatusCode == http.StatusNotFound {
 		return nil, eris.ErrMissingBlock
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
+	if response.StatusCode != http.StatusOK {
 		return nil, responseError(response)
 	}
 	limit := int64(eris.BlockSize32KiB) + 1
