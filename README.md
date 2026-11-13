@@ -84,6 +84,10 @@ for `*http.Client` so a redirected request cannot send a session token or PUT
 body to another host. Custom `HTTPClient` implementations must also stop
 redirects.
 
+The S3 handler rejects GET and HEAD requests with more than 16 range entries
+before storage access. This bounds the multipart response overhead for requests
+with many small ranges.
+
 The `coap` package implements [ERIS over CoAP](specs/eer/coap/index.md):
 
 - canonical `coap` and `coap+tcp` store URLs;

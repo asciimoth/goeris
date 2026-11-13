@@ -109,6 +109,40 @@ func TestHandlerRejectsInvalidStoredBlock(t *testing.T) {
 	}
 }
 
+func TestHandlerRangeLimit(t *testing.T) {
+	t.Parallel()
+	ref, block := testBlock(t)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		for _, test := range []struct {
+			name   string
+			values []string
+			status int
+			reads  int
+		}{
+			{"single", []string{"bytes=0-0"}, http.StatusPartialContent, 1},
+			{"at limit", []string{"bytes=" + strings.Repeat("0-0,", 15) + "0-0"}, http.StatusPartialContent, 1},
+			{"over limit", []string{"bytes=" + strings.Repeat("0-0,", 16) + "0-0"}, http.StatusRequestedRangeNotSatisfiable, 0},
+			{"empty ranges", []string{"bytes=" + strings.Repeat("-0,", 1023) + "-0"}, http.StatusRequestedRangeNotSatisfiable, 0},
+			{"multiple fields", []string{"bytes=" + strings.Repeat("0-0,", 15) + "0-0", "bytes=0-0"}, http.StatusRequestedRangeNotSatisfiable, 0},
+		} {
+			t.Run(method+"/"+test.name, func(t *testing.T) {
+				reads := 0
+				handler := Handler{Bucket: "blocks", Blocks: sourceFunc(func(eris.Reference) ([]byte, error) {
+					reads++
+					return block, nil
+				})}
+				request := httptest.NewRequest(method, "https://example/blocks/"+ref.String(), nil)
+				request.Header["Range"] = test.values
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, request)
+				if recorder.Code != test.status || reads != test.reads {
+					t.Fatalf("status %d, reads %d; want status %d, reads %d", recorder.Code, reads, test.status, test.reads)
+				}
+			})
+		}
+	}
+}
+
 func TestHandlerRoutingAndReadErrors(t *testing.T) {
 	t.Parallel()
 	ref, block := testBlock(t)

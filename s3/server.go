@@ -34,6 +34,8 @@ type Authorizer func(ctx context.Context, identity, method, bucket string, ref e
 // Handler serves one fixed bucket. GET and HEAD are public. PUT requires Auth,
 // public-read, and a Blocks value that also implements eris.BlockSink or
 // eris.ContextBlockSink. PUT is disabled unless AllowPut is true.
+// GET and HEAD requests with more than 16 range entries receive HTTP 416
+// before storage access.
 type Handler struct {
 	Blocks eris.BlockSource
 	Bucket string
@@ -88,6 +90,16 @@ func (handler Handler) reference(path string) (eris.Reference, bool) {
 }
 
 func (handler Handler) get(writer http.ResponseWriter, request *http.Request, ref eris.Reference) {
+	// ServeContent limits the sum of range lengths, but many small ranges
+	// can still produce a large response through multipart headers.
+	ranges := 0
+	for _, value := range request.Header.Values("Range") {
+		ranges += strings.Count(value, ",") + 1
+		if ranges > 16 {
+			writeS3Error(writer, http.StatusRequestedRangeNotSatisfiable, "InvalidRange", "Too many ranges were requested.")
+			return
+		}
+	}
 	block, err := handler.getBlock(request.Context(), ref)
 	if err != nil {
 		if errors.Is(err, eris.ErrMissingBlock) {
