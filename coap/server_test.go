@@ -21,10 +21,24 @@ type storeFunc struct {
 
 type wrongReferenceStore struct{ eris.BlockSet }
 
-func (wrongReferenceStore) PutBlock(_ []byte, expected ...eris.Reference) (eris.Reference, error) {
-	ref := expected[0]
+func (wrongReferenceStore) PutBlock(block []byte, _ ...eris.Reference) (eris.Reference, error) {
+	ref, err := eris.ReferenceOf(block)
+	if err != nil {
+		return eris.Reference{}, err
+	}
 	ref[0] ^= 1
 	return ref, nil
+}
+
+type permissiveStore struct{ writes *int }
+
+func (permissiveStore) GetBlock(eris.Reference) ([]byte, error) {
+	return nil, eris.ErrMissingBlock
+}
+
+func (store permissiveStore) PutBlock(block []byte, _ ...eris.Reference) (eris.Reference, error) {
+	(*store.writes)++
+	return eris.ReferenceOf(block)
 }
 
 func (store storeFunc) GetBlock(ref eris.Reference) ([]byte, error) { return store.get(ref) }
@@ -125,6 +139,8 @@ func TestHandlerGet(t *testing.T) {
 		{"missing", Handler{Path: []string{"store"}, Blocks: eris.BlockSet{}}, request, protocol.NotFound},
 		{"source error", Handler{Path: []string{"store"}, Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, errors.New("store") })}, request, protocol.InternalServerError},
 		{"invalid stored block", Handler{Path: []string{"store"}, Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrInvalidBlock })}, request, protocol.InternalServerError},
+		{"wrong stored content", Handler{Path: []string{"store"}, Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return bytes.Repeat([]byte{0}, 1024), nil })}, request, protocol.InternalServerError},
+		{"oversized stored block", Handler{Path: []string{"store"}, Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return make([]byte, int(eris.BlockSize32KiB)+1), nil })}, request, protocol.InternalServerError},
 		{"nil source", Handler{Path: []string{"store"}}, request, protocol.InternalServerError},
 		{"method", handler, func() *protocol.Message { clone := request.Clone(); clone.Code = protocol.DELETE; return clone }(), protocol.MethodNotAllowed},
 		{"nil request", handler, nil, protocol.BadRequest},
@@ -196,6 +212,14 @@ func TestHandlerPut(t *testing.T) {
 				t.Errorf("code = %s, want %s", got.Code, test.code)
 			}
 		})
+	}
+	writes := 0
+	unchecked := Handler{Blocks: permissiveStore{writes: &writes}, AllowPut: true}
+	if got := serve(t, unchecked, wrongRequest); got.Code != protocol.BadRequest || writes != 0 {
+		t.Fatalf("wrong reference: code = %s, writes = %d", got.Code, writes)
+	}
+	if got := serve(t, Handler{Blocks: wrongReferenceStore{make(eris.BlockSet)}, AllowPut: true}, base); got.Code != protocol.InternalServerError {
+		t.Fatalf("wrong returned reference without query: code = %s", got.Code)
 	}
 }
 

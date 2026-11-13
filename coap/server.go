@@ -72,6 +72,9 @@ func (handler Handler) ServeCOAP(ctx context.Context, request *protocol.Message)
 	if !matchesPath(request, handler.Path, blocksSegment) {
 		return handler.next(ctx, request)
 	}
+	if len(request.Token) > maxTokenSize {
+		return &protocol.Message{Code: protocol.BadRequest}, nil
+	}
 	if response, rejected := rejectCriticalOptions(request); rejected {
 		return response, nil
 	}
@@ -122,6 +125,9 @@ func (handler Handler) get(ctx context.Context, request *protocol.Message) *prot
 		}
 		return &protocol.Message{Code: protocol.InternalServerError}
 	}
+	if err := eris.VerifyBlock(block, ref); err != nil {
+		return &protocol.Message{Code: protocol.InternalServerError}
+	}
 	return &protocol.Message{
 		Code: protocol.Content,
 		Options: []protocol.Option{
@@ -162,6 +168,10 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 	if !handler.writable() {
 		return &protocol.Message{Code: protocol.Unauthorized}
 	}
+	actual, err := eris.ReferenceOf(request.Payload)
+	if err != nil || len(expected) == 1 && expected[0] != actual {
+		return &protocol.Message{Code: protocol.BadRequest}
+	}
 	ref, err := handler.putBlock(ctx, request.Payload, expected...)
 	if err != nil {
 		if errors.Is(err, eris.ErrMissingBlock) {
@@ -172,7 +182,7 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 		}
 		return &protocol.Message{Code: protocol.InternalServerError}
 	}
-	if len(expected) == 1 && ref != expected[0] {
+	if ref != actual {
 		return &protocol.Message{Code: protocol.InternalServerError}
 	}
 	return &protocol.Message{Code: protocol.Created, Payload: ref[:]}

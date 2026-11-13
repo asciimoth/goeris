@@ -299,6 +299,9 @@ func (handler DiscoveryHandler) ServeCOAP(ctx context.Context, request *protocol
 		}
 		return &protocol.Message{Code: protocol.NotFound}, nil
 	}
+	if len(request.Token) > maxTokenSize {
+		return &protocol.Message{Code: protocol.BadRequest}, nil
+	}
 	if response, rejected := rejectCriticalOptions(request); rejected {
 		return response, nil
 	}

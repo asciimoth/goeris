@@ -203,3 +203,34 @@ func TestOversizedTokensStopBeforeTransfer(t *testing.T) {
 		})
 	}
 }
+
+func TestDirectHandlersRejectOversizedTokens(t *testing.T) {
+	block, ref := makeBlock(int(eris.BlockSize1KiB), 25)
+	store := mustStore(t, "coap://example/")
+	get, _ := NewGetRequest(store, ref, RequestConfig{})
+	put, _ := NewPutRequest(store, block, RequestConfig{})
+	get.Token = make([]byte, maxTokenSize+1)
+	put.Token = make([]byte, maxTokenSize+1)
+	discovery := NewDiscoveryRequest()
+	discovery.Token = make([]byte, maxTokenSize+1)
+	called := false
+	blocks := storeFunc{
+		get: func(eris.Reference) ([]byte, error) { called = true; return block, nil },
+		put: func(eris.Reference, []byte) error { called = true; return nil },
+	}
+	for _, test := range []struct {
+		handler protocol.Handler
+		request *protocol.Message
+	}{
+		{Handler{Blocks: blocks, AllowPut: true}, get},
+		{Handler{Blocks: blocks, AllowPut: true}, put},
+		{DiscoveryHandler{}, discovery},
+	} {
+		if got := serve(t, test.handler, test.request); got.Code != protocol.BadRequest {
+			t.Fatalf("oversized token response = %s", got.Code)
+		}
+	}
+	if called {
+		t.Fatal("oversized token reached block storage")
+	}
+}
