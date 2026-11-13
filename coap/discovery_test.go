@@ -221,6 +221,41 @@ func TestDiscoveryRejectsPartialResponses(t *testing.T) {
 	}
 }
 
+func TestDiscoveryResponseBodySize(t *testing.T) {
+	t.Parallel()
+	payload, err := MarshalAdvertisements([]Advertisement{{Target: "/"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		options []protocol.Option
+		valid   bool
+	}{
+		{"no size", nil, true},
+		{"exact size", []protocol.Option{protocol.UintOption(protocol.OptionSize2, uint32(len(payload)))}, true},
+		{"truncated", []protocol.Option{protocol.UintOption(protocol.OptionSize2, uint32(len(payload)+1))}, false},
+		{"excess data", []protocol.Option{protocol.UintOption(protocol.OptionSize2, uint32(len(payload)-1))}, false},
+		{"empty declared", []protocol.Option{protocol.UintOption(protocol.OptionSize2, 0)}, false},
+		{"block too small", []protocol.Option{protocol.UintOption(protocol.OptionBlock2, 0)}, false},
+		{"complete block", []protocol.Option{protocol.UintOption(protocol.OptionBlock2, 6)}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := &protocol.Message{Code: protocol.Content, Payload: payload, Options: append([]protocol.Option{
+				protocol.UintOption(protocol.OptionContentFormat, protocol.ContentFormatLinkFormat),
+			}, test.options...)}
+			ads, err := ParseDiscoveryResponse(response)
+			if test.valid {
+				if err != nil || len(ads) != 1 {
+					t.Fatalf("complete response: advertisements = %v, error = %v", ads, err)
+				}
+			} else if !errors.Is(err, ErrInvalidAdvertisement) {
+				t.Fatalf("invalid response: error = %v", err)
+			}
+		})
+	}
+}
+
 func TestDiscoveryDocumentLimit(t *testing.T) {
 	prefix := []byte(`</>;if="http://purl.org/eris/coap"`)
 	data := make([]byte, MaxDiscoveryDocumentSize+1)

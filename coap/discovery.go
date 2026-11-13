@@ -262,9 +262,12 @@ func ParseDiscoveryResponse(response *protocol.Message) ([]Advertisement, error)
 	}
 	if option, present := response.Option(protocol.OptionBlock2); present {
 		block, err := protocol.ParseBlock(option.Value)
-		if err != nil || block.Number != 0 || block.More {
+		if err != nil || block.Number != 0 || block.More || len(response.Payload) > block.Size {
 			return nil, ErrInvalidAdvertisement
 		}
+	}
+	if size, present, err := oneUintOption(response, protocol.OptionSize2); err != nil || present && uint64(size) != uint64(len(response.Payload)) {
+		return nil, ErrInvalidAdvertisement
 	}
 	format, present, err := oneUintOption(response, protocol.OptionContentFormat)
 	if err != nil || !present || format != protocol.ContentFormatLinkFormat {
