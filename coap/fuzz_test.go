@@ -172,11 +172,15 @@ func FuzzBlockWiseHandler(f *testing.F) {
 	f.Add(uint8(protocol.PUT), []byte{0x0d}, []byte(nil), bytes.Repeat([]byte{1}, 512), false)
 	f.Add(uint8(protocol.PUT), []byte{0x15}, []byte(nil), bytes.Repeat([]byte{1}, 512), false)
 	f.Add(uint8(protocol.GET), []byte(nil), []byte{6}, []byte(nil), true)
+	f.Add(uint8(protocol.GET), []byte(nil), []byte{6}, []byte(nil), false)
+	f.Add(uint8(protocol.GET), []byte(nil), []byte(nil), []byte(nil), false)
 	f.Fuzz(func(t *testing.T, code uint8, block1, block2, payload []byte, duplicate bool) {
 		if len(payload) > int(eris.BlockSize32KiB)+1 {
 			payload = payload[:int(eris.BlockSize32KiB)+1]
 		}
 		blocks := make(eris.BlockSet)
+		download, reference := makeBlock(int(eris.BlockSize32KiB), 7)
+		blocks[reference] = download
 		handler, err := (Handler{Blocks: blocks, AllowPut: true, MaxTransfers: 2}).BlockWise(protocol.BlockWiseConfig{})
 		if err != nil {
 			t.Fatal(err)
@@ -188,6 +192,9 @@ func FuzzBlockWiseHandler(f *testing.F) {
 					protocol.StringOption(protocol.OptionURIPath, blocksSegment),
 					protocol.NewOption(65000, []byte{byte(i % 3)}),
 				},
+			}
+			if request.Code == protocol.GET {
+				request.Options = append(request.Options, protocol.NewOption(protocol.OptionURIQuery, reference[:]))
 			}
 			for _, option := range []protocol.Option{
 				protocol.NewOption(protocol.OptionBlock1, block1),
@@ -207,6 +214,23 @@ func FuzzBlockWiseHandler(f *testing.F) {
 			}
 			if len(handler.transfers) > 2 {
 				t.Fatal("transfer state exceeded the configured limit")
+			}
+			if response.Code == protocol.Content {
+				option, present := response.Option(protocol.OptionBlock2)
+				if !present {
+					t.Fatal("large download has no Block2 option")
+				}
+				block, err := protocol.ParseBlock(option.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				start := block.Offset()
+				end := start + uint64(len(response.Payload))
+				if end > uint64(len(download)) || len(response.Payload) > block.Size ||
+					block.More != (end < uint64(len(download))) ||
+					!bytes.Equal(response.Payload, download[start:end]) {
+					t.Fatal("download fragment does not match the stored block")
+				}
 			}
 		}
 		for ref, block := range blocks {
