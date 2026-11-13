@@ -32,6 +32,10 @@ func (wrongReferenceStore) PutBlock(block []byte, ttl eris.TTL, _ ...eris.Refere
 	return ref, nil
 }
 
+func (store wrongReferenceStore) PutBlockContext(_ context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+	return store.PutBlock(block, ttl, expected...)
+}
+
 type permissiveStore struct{ writes *int }
 
 func (permissiveStore) GetBlock(eris.Reference, eris.TTL) ([]byte, error) {

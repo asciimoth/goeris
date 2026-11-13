@@ -12,7 +12,8 @@ type BlockSource interface {
 	GetBlock(ref Reference, ttl TTL) ([]byte, error)
 }
 
-// ContextBlockSource retrieves blocks with cancellation and deadline support.
+// ContextBlockSource retrieves blocks with a context. Sources that can block
+// should honor cancellation and deadlines. In-memory stores may ignore ctx.
 // It must return only blocks that match the requested reference. Handlers use
 // it when a BlockSource also implements this interface.
 // The ttl argument has the same contract as in BlockSource.
@@ -31,8 +32,9 @@ type BlockSink interface {
 	PutBlock(block []byte, ttl TTL, expected ...Reference) (Reference, error)
 }
 
-// ContextBlockSink stores blocks with cancellation and deadline support and
-// returns their computed reference. At most one expected reference can be
+// ContextBlockSink stores blocks with a context and returns their computed
+// reference. Sinks that can block should honor cancellation and deadlines.
+// In-memory stores may ignore ctx. At most one expected reference can be
 // supplied. If it does not match the block, the sink must return ErrInvalidBlock
 // without storing the block. A sink must copy block if it keeps the data after
 // PutBlockContext returns. Handlers use this interface when a BlockSource also

@@ -200,6 +200,9 @@ GetBlockContext(ctx context.Context, ref Reference, ttl TTL) ([]byte, error)
 PutBlockContext(ctx context.Context, block []byte, ttl TTL, expected ...Reference) (Reference, error)
 ```
 
+`BlockSet` implements the context methods by calling its regular methods. It
+ignores the context because its operations complete in memory.
+
 TTL limits network forwarding along each request path. It does not set a time
 limit or block expiry. Use `eris.NoTTL` (`0`) when the caller does not specify a
 limit. Terminal stores, such as `BlockSet`, may ignore TTL. Middleware must pass
