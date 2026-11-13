@@ -14,7 +14,7 @@ import (
 // endpoint-wide root store.
 //
 // Handler expects complete request bodies. Use BlockWise to add RFC 7959
-// reassembly and response segmentation. Direct PUT requests with a Block1
+// reassembly and response segmentation. Direct GET and PUT requests with a Block1
 // option are rejected with 4.02 Bad Option. Callers must not mutate Path or
 // the handler fields while ServeCOAP is active.
 // Unsupported critical options are rejected before storage is called.
@@ -99,6 +99,9 @@ func (handler Handler) next(ctx context.Context, request *protocol.Message) (*pr
 }
 
 func (handler Handler) get(ctx context.Context, request *protocol.Message) *protocol.Message {
+	if _, present := request.Option(protocol.OptionBlock1); present {
+		return &protocol.Message{Code: protocol.BadOption}
+	}
 	if len(request.Payload) != 0 {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}

@@ -329,3 +329,21 @@ func TestBlockWiseClientHandler(t *testing.T) {
 		}
 	}
 }
+
+func TestHandlerRejectsBlock1GetBeforeStorage(t *testing.T) {
+	_, ref := makeBlock(int(eris.BlockSize1KiB), 23)
+	handler := Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) {
+		t.Fatal("Block1 GET reached storage")
+		return nil, nil
+	})}
+	request, err := NewGetRequest(mustStore(t, "coap://example/"), ref, RequestConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range [][]byte{nil, {7}, {8}, {0xff, 0xff, 0xff, 0xff}} {
+		fragment := addOption(request, protocol.NewOption(protocol.OptionBlock1, value))
+		if response := serve(t, handler, fragment); response.Code != protocol.BadOption {
+			t.Fatalf("Block1 %x: response = %s", value, response.Code)
+		}
+	}
+}

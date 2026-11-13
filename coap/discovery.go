@@ -12,6 +12,10 @@ import (
 )
 
 const (
+	// MaxDiscoveryDocumentSize limits discovery input before parsing allocates
+	// links and attributes. Callers must also limit transport reassembly.
+	MaxDiscoveryDocumentSize = 1 << 20
+
 	// InterfaceDescription identifies a block-store link.
 	InterfaceDescription = "http://purl.org/eris/coap"
 	// CorePath is the CoRE Resource Discovery path.
@@ -143,7 +147,11 @@ func MarshalAdvertisements(advertisements []Advertisement) ([]byte, error) {
 
 // ParseAdvertisements parses and returns links with the required interface
 // description. It ignores unrelated links and copies all returned values.
+// Documents larger than MaxDiscoveryDocumentSize are rejected.
 func ParseAdvertisements(data []byte) ([]Advertisement, error) {
+	if len(data) > MaxDiscoveryDocumentSize {
+		return nil, errors.Join(ErrInvalidAdvertisement, ErrResponseTooLarge)
+	}
 	links, err := linkformat.Parse(data)
 	if err != nil {
 		return nil, errors.Join(ErrInvalidAdvertisement, err)
@@ -173,9 +181,14 @@ func ParseAdvertisements(data []byte) ([]Advertisement, error) {
 		if isProxy != (len(proxySchemes) > 0) {
 			return nil, ErrInvalidAdvertisement
 		}
-		advertisement := Advertisement{Target: link.Target, ProxySchemes: append([]string(nil), proxySchemes...)}
+		// Parser strings can refer to the complete document. Retain only the
+		// selected values, so unrelated links and attributes can be released.
+		advertisement := Advertisement{Target: strings.Clone(link.Target)}
+		for _, scheme := range proxySchemes {
+			advertisement.ProxySchemes = append(advertisement.ProxySchemes, strings.Clone(scheme))
+		}
 		if len(bases) == 1 {
-			advertisement.Base = bases[0]
+			advertisement.Base = strings.Clone(bases[0])
 		}
 		if err := advertisement.validate(); err != nil {
 			return nil, err
@@ -235,7 +248,8 @@ func NewDiscoveryRequest() *protocol.Message {
 }
 
 // ParseDiscoveryResponse validates and parses one complete discovery response.
-// Callers must reassemble block-wise responses before calling it.
+// Callers must reassemble block-wise responses before calling it and limit
+// reassembly to MaxDiscoveryDocumentSize bytes.
 func ParseDiscoveryResponse(response *protocol.Message) ([]Advertisement, error) {
 	if response == nil || response.Code != protocol.Content {
 		if response == nil {
@@ -261,7 +275,8 @@ func ParseDiscoveryResponse(response *protocol.Message) ([]Advertisement, error)
 
 // DiscoveryHandler serves a discovery document. Callers must not mutate
 // Advertisements while ServeCOAP is active. Unsupported critical options
-// are rejected before the document is built.
+// are rejected before the document is built. Request bodies and Block1 options
+// are not supported.
 type DiscoveryHandler struct {
 	// Advertisements are returned in their current order.
 	Advertisements []Advertisement
@@ -289,6 +304,12 @@ func (handler DiscoveryHandler) ServeCOAP(ctx context.Context, request *protocol
 	}
 	if request.Code != protocol.GET {
 		return &protocol.Message{Code: protocol.MethodNotAllowed}, nil
+	}
+	if _, present := request.Option(protocol.OptionBlock1); present {
+		return &protocol.Message{Code: protocol.BadOption}, nil
+	}
+	if len(request.Payload) != 0 {
+		return &protocol.Message{Code: protocol.BadRequest}, nil
 	}
 	if _, present := request.Option(protocol.OptionURIQuery); request.Multicast && present {
 		// RFC 6690 says that a multicast server without query filtering should

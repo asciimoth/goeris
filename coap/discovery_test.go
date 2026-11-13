@@ -220,3 +220,40 @@ func TestDiscoveryRejectsPartialResponses(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscoveryDocumentLimit(t *testing.T) {
+	prefix := []byte(`</>;if="http://purl.org/eris/coap"`)
+	data := make([]byte, MaxDiscoveryDocumentSize+1)
+	copy(data, prefix)
+	for index := len(prefix); index < len(data); index++ {
+		data[index] = ' '
+	}
+	if ads, err := ParseAdvertisements(data[:MaxDiscoveryDocumentSize]); err != nil || len(ads) != 1 {
+		t.Fatalf("document at limit: %v, %v", ads, err)
+	}
+	if _, err := ParseAdvertisements(data); !errors.Is(err, ErrResponseTooLarge) || !errors.Is(err, ErrInvalidAdvertisement) {
+		t.Fatalf("oversized document: %v", err)
+	}
+	response := &protocol.Message{Code: protocol.Content, Options: []protocol.Option{
+		protocol.UintOption(protocol.OptionContentFormat, protocol.ContentFormatLinkFormat),
+	}, Payload: data}
+	if _, err := ParseDiscoveryResponse(response); !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("oversized discovery response: %v", err)
+	}
+}
+
+func TestDiscoveryRejectsRequestBodies(t *testing.T) {
+	for _, request := range []*protocol.Message{
+		addOption(NewDiscoveryRequest(), protocol.NewOption(protocol.OptionBlock1, nil)),
+		addOption(NewDiscoveryRequest(), protocol.NewOption(protocol.OptionBlock1, []byte{7})),
+	} {
+		if response := serve(t, DiscoveryHandler{}, request); response.Code != protocol.BadOption {
+			t.Fatalf("Block1 response = %s", response.Code)
+		}
+	}
+	request := NewDiscoveryRequest()
+	request.Payload = []byte("unexpected")
+	if response := serve(t, DiscoveryHandler{}, request); response.Code != protocol.BadRequest {
+		t.Fatalf("GET body response = %s", response.Code)
+	}
+}
