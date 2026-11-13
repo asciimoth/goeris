@@ -56,7 +56,8 @@ func canonicalUint(value []byte) bool {
 // rejectCriticalOptions applies RFC 7252 section 5.4.1. Unknown elective
 // options can be ignored, but unknown critical options must stop processing.
 // In particular, an unsupported write condition must not become an
-// unconditional write. Block1 and Block2 are handled by the transfer wrapper.
+// unconditional write. Transfer options are checked by the wrapper or the
+// direct resource handler.
 func rejectCriticalOptions(request *protocol.Message) (*protocol.Message, bool) {
 	for _, option := range request.Options {
 		if option.Number&1 == 0 {

@@ -281,9 +281,11 @@ func TestDiscoveryRejectsRequestBodies(t *testing.T) {
 	for _, request := range []*protocol.Message{
 		addOption(NewDiscoveryRequest(), protocol.NewOption(protocol.OptionBlock1, nil)),
 		addOption(NewDiscoveryRequest(), protocol.NewOption(protocol.OptionBlock1, []byte{7})),
+		addOption(NewDiscoveryRequest(), protocol.NewOption(protocol.OptionBlock2, nil)),
+		addOption(NewDiscoveryRequest(), protocol.NewOption(protocol.OptionBlock2, []byte{7})),
 	} {
 		if response := serve(t, DiscoveryHandler{}, request); response.Code != protocol.BadOption {
-			t.Fatalf("Block1 response = %s", response.Code)
+			t.Fatalf("unsupported block option response = %s", response.Code)
 		}
 	}
 	request := NewDiscoveryRequest()

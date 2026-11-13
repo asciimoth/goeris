@@ -272,6 +272,25 @@ func TestBlockWiseDownloadLimit(t *testing.T) {
 	}
 }
 
+func TestBlockWiseExplicitFirstBlock(t *testing.T) {
+	block, ref := makeBlock(int(eris.BlockSize32KiB), 27)
+	handler, err := (Handler{Blocks: eris.BlockSet{ref: block}}).BlockWise(protocol.BlockWiseConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := NewGetRequest(mustStore(t, "coap://example/"), ref, RequestConfig{})
+	option, _ := (protocol.Block{Number: 0, Size: 512}).Option(protocol.OptionBlock2)
+	response := serve(t, handler, addOption(request, option))
+	if response.Code != protocol.Content || !bytes.Equal(response.Payload, block[:512]) {
+		t.Fatalf("explicit first block: code %s, length %d", response.Code, len(response.Payload))
+	}
+	selected, present := response.Option(protocol.OptionBlock2)
+	decoded, parseErr := protocol.ParseBlock(selected.Value)
+	if !present || parseErr != nil || decoded.Number != 0 || decoded.Size != 512 || !decoded.More {
+		t.Fatalf("invalid Block2 response: %+v, %v", selected, parseErr)
+	}
+}
+
 func TestBlockWiseConfigurationAndRouting(t *testing.T) {
 	t.Parallel()
 	blocks := make(eris.BlockSet)
@@ -306,6 +325,11 @@ type transferAddress string
 func (transferAddress) Network() string        { return "test" }
 func (address transferAddress) String() string { return string(address) }
 
+type networkAddress struct{ network, address string }
+
+func (address networkAddress) Network() string { return address.network }
+func (address networkAddress) String() string  { return address.address }
+
 func TestBlockTransferKey(t *testing.T) {
 	t.Parallel()
 	base := &protocol.Message{Code: protocol.GET}
@@ -331,6 +355,40 @@ func TestBlockTransferKey(t *testing.T) {
 	b, _ := blockTransferKey(&protocol.Message{LocalAddr: transferAddress("a"), RemoteAddr: transferAddress("bc")})
 	if a == b {
 		t.Fatal("ambiguous address boundaries")
+	}
+	udp, _ := blockTransferKey(&protocol.Message{RemoteAddr: networkAddress{"udp", "192.0.2.1:5683"}})
+	tcp, _ := blockTransferKey(&protocol.Message{RemoteAddr: networkAddress{"tcp", "192.0.2.1:5683"}})
+	if udp == tcp {
+		t.Fatal("different transport networks share transfer state")
+	}
+}
+
+func TestBlockWiseSeparatesTransportNetworks(t *testing.T) {
+	blocks := make(eris.BlockSet)
+	handler, err := (Handler{Blocks: blocks, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{BlockSize: 512})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := uploadFragment(t, 28, 0)
+	first.RemoteAddr = networkAddress{"udp", "192.0.2.1:5683"}
+	if response := serve(t, handler, first); response.Code != protocol.Continue {
+		t.Fatalf("first UDP fragment: %s", response.Code)
+	}
+	other := uploadFragment(t, 28, 1)
+	other.RemoteAddr = networkAddress{"tcp", "192.0.2.1:5683"}
+	if response := serve(t, handler, other); response.Code != protocol.RequestEntityIncomplete {
+		t.Fatalf("TCP continuation: %s", response.Code)
+	}
+	if len(blocks) != 0 {
+		t.Fatal("cross-network fragment reached storage")
+	}
+	last := uploadFragment(t, 28, 1)
+	last.RemoteAddr = first.RemoteAddr
+	if response := serve(t, handler, last); response.Code != protocol.Created {
+		t.Fatalf("UDP continuation: %s", response.Code)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("stored %d blocks, want 1", len(blocks))
 	}
 }
 

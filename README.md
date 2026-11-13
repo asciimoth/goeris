@@ -106,12 +106,14 @@ The client adds a separate
 block-wise upload so concurrent uploads to the same resource keep their
 fragments separate.
 
-Use `coap.Handler.BlockWise` for block-wise uploads. The direct handler rejects
-PUT requests with a Block1 option, so a fragment cannot be stored as a complete
-block. The block and discovery handlers reject unsupported critical options,
-including conditional request options and Accept. Confirmable requests receive
-4.02 Bad Option; non-confirmable requests are discarded. Unknown elective
-options are ignored.
+Use `coap.Handler.BlockWise` for block-wise transfers. The direct handler
+rejects Block1 and Block2 options; the discovery handler rejects direct Block2
+requests. This prevents a fragment from being stored as a complete block or a
+Block2 request from receiving an unsegmented response. The block and discovery
+handlers also reject unsupported critical options, including conditional request
+options and Accept. For these options, confirmable requests receive 4.02 Bad
+Option and non-confirmable requests are discarded. Unknown elective options are
+ignored.
 
 The block-wise wrapper returns a `*coap.BlockWiseHandler`. It limits active and
 retained transfers to 128 by default; set `Handler.MaxTransfers` to select

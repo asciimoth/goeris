@@ -45,7 +45,7 @@ func newBlockWiseHandler(handler Handler, config protocol.BlockWiseConfig) (*Blo
 		config.StateLifetime = 2 * time.Minute
 	}
 	// Validate the transfer configuration before accepting any requests.
-	if _, err := protocol.NewBlockWiseHandler(handler, config); err != nil {
+	if _, err := protocol.NewBlockWiseHandler(blockWiseOrigin{handler}, config); err != nil {
 		return nil, err
 	}
 	limit := handler.MaxTransfers
@@ -166,7 +166,7 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 			handler.mu.Unlock()
 			return &protocol.Message{Code: serviceUnavailable}, nil
 		}
-		inner, _ := protocol.NewBlockWiseHandler(handler.handler, handler.config)
+		inner, _ := protocol.NewBlockWiseHandler(blockWiseOrigin{handler.handler}, handler.config)
 		transfer = &blockTransfer{handler: inner}
 		handler.transfers[key] = transfer
 	}
@@ -202,6 +202,24 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 	return response, err
 }
 
+// The transfer helper owns Block2. Remove it only when the helper calls the
+// complete-body handler; the direct handler must reject unsupported Block2.
+type blockWiseOrigin struct{ Handler }
+
+func (origin blockWiseOrigin) ServeCOAP(ctx context.Context, request *protocol.Message) (*protocol.Message, error) {
+	if _, present := request.Option(protocol.OptionBlock2); !present {
+		return origin.Handler.ServeCOAP(ctx, request)
+	}
+	complete := request.Clone()
+	complete.Options = complete.Options[:0]
+	for _, option := range request.Options {
+		if option.Number != protocol.OptionBlock2 {
+			complete.Options = append(complete.Options, option)
+		}
+	}
+	return origin.Handler.ServeCOAP(ctx, complete)
+}
+
 // Match the helper's identity fields, including option order. Tokens identify
 // exchanges, and can change between fragments of one transfer. Length prefixes
 // keep addresses and option values unambiguous.
@@ -215,14 +233,16 @@ func blockTransferKey(request *protocol.Message) (string, bool) {
 		key = append(key, value...)
 		return true
 	}
-	local, remote := "", ""
+	localNetwork, local, remoteNetwork, remote := "", "", "", ""
 	if request.LocalAddr != nil {
+		localNetwork = request.LocalAddr.Network()
 		local = request.LocalAddr.String()
 	}
 	if request.RemoteAddr != nil {
+		remoteNetwork = request.RemoteAddr.Network()
 		remote = request.RemoteAddr.String()
 	}
-	if !appendString(local) || !appendString(remote) || len(key) == MaxTransferKeySize {
+	if !appendString(localNetwork) || !appendString(local) || !appendString(remoteNetwork) || !appendString(remote) || len(key) == MaxTransferKeySize {
 		return "", false
 	}
 	key = append(key, byte(request.Code))

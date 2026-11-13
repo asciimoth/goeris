@@ -371,3 +371,26 @@ func TestHandlerRejectsBlock1GetBeforeStorage(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectHandlerRejectsBlock2BeforeStorage(t *testing.T) {
+	block, ref := makeBlock(int(eris.BlockSize1KiB), 26)
+	called := false
+	handler := Handler{Blocks: storeFunc{
+		get: func(eris.Reference) ([]byte, error) { called = true; return block, nil },
+		put: func(eris.Reference, []byte) error { called = true; return nil },
+	}, AllowPut: true}
+	store := mustStore(t, "coap://example/")
+	get, _ := NewGetRequest(store, ref, RequestConfig{})
+	put, _ := NewPutRequest(store, block, RequestConfig{})
+	for _, request := range []*protocol.Message{get, put} {
+		for _, value := range [][]byte{nil, {7}, {0xff, 0xff, 0xff, 0xff}} {
+			selected := addOption(request, protocol.NewOption(protocol.OptionBlock2, value))
+			if response := serve(t, handler, selected); response.Code != protocol.BadOption {
+				t.Fatalf("%s Block2 %x: response = %s", request.Code, value, response.Code)
+			}
+		}
+	}
+	if called {
+		t.Fatal("unsupported Block2 reached storage")
+	}
+}
