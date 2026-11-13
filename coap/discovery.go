@@ -234,13 +234,23 @@ func NewDiscoveryRequest() *protocol.Message {
 	}
 }
 
-// ParseDiscoveryResponse validates and parses one discovery response.
+// ParseDiscoveryResponse validates and parses one complete discovery response.
+// Callers must reassemble block-wise responses before calling it.
 func ParseDiscoveryResponse(response *protocol.Message) ([]Advertisement, error) {
 	if response == nil || response.Code != protocol.Content {
 		if response == nil {
 			return nil, ErrInvalidAdvertisement
 		}
 		return nil, &ResponseError{Code: response.Code}
+	}
+	if err := validateResponseOptions(response); err != nil {
+		return nil, err
+	}
+	if option, present := response.Option(protocol.OptionBlock2); present {
+		block, err := protocol.ParseBlock(option.Value)
+		if err != nil || block.Number != 0 || block.More {
+			return nil, ErrInvalidAdvertisement
+		}
 	}
 	format, present, err := oneUintOption(response, protocol.OptionContentFormat)
 	if err != nil || !present || format != protocol.ContentFormatLinkFormat {

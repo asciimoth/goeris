@@ -171,6 +171,9 @@ func (requester *limitedRequester) Request(ctx context.Context, request *protoco
 	if err != nil || response == nil {
 		return response, err
 	}
+	if err := validateResponseOptions(response); err != nil {
+		return nil, err
+	}
 	if len(response.Payload) > requester.remaining {
 		return nil, ErrResponseTooLarge
 	}

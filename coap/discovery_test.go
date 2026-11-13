@@ -203,3 +203,20 @@ func TestDiscoveryRequestResponse(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscoveryRejectsPartialResponses(t *testing.T) {
+	t.Parallel()
+	payload, err := MarshalAdvertisements([]Advertisement{{Target: "/"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []uint32{8, 16, 7} {
+		response := &protocol.Message{Code: protocol.Content, Payload: payload, Options: []protocol.Option{
+			protocol.UintOption(protocol.OptionContentFormat, protocol.ContentFormatLinkFormat),
+			protocol.UintOption(protocol.OptionBlock2, value),
+		}}
+		if _, err := ParseDiscoveryResponse(response); err == nil {
+			t.Fatalf("partial or invalid Block2 %d accepted", value)
+		}
+	}
+}

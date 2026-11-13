@@ -8,6 +8,9 @@ import (
 )
 
 var (
+	// ErrInvalidResponseOption means that a response contains an unsupported
+	// critical option or an invalid transfer option.
+	ErrInvalidResponseOption = errors.New("eris coap: invalid response option")
 	// ErrInvalidStoreURL means that a URL does not identify a supported CoAP
 	// block store.
 	ErrInvalidStoreURL = errors.New("eris coap: invalid store URL")

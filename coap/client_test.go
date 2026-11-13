@@ -197,3 +197,28 @@ func TestNewClientErrors(t *testing.T) {
 		t.Errorf("ResponseError.Error() = %q", got)
 	}
 }
+
+func TestClientRejectsAmbiguousTransferResponses(t *testing.T) {
+	t.Parallel()
+	block, ref := makeBlock(int(eris.BlockSize1KiB), 31)
+	for _, options := range [][]protocol.Option{
+		{protocol.UintOption(protocol.OptionBlock2, 6), protocol.UintOption(protocol.OptionBlock2, 14)},
+		{protocol.UintOption(protocol.OptionBlock1, 6), protocol.UintOption(protocol.OptionBlock1, 14)},
+		{protocol.UintOption(protocol.OptionSize2, 1024), protocol.UintOption(protocol.OptionSize2, 32768)},
+		{protocol.NewOption(protocol.OptionSize2, make([]byte, 5))},
+		{protocol.UintOption(protocol.OptionBlock1, 7)},
+		{protocol.NewOption(65001, nil)},
+	} {
+		calls := 0
+		client, err := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
+			calls++
+			return &protocol.Message{Code: protocol.Content, Options: options, Payload: block}, nil
+		}), mustStore(t, "coap://example/"), ClientConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.GetBlock(ref); !errors.Is(err, ErrInvalidResponseOption) || calls != 1 {
+			t.Fatalf("options %+v: calls %d, error %v", options, calls, err)
+		}
+	}
+}

@@ -96,6 +96,15 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 		}
 		seen[option.Number] = true
 	}
+	if _, _, err := oneUintOption(request, protocol.OptionSize1); err != nil {
+		return &protocol.Message{Code: protocol.BadRequest}, nil
+	}
+	// GET bodies are not supported. Reject fragments before retaining them.
+	if request.Code == protocol.GET {
+		if _, present := request.Option(protocol.OptionBlock1); present {
+			return &protocol.Message{Code: protocol.BadOption}, nil
+		}
+	}
 	if len(request.Payload) > int(eris.BlockSize32KiB) {
 		return &protocol.Message{Code: protocol.RequestEntityTooLarge}, nil
 	}

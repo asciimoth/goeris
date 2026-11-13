@@ -310,3 +310,26 @@ func TestBlockTransferKey(t *testing.T) {
 		t.Fatal("ambiguous address boundaries")
 	}
 }
+
+func TestBlockWiseRejectsInvalidBodyMetadata(t *testing.T) {
+	t.Parallel()
+	for _, code := range []protocol.Code{protocol.PUT, protocol.GET} {
+		handler, err := (Handler{Blocks: make(eris.BlockSet), AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := uploadFragment(t, 1, 0)
+		request.Code = code
+		want := protocol.BadOption
+		if code == protocol.PUT {
+			request = replaceOption(request, protocol.NewOption(protocol.OptionSize1, []byte{0, 4, 0}))
+			want = protocol.BadRequest
+		}
+		if response := serve(t, handler, request); response.Code != want {
+			t.Fatalf("response = %s, want %s", response.Code, want)
+		}
+		if len(handler.transfers) != 0 {
+			t.Fatal("invalid body metadata allocated transfer state")
+		}
+	}
+}
