@@ -11,7 +11,9 @@ import (
 )
 
 // HTTPClient executes HTTP requests. *http.Client implements HTTPClient.
-// Implementations must follow the response guarantees of http.Client.Do.
+// Implementations must follow the response guarantees of http.Client.Do and
+// must not follow redirects. A redirect can send a session token or a PUT body
+// to another host. Client disables redirects when given a *http.Client.
 type HTTPClient interface {
 	Do(request *http.Request) (*http.Response, error)
 }
@@ -32,6 +34,16 @@ func NewClient(httpClient HTTPClient, store StoreURL, signer Signer) (*Client, e
 	}
 	if store.String() == "" {
 		return nil, ErrInvalidStoreURL
+	}
+	if standard, ok := httpClient.(*http.Client); ok {
+		if standard == nil {
+			return nil, ErrNilHTTPClient
+		}
+		copy := *standard
+		copy.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		httpClient = &copy
 	}
 	return &Client{httpClient: httpClient, store: store, signer: signer}, nil
 }

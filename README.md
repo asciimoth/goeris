@@ -79,7 +79,10 @@ The `s3` package implements the
 
 The S3 package intentionally omits credential discovery, IAM, bucket
 administration, object listing, and multipart uploads. It uses only the Go
-standard library and the existing ERIS block APIs.
+standard library and the existing ERIS block APIs. The client stops redirects
+for `*http.Client` so a redirected request cannot send a session token or PUT
+body to another host. Custom `HTTPClient` implementations must also stop
+redirects.
 
 The `coap` package implements [ERIS over CoAP](specs/eer/coap/index.md):
 

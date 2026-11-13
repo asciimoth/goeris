@@ -134,12 +134,61 @@ func TestClientEndToEnd(t *testing.T) {
 	}
 }
 
+func TestClientDoesNotFollowRedirects(t *testing.T) {
+	t.Parallel()
+	ref, block := testBlock(t)
+	var redirected int
+	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		redirected++
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+	store, err := ParseStoreURL("s3://" + strings.TrimPrefix(origin.URL, "https://") + "/blocks/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	standard := origin.Client()
+	client, err := NewClient(standard, store, StaticV4Signer{
+		Credentials: Credentials{AccessKey: "writer", SecretKey: "secret", SessionToken: "token"},
+		Region:      "test-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		var requestErr error
+		if method == http.MethodGet {
+			_, requestErr = client.GetBlock(ref)
+		} else {
+			_, requestErr = client.PutBlock(block)
+		}
+		var responseErr *ResponseError
+		if !errors.As(requestErr, &responseErr) || responseErr.StatusCode != http.StatusTemporaryRedirect {
+			t.Errorf("%s redirect result = %v", method, requestErr)
+		}
+	}
+	if redirected != 0 {
+		t.Errorf("followed %d redirects", redirected)
+	}
+	if standard.CheckRedirect != nil {
+		t.Error("changed the caller's HTTP client")
+	}
+}
+
 func TestClientErrors(t *testing.T) {
 	t.Parallel()
 	ref, block := testBlock(t)
 	store := testStore(t)
 	if _, err := NewClient(nil, store, nil); !errors.Is(err, ErrNilHTTPClient) {
 		t.Errorf("nil HTTP client: %v", err)
+	}
+	var nilStandard *http.Client
+	if _, err := NewClient(nilStandard, store, nil); !errors.Is(err, ErrNilHTTPClient) {
+		t.Errorf("typed nil HTTP client: %v", err)
 	}
 	if _, err := NewClient(httpClientFunc(nil), StoreURL{}, nil); !errors.Is(err, ErrInvalidStoreURL) {
 		t.Errorf("invalid store: %v", err)
