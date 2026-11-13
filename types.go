@@ -145,6 +145,8 @@ func (s BlockSet) PutBlock(block []byte, ttl TTL, expected ...Reference) (Refere
 	return ref, nil
 }
 
+var _ BlockStore = BlockSet(nil)
+
 var base32Encoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 // String returns the unpadded Base32 encoding of r.

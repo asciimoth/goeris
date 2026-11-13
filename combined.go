@@ -51,6 +51,12 @@ type CombinedBlockStore struct {
 	OnError func(index int, err error)
 }
 
+var (
+	_ BlockStore         = (*CombinedBlockStore)(nil)
+	_ ContextBlockSource = (*CombinedBlockStore)(nil)
+	_ ContextBlockSink   = (*CombinedBlockStore)(nil)
+)
+
 // combinedBlockMethod keeps a resolved method and its original input index.
 // Each operation has its own list, so calls need no interface checks.
 type combinedBlockMethod[Method any] struct {
