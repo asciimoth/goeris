@@ -19,6 +19,8 @@ type StoreURL struct {
 // ParseStoreURL parses a canonical s3://ENDPOINT/BUCKET/ URL. ENDPOINT is an
 // ASCII hostname or IP address and can include a port. Bucket names are
 // restricted to one non-empty path segment.
+// Parsing does not restrict destination addresses. Applications that accept
+// untrusted store URLs must enforce their own network access policy.
 func ParseStoreURL(text string) (StoreURL, error) {
 	parsed, err := url.Parse(text)
 	if err != nil || parsed.Scheme != "s3" || parsed.Host == "" || parsed.User != nil ||

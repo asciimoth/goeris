@@ -7,9 +7,13 @@
 // a fixed-bucket HTTP handler. Handler is read-only by default; set AllowPut
 // to enable authenticated writes. It does not implement bucket administration,
 // object listing, multipart upload, IAM, or credential discovery.
+// SigV4 signing and verification reject HTTP trailers because their values are
+// not covered by the supported signature format.
 //
 // Client and Handler do not create network clients or servers. Applications
 // supply an HTTPClient, block store, credentials, and clocks as applicable.
+// Applications must set HTTP timeouts and header limits. Block size limits do
+// not limit the time spent waiting for a peer to send data.
 // Handler checks cancellation before each storage call. Use context-aware
 // block stores to cancel storage calls that are already in progress.
 //

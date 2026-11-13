@@ -77,12 +77,12 @@ func (signer StaticV4Signer) Sign(request *http.Request, payload []byte) error {
 // The URL must use Path and optional RawPath, not Opaque. Header map keys
 // must not contain multiple case variants of the same field.
 // A non-empty escaped path must start with '/' or be '*' without a query.
+// HTTP trailers are not supported.
 func SignV4(request *http.Request, payload []byte, credentials Credentials, region string, now time.Time) error {
 	if !credentials.Valid() || !validCredentialPart(region) {
 		return ErrInvalidCredentials
 	}
-	if request == nil || request.URL == nil || !validHeaderName(request.Method) || !validRequestHost(requestHost(request)) ||
-		!validRequestURL(request) {
+	if !validSigningRequest(request) {
 		return ErrInvalidRequest
 	}
 	headers, err := normalizedHeaders(request.Header)
@@ -114,9 +114,9 @@ func SignV4(request *http.Request, payload []byte, credentials Credentials, regi
 // The URL must use Path and optional RawPath, not Opaque. Header map keys
 // must not contain multiple case variants of the same field.
 // A non-empty escaped path must start with '/' or be '*' without a query.
+// HTTP trailers are not supported.
 func CanonicalRequest(request *http.Request, payloadHash string) (string, string, error) {
-	if request == nil || request.URL == nil || !validHeaderName(request.Method) || !validRequestHost(requestHost(request)) ||
-		!validSHA256Hex(payloadHash) || !validRequestURL(request) {
+	if !validSigningRequest(request) || !validSHA256Hex(payloadHash) {
 		return "", "", ErrInvalidRequest
 	}
 	headers, err := normalizedHeaders(request.Header)
@@ -138,6 +138,9 @@ func normalizedHeaders(input http.Header) (http.Header, error) {
 			return nil, ErrInvalidRequest
 		}
 		canonical := http.CanonicalHeaderKey(name)
+		if canonical == "Trailer" {
+			return nil, ErrInvalidRequest
+		}
 		if _, exists := output[canonical]; exists {
 			return nil, ErrInvalidRequest
 		}
@@ -207,6 +210,14 @@ func validSHA256Hex(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil
+}
+
+func validSigningRequest(request *http.Request) bool {
+	// Trailers live outside Header and are not covered by this signature
+	// format. Reject both declared and received trailers, including x-amz-*
+	// fields that a downstream handler could otherwise trust as signed data.
+	return request != nil && request.URL != nil && len(request.Trailer) == 0 &&
+		validHeaderName(request.Method) && validRequestHost(requestHost(request)) && validRequestURL(request)
 }
 
 func validRequestURL(request *http.Request) bool {
@@ -404,10 +415,9 @@ type V4Authenticator struct {
 }
 
 // Authenticate verifies request and returns its access key. It rejects
-// header maps with multiple case variants of the same field.
+// HTTP trailers and header maps with multiple case variants of the same field.
 func (authenticator V4Authenticator) Authenticate(request *http.Request, payload []byte) (string, error) {
-	if request == nil || request.URL == nil || !validHeaderName(request.Method) || !validRequestHost(requestHost(request)) ||
-		authenticator.Credentials == nil || !validCredentialPart(authenticator.Region) || !validRequestURL(request) {
+	if !validSigningRequest(request) || authenticator.Credentials == nil || !validCredentialPart(authenticator.Region) {
 		return "", ErrAuthentication
 	}
 	headers, err := normalizedHeaders(request.Header)
