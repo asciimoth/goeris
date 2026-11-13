@@ -642,7 +642,7 @@ func TestSigV4RejectsInvalidRequestTarget(t *testing.T) {
 	t.Parallel()
 	auth := V4Authenticator{
 		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
-			t.Fatal("invalid target reached credential lookup")
+			t.Error("invalid target reached credential lookup")
 			return testCredentials, nil
 		}),
 		Region: "region", Clock: func() time.Time { return testTime },
@@ -652,6 +652,23 @@ func TestSigV4RejectsInvalidRequestTarget(t *testing.T) {
 		mutate func(*http.Request)
 	}{
 		{"method newline", func(request *http.Request) { request.Method = "GET\nPUT" }},
+		{"relative path", func(request *http.Request) { request.URL.Path = "bucket/key" }},
+		{"relative escaped path", func(request *http.Request) {
+			request.URL.Path = "bucket/key"
+			request.URL.RawPath = "bucket%2Fkey"
+		}},
+		{"escaped leading slash", func(request *http.Request) {
+			request.URL.Path = "/bucket/key"
+			request.URL.RawPath = "%2Fbucket/key"
+		}},
+		{"asterisk with query", func(request *http.Request) {
+			request.URL.Path = "*"
+			request.URL.RawQuery = "x=1"
+		}},
+		{"asterisk with empty query", func(request *http.Request) {
+			request.URL.Path = "*"
+			request.URL.ForceQuery = true
+		}},
 		{"host space", func(request *http.Request) { request.Host = " example" }},
 		{"host control", func(request *http.Request) { request.Host = "example\x00" }},
 		{"host with path", func(request *http.Request) { request.Host = "example/path" }},

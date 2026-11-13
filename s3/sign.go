@@ -76,6 +76,7 @@ func (signer StaticV4Signer) Sign(request *http.Request, payload []byte) error {
 // the supplied request, payload, credentials, region, and time.
 // The URL must use Path and optional RawPath, not Opaque. Header map keys
 // must not contain multiple case variants of the same field.
+// A non-empty escaped path must start with '/' or be '*' without a query.
 func SignV4(request *http.Request, payload []byte, credentials Credentials, region string, now time.Time) error {
 	if !credentials.Valid() || !validCredentialPart(region) {
 		return ErrInvalidCredentials
@@ -112,6 +113,7 @@ func SignV4(request *http.Request, payload []byte, credentials Credentials, regi
 // The caller must supply a lowercase hexadecimal SHA-256 payload hash.
 // The URL must use Path and optional RawPath, not Opaque. Header map keys
 // must not contain multiple case variants of the same field.
+// A non-empty escaped path must start with '/' or be '*' without a query.
 func CanonicalRequest(request *http.Request, payloadHash string) (string, string, error) {
 	if request == nil || request.URL == nil || !validHeaderName(request.Method) || !validRequestHost(requestHost(request)) ||
 		!validSHA256Hex(payloadHash) || !validRequestURL(request) {
@@ -210,6 +212,15 @@ func validSHA256Hex(value string) bool {
 func validRequestURL(request *http.Request) bool {
 	// Opaque URLs can send a request target that differs from EscapedPath.
 	if request.URL.Opaque != "" {
+		return false
+	}
+	// Check the escaped form: RawPath can encode the leading slash. Such a
+	// target is not an HTTP absolute path, even when Path starts with '/'.
+	path := request.URL.EscapedPath()
+	if path != "" && path != "*" && !strings.HasPrefix(path, "/") {
+		return false
+	}
+	if path == "*" && (request.URL.RawQuery != "" || request.URL.ForceQuery) {
 		return false
 	}
 	// RawQuery is copied into the request target without escaping. A raw

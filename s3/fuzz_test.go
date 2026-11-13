@@ -21,28 +21,53 @@ func FuzzSignV4WireRoundTrip(f *testing.F) {
 			return
 		}
 		request.Header.Set("X-Amz-Meta-Test", header)
-		if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
-			return
-		}
-		var wire bytes.Buffer
-		if err := request.Write(&wire); err != nil {
-			t.Fatalf("signed request cannot be written: %v", err)
-		}
-		received, err := http.ReadRequest(bufio.NewReader(&wire))
-		if err != nil {
-			t.Fatalf("signed request cannot be parsed: %v", err)
-		}
-		defer func() { _ = received.Body.Close() }()
-		auth := V4Authenticator{
-			Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
-				return testCredentials, nil
-			}),
-			Region: "region", Clock: func() time.Time { return testTime },
-		}
-		if _, err := auth.Authenticate(received, nil); err != nil {
-			t.Fatalf("signature failed after HTTP serialization: %v", err)
-		}
+		checkSignedWireRequest(t, request)
 	})
+}
+
+// Callers can set URL fields directly, without the checks in url.Parse.
+func FuzzSignV4WirePath(f *testing.F) {
+	f.Add("/bucket/key", "", "")
+	f.Add("bucket/key", "", "")
+	f.Add("/bucket/key", "%2Fbucket/key", "")
+	f.Add("/bucket/a/b", "/bucket/a%2Fb", "x=a+b")
+	f.Add("", "", "")
+	f.Add("*", "", "")
+	f.Fuzz(func(t *testing.T, path, rawPath, query string) {
+		request, err := http.NewRequest(http.MethodGet, "https://example/", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.URL.Path = path
+		request.URL.RawPath = rawPath
+		request.URL.RawQuery = query
+		checkSignedWireRequest(t, request)
+	})
+}
+
+func checkSignedWireRequest(t *testing.T, request *http.Request) {
+	t.Helper()
+	if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
+		return
+	}
+	var wire bytes.Buffer
+	if err := request.Write(&wire); err != nil {
+		t.Fatalf("signed request cannot be written: %v", err)
+	}
+	received, err := http.ReadRequest(bufio.NewReader(&wire))
+	if err != nil {
+		t.Fatalf("signed request cannot be parsed: %v", err)
+	}
+	defer func() { _ = received.Body.Close() }()
+	auth := V4Authenticator{
+		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+			return testCredentials, nil
+		}),
+		Region: "region", Clock: func() time.Time { return testTime },
+	}
+	if _, err := auth.Authenticate(received, nil); err != nil {
+		t.Fatalf("signature failed after HTTP serialization: %v", err)
+	}
 }
 
 func FuzzSignV4Authentication(f *testing.F) {
