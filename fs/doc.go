@@ -14,6 +14,27 @@
 // AddAutoFile selects compression with the fixed ERIS-FS-AUTO-1 sample policy.
 // ChooseCompression exposes the same decision without encoding a file.
 //
+// # Deterministic encoding
+//
+// To match capabilities across implementations, use Builder.AddFile for every
+// file, the same 32-byte convergence secret, and the same version 2 index
+// structure, paths, executable flags, and symlink targets. All encoders must
+// use bytewise deterministic CBOR and the recommended block sizes: 1 KiB below
+// 16384 stored bytes, and 32 KiB at or above that size, including index bytes.
+// The builder applies these CBOR and block-size rules. Use one root index with
+// full relative paths, or agree on the same nested index boundaries.
+//
+// For repeatable encoding with automatic compression in goeris, use
+// Builder.AddAutoFile for every file and keep the encoding profile fixed,
+// including the goeris and effective LZMA dependency versions. The auto policy
+// fixes the compression choice; matching compressed capabilities also requires
+// matching Lzip bytes. An 8 MiB dictionary alone does not ensure this across
+// different encoders. Entry insertion order and reader chunk sizes do not
+// affect successful encoding. See the [deterministic encoding procedures] for
+// complete settings and examples.
+//
+// # Input and decoding limits
+//
 // The package operates only on io.Reader values and abstract ERIS block
 // stores. It does not access the host file system, network, clock, or random
 // source.
@@ -48,6 +69,7 @@
 // the selected subdirectory.
 //
 // [ERIS-FS recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/eris-fs/index.md
+// [deterministic encoding procedures]: https://github.com/asciimoth/goeris/blob/master/specs/eris-fs-encoding.md
 package fs
 
 const (

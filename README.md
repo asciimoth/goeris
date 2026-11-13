@@ -305,12 +305,21 @@ content does not change the decision, and actual savings can differ from the
 estimate. The policy document includes pseudocode and portable conformance
 vectors.
 
-For the same file bytes, secret, file tree, and compression choices, the builder
-produces the same ERIS blocks and v2 index. Entry insertion order and input read
-chunk sizes do not change the result. The spec does not prescribe one
-compression choice for a given file. The same logical tree can therefore have
-different valid ERIS-FS capabilities. A different secret also changes the file
-blocks by design.
+To get the same capability across ERIS-FS implementations, use `AddFile` for
+every file, the same 32-byte secret, version 2 indexes, and the same tree
+structure and metadata. All encoders must disable compression and use 1 KiB
+blocks below 16384 bytes, or 32 KiB blocks at and above that size, for both
+files and indexes. The
+[cross-implementation procedure](specs/eris-fs-encoding.md#deterministic-encoding-across-implementations)
+also specifies paths, symlinks, empty directories, and CBOR encoding.
+
+For repeatable encoding with goeris auto compression, use `AddAutoFile` for
+every file and keep the same inputs, secret, index structure, goeris version,
+and effective LZMA dependency version. Entry insertion order and input read
+chunk sizes do not change the result. The
+[goeris auto compression procedure](specs/eris-fs-encoding.md#deterministic-encoding-with-goeris-auto-compression)
+explains the fixed decision rule and version requirements. ERIS-FS compliance
+alone does not ensure that two encoders produce the same capability.
 
 The [encoding profile](specs/eris-fs-encoding.md) specifies all Lzip settings
 and the pinned encoder algorithm. Fixed regression vectors check compressed

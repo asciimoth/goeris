@@ -39,6 +39,10 @@ func ChooseCompression(prefix []byte) Compression {
 // store probe blocks. The decision is fixed after the sample, even if later
 // bytes have different compression properties. A failed call adds no entry,
 // though the sink can retain blocks from the incomplete file.
+//
+// Equal image capabilities also require the same secret, metadata, index
+// structure, and Lzip encoding profile. AutoCompressionVersion identifies only
+// the selection policy; a different Lzip encoder can produce different bytes.
 func (builder *Builder) AddAutoFile(path string, content io.Reader, executable bool) error {
 	if builder == nil || builder.sink == nil || content == nil {
 		return ErrInvalidEntry

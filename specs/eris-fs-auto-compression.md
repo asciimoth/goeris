@@ -194,6 +194,10 @@ an arbitrary other Lzip implementation.
 
 The [encoding profile](eris-fs-encoding.md#lzip-encoding-profile) records all
 Lzip settings and the fixed output fixtures that guard this library's encoder.
+For API usage and version requirements, follow the
+[goeris auto compression procedure](eris-fs-encoding.md#deterministic-encoding-with-goeris-auto-compression).
+For equal capabilities without a shared compression encoder, follow the
+[uncompressed procedure across implementations](eris-fs-encoding.md#deterministic-encoding-across-implementations).
 
 ## Conformance vectors
 
