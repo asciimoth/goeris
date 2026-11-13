@@ -99,3 +99,29 @@ func TestResponseMetadataLimits(t *testing.T) {
 		t.Fatalf("metadata at limit rejected: %v", err)
 	}
 }
+
+func TestRequestValidationDoesNotCopyLargeValues(t *testing.T) {
+	large := make([]byte, 1<<20)
+	query := &protocol.Message{Options: []protocol.Option{{Number: protocol.OptionURIQuery, Value: large}}}
+	path := &protocol.Message{Options: []protocol.Option{{Number: protocol.OptionURIPath, Value: large}}}
+	if allocations := testing.AllocsPerRun(10, func() {
+		if _, err := parseReferenceQuery(query); err == nil {
+			t.Fatal("oversized reference accepted")
+		}
+		if matchesPath(path, nil, blocksSegment) {
+			t.Fatal("oversized path matched")
+		}
+	}); allocations != 0 {
+		t.Fatalf("validation allocated %.0f times; want no copies", allocations)
+	}
+}
+
+func TestSingleOptionRejectsRepeatedEmptyValues(t *testing.T) {
+	message := &protocol.Message{Options: []protocol.Option{
+		{Number: protocol.OptionSize1},
+		{Number: protocol.OptionSize1, Value: []byte{}},
+	}}
+	if _, present, err := oneUintOption(message, protocol.OptionSize1); !present || err == nil {
+		t.Fatalf("repeated empty integer: present=%v, err=%v", present, err)
+	}
+}

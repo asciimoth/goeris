@@ -3,7 +3,6 @@ package coap
 import (
 	"context"
 	"errors"
-	"slices"
 	"unicode/utf8"
 
 	protocol "github.com/asciimoth/coaperation"
@@ -70,7 +69,7 @@ func (handler Handler) ServeCOAP(ctx context.Context, request *protocol.Message)
 	if request == nil {
 		return &protocol.Message{Code: protocol.BadRequest}, nil
 	}
-	if !handler.matches(request.URIPath()) {
+	if !matchesPath(request, handler.Path, blocksSegment) {
 		return handler.next(ctx, request)
 	}
 	if response, rejected := rejectCriticalOptions(request); rejected {
@@ -90,11 +89,6 @@ func (handler Handler) ServeCOAP(ctx context.Context, request *protocol.Message)
 	default:
 		return &protocol.Message{Code: protocol.MethodNotAllowed}, nil
 	}
-}
-
-func (handler Handler) matches(path []string) bool {
-	want := append(append([]string(nil), handler.Path...), blocksSegment)
-	return slices.Equal(path, want)
 }
 
 func (handler Handler) next(ctx context.Context, request *protocol.Message) (*protocol.Message, error) {
@@ -143,7 +137,7 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 		return &protocol.Message{Code: protocol.BadOption}
 	}
 	var expected []eris.Reference
-	if len(request.URIQueries()) != 0 {
+	if _, present := request.Option(protocol.OptionURIQuery); present {
 		ref, err := parseReferenceQuery(request)
 		if err != nil {
 			return &protocol.Message{Code: protocol.BadRequest}

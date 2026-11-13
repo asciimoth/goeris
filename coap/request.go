@@ -141,11 +141,10 @@ func parseReferenceQuery(request *protocol.Message) (eris.Reference, error) {
 	if request == nil {
 		return zero, ErrInvalidReference
 	}
-	queries := request.OptionValues(protocol.OptionURIQuery)
-	if len(queries) != 1 {
+	query, present, err := singleOptionValue(request, protocol.OptionURIQuery)
+	if err != nil || !present {
 		return zero, ErrInvalidReference
 	}
-	query := queries[0]
 	if len(query) == len(zero) {
 		copy(zero[:], query)
 		return zero, nil
@@ -160,15 +159,12 @@ func parseReferenceQuery(request *protocol.Message) (eris.Reference, error) {
 }
 
 func oneUintOption(message *protocol.Message, number protocol.OptionNumber) (uint32, bool, error) {
-	values := message.OptionValues(number)
-	if len(values) == 0 {
-		return 0, false, nil
+	raw, present, err := singleOptionValue(message, number)
+	if err != nil || !present {
+		return 0, present, err
 	}
-	if len(values) != 1 {
-		return 0, true, fmt.Errorf("eris coap: option %d is repeated", number)
-	}
-	value, err := (protocol.Option{Number: number, Value: values[0]}).Uint32()
-	if err == nil && !bytes.Equal(protocol.UintOption(number, value).Value, values[0]) {
+	value, err := (protocol.Option{Number: number, Value: raw}).Uint32()
+	if err == nil && !bytes.Equal(protocol.UintOption(number, value).Value, raw) {
 		return 0, true, fmt.Errorf("eris coap: option %d has a non-canonical integer", number)
 	}
 	return value, true, err
@@ -183,4 +179,42 @@ func validateHopLimit(message *protocol.Message) error {
 		return ErrInvalidHopLimit
 	}
 	return nil
+}
+
+// singleOptionValue borrows one value for validation. Do not copy untrusted
+// values before their length and cardinality have been checked.
+func singleOptionValue(message *protocol.Message, number protocol.OptionNumber) ([]byte, bool, error) {
+	var value []byte
+	present := false
+	for _, option := range message.Options {
+		if option.Number != number {
+			continue
+		}
+		if present {
+			return nil, true, fmt.Errorf("eris coap: option %d is repeated", number)
+		}
+		value, present = option.Value, true
+	}
+	return value, present, nil
+}
+
+// matchesPath compares decoded path segments without copying request values.
+func matchesPath(request *protocol.Message, prefix []string, last string) bool {
+	index := 0
+	for _, option := range request.Options {
+		if option.Number != protocol.OptionURIPath {
+			continue
+		}
+		want := last
+		if index < len(prefix) {
+			want = prefix[index]
+		} else if index > len(prefix) {
+			return false
+		}
+		if string(option.Value) != want {
+			return false
+		}
+		index++
+	}
+	return index == len(prefix)+1
 }

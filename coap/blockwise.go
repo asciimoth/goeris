@@ -64,7 +64,7 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if request == nil || !handler.handler.matches(request.URIPath()) {
+	if request == nil || !matchesPath(request, handler.handler.Path, blocksSegment) {
 		return handler.handler.ServeCOAP(ctx, request)
 	}
 	if response, rejected := rejectCriticalOptions(request); rejected {
@@ -115,7 +115,7 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 	}
 	// Check application metadata before a fragment can reserve a transfer
 	// slot or a continuation can read a cached response.
-	if request.Code == protocol.GET || len(request.URIQueries()) != 0 {
+	if _, present := request.Option(protocol.OptionURIQuery); request.Code == protocol.GET || present {
 		if _, err := parseReferenceQuery(request); err != nil {
 			return &protocol.Message{Code: protocol.BadRequest}, nil
 		}

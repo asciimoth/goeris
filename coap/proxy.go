@@ -17,12 +17,12 @@ func PrepareForward(request *protocol.Message) (*protocol.Message, error) {
 	if err := validateHopLimit(request); err != nil {
 		return nil, err
 	}
-	values := request.OptionValues(protocol.OptionHopLimit)
-	if len(values) == 0 {
+	option, present := request.Option(protocol.OptionHopLimit)
+	if !present {
 		return nil, ErrNoHopLimit
 	}
 	// validateHopLimit already checked cardinality and representation.
-	decremented, code, _ := protocol.DecrementHopLimit(protocol.NewOption(protocol.OptionHopLimit, values[0]))
+	decremented, code, _ := protocol.DecrementHopLimit(option)
 	if code == protocol.HopLimitReached {
 		return nil, ErrHopLimitReached
 	}

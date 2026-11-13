@@ -275,7 +275,7 @@ func (handler DiscoveryHandler) ServeCOAP(ctx context.Context, request *protocol
 	if request == nil {
 		return &protocol.Message{Code: protocol.BadRequest}, nil
 	}
-	if !slices.Equal(request.URIPath(), corePathSegments) {
+	if !matchesPath(request, corePathSegments[:1], corePathSegments[1]) {
 		if handler.Next != nil {
 			return handler.Next.ServeCOAP(ctx, request)
 		}
@@ -290,7 +290,7 @@ func (handler DiscoveryHandler) ServeCOAP(ctx context.Context, request *protocol
 	if request.Code != protocol.GET {
 		return &protocol.Message{Code: protocol.MethodNotAllowed}, nil
 	}
-	if request.Multicast && len(request.URIQueries()) > 0 {
+	if _, present := request.Option(protocol.OptionURIQuery); request.Multicast && present {
 		// RFC 6690 says that a multicast server without query filtering should
 		// not respond to a filtered discovery request.
 		return nil, nil
