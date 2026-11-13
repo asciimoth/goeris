@@ -6,8 +6,14 @@ import protocol "github.com/asciimoth/coaperation"
 // Each option uses eight bytes of the limit in addition to its value.
 const MaxResponseOptionSize = 64 << 10
 
+// The transport library supports tokens of at most eight bytes.
+const maxTokenSize = 8
+
 // validateResponseOptions runs before reassembly can remove transfer options.
 func validateResponseOptions(response *protocol.Message) error {
+	if len(response.Token) > maxTokenSize {
+		return ErrResponseTooLarge
+	}
 	seen := make(map[protocol.OptionNumber]bool, 4)
 	remaining := MaxResponseOptionSize
 	for _, option := range response.Options {

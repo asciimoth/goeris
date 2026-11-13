@@ -67,6 +67,10 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 	if request == nil || !matchesPath(request, handler.handler.Path, blocksSegment) {
 		return handler.handler.ServeCOAP(ctx, request)
 	}
+	// Reassembly clones the final request, including its exchange token.
+	if len(request.Token) > maxTokenSize {
+		return &protocol.Message{Code: protocol.BadRequest}, nil
+	}
 	if response, rejected := rejectCriticalOptions(request); rejected {
 		return response, nil
 	}

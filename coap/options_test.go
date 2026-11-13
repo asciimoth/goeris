@@ -2,6 +2,8 @@ package coap
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	protocol "github.com/asciimoth/coaperation"
@@ -123,5 +125,48 @@ func TestSingleOptionRejectsRepeatedEmptyValues(t *testing.T) {
 	}}
 	if _, present, err := oneUintOption(message, protocol.OptionSize1); !present || err == nil {
 		t.Fatalf("repeated empty integer: present=%v, err=%v", present, err)
+	}
+}
+
+func TestOversizedTokensStopBeforeTransfer(t *testing.T) {
+	block, ref := makeBlock(int(eris.BlockSize1KiB), 23)
+	store := mustStore(t, "coap://example/")
+	for _, size := range []int{8, 9, 1 << 20} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			calls := 0
+			client, err := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
+				calls++
+				fragment, _ := (protocol.Block{Size: 1024}).Option(protocol.OptionBlock2)
+				return &protocol.Message{Code: protocol.Content, Token: make([]byte, size), Options: []protocol.Option{fragment}, Payload: block}, nil
+			}), store, ClientConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.GetBlock(ref)
+			if size <= 8 && err != nil || size > 8 && !errors.Is(err, ErrResponseTooLarge) {
+				t.Fatalf("GET error = %v", err)
+			}
+			if calls != 1 {
+				t.Fatalf("requests = %d; want 1", calls)
+			}
+
+			blocks := make(eris.BlockSet)
+			handler, err := (Handler{Blocks: blocks, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			put, _ := NewPutRequest(store, block, RequestConfig{})
+			fragment, _ := (protocol.Block{Size: 1024}).Option(protocol.OptionBlock1)
+			put = addOption(put, fragment)
+			put.Token = make([]byte, size)
+			response := serve(t, handler, put)
+			if size <= 8 {
+				if response.Code != protocol.Created || len(blocks) != 1 {
+					t.Fatalf("valid token: response = %v, stored = %d", response.Code, len(blocks))
+				}
+			} else if response.Code != protocol.BadRequest || len(blocks) != 0 || len(handler.transfers) != 0 {
+				t.Fatalf("oversized token: response = %v, stored = %d, transfers = %d", response.Code, len(blocks), len(handler.transfers))
+			}
+		})
 	}
 }
