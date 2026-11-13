@@ -53,10 +53,16 @@ package fs
 const (
 	// SpecificationVersion is the ERIS-FS format version.
 	SpecificationVersion = 2
+	// LegacySpecificationVersion is the earlier format version that readers support.
+	LegacySpecificationVersion = 1
+	// LzipDictionarySize is the dictionary size used by this library's encoder.
+	LzipDictionarySize = 8 << 20
 	// LzipLengthTag marks an uncompressed file length for Lzip content.
 	LzipLengthTag uint64 = 1280985424
 	// CBORTag is the registered ERIS-FS CBOR tag.
 	CBORTag uint64 = 1701996916
+	// MagicPrefix is the five-byte CBOR tag prefix of an ERIS-FS index.
+	MagicPrefix = "\xdaerit"
 	// MIMEType is the media type for an ERIS-FS index.
 	MIMEType = "application/x-eris-fs+cbor"
 	// DefaultMaxIndexSize is the largest decoded index accepted by DecodeIndex

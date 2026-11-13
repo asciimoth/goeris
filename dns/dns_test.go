@@ -29,7 +29,7 @@ func TestLinkRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "dnslink=/eris/" + capability.String()[len(urnPrefix):]
+	want := "dnslink=/eris/" + capability.String()[len(eris.CapabilityURNPrefix):]
 	if got := link.String(); got != want {
 		t.Fatalf("String() = %q, want %q", got, want)
 	}
@@ -76,7 +76,7 @@ func TestRecommendationExamples(t *testing.T) {
 
 func TestInvalidLinks(t *testing.T) {
 	t.Parallel()
-	identifier := testCapability().String()[len(urnPrefix):]
+	identifier := testCapability().String()[len(eris.CapabilityURNPrefix):]
 	tests := []string{
 		"", "dnslink=", "dnslink=eris/" + identifier,
 		"dnslink=/ipfs/" + identifier, "dnslink=/eris/",

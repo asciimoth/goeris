@@ -17,6 +17,10 @@ const (
 	Extension = ".eris"
 	// CBORTag is the self-described CBOR tag used by ERIS link files.
 	CBORTag = 55799
+	// MagicPrefix is the nine-byte prefix of an ERIS link file.
+	MagicPrefix = "\xd9\xd9\xf7\x84\xd9\x01\x14\x58\x42"
+	// HeaderSize is the number of magic bytes at the start of an ERIS link file.
+	HeaderSize = len(MagicPrefix)
 )
 
 var (
@@ -25,8 +29,6 @@ var (
 	// ErrInvalidValue means that input fails the structural checks in ParseValue.
 	ErrInvalidValue = errors.New("eris link: invalid CBOR value")
 )
-
-var header = [...]byte{0xd9, 0xd9, 0xf7, 0x84, 0xd9, 0x01, 0x14, 0x58, 0x42}
 
 // Link identifies ERIS content and describes its decoded representation.
 //
@@ -54,7 +56,7 @@ func New(capability eris.Capability, size uint64, mime string) (Link, error) {
 // HasHeader reports whether data starts with the ERIS link magic bytes. It
 // detects a possible link file but does not validate the remaining data.
 func HasHeader(data []byte) bool {
-	return len(data) >= len(header) && bytes.Equal(data[:len(header)], header[:])
+	return len(data) >= HeaderSize && string(data[:HeaderSize]) == MagicPrefix
 }
 
 // Validate checks the structure of all fields of link. It does not check the
@@ -78,7 +80,7 @@ func (link Link) MarshalBinary() ([]byte, error) {
 	if err := link.Validate(); err != nil {
 		return nil, err
 	}
-	out := append([]byte(nil), header[:]...)
+	out := append([]byte(nil), MagicPrefix...)
 	capability, _ := link.Capability.MarshalBinary()
 	out = append(out, capability...)
 	out = cborwire.AppendHead(out, 0, link.Size)
@@ -112,7 +114,7 @@ func (link *Link) UnmarshalBinary(data []byte) error {
 	if link == nil || !HasHeader(data) {
 		return ErrInvalidLink
 	}
-	decoder := linkDecoder{data: data, offset: len(header)}
+	decoder := linkDecoder{data: data, offset: HeaderSize}
 	var next Link
 	if len(data)-decoder.offset < eris.CapabilitySize ||
 		next.Capability.UnmarshalBinary(data[decoder.offset:decoder.offset+eris.CapabilitySize]) != nil {

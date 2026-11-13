@@ -15,10 +15,10 @@ const (
 	NamespaceERIS Namespace = "eris"
 	// NamespaceERISFS identifies an ERIS-FS image.
 	NamespaceERISFS Namespace = "erisfs"
-
-	recordPrefix = "dnslink=/"
-	urnPrefix    = "urn:eris:"
-	dnsPrefix    = "_dnslink."
+	// RecordPrefix starts a DNSLink TXT value.
+	RecordPrefix = "dnslink=/"
+	// OwnerPrefix starts a DNSLink DNS owner name.
+	OwnerPrefix = "_dnslink."
 )
 
 var (
@@ -68,11 +68,11 @@ func (link Link) MarshalText() ([]byte, error) {
 		return nil, err
 	}
 	urn, _ := link.Capability.MarshalText()
-	out := make([]byte, 0, len(recordPrefix)+len(link.Namespace)+1+len(urn)-len(urnPrefix))
-	out = append(out, recordPrefix...)
+	out := make([]byte, 0, len(RecordPrefix)+len(link.Namespace)+1+len(urn)-len(eris.CapabilityURNPrefix))
+	out = append(out, RecordPrefix...)
 	out = append(out, link.Namespace...)
 	out = append(out, '/')
-	out = append(out, urn[len(urnPrefix):]...)
+	out = append(out, urn[len(eris.CapabilityURNPrefix):]...)
 	return out, nil
 }
 
@@ -102,16 +102,16 @@ func (link Link) String() string {
 
 // Parse parses one canonical ERIS DNSLink value.
 func Parse(text string) (Link, error) {
-	if !strings.HasPrefix(text, recordPrefix) {
+	if !strings.HasPrefix(text, RecordPrefix) {
 		return Link{}, ErrInvalidLink
 	}
-	remainder := text[len(recordPrefix):]
+	remainder := text[len(RecordPrefix):]
 	namespaceText, identifier, ok := strings.Cut(remainder, "/")
 	namespace := Namespace(namespaceText)
 	if !ok || !namespace.Valid() || identifier == "" || strings.ContainsAny(identifier, "/ \t\r\n") {
 		return Link{}, ErrInvalidLink
 	}
-	capability, err := eris.ParseURN(urnPrefix + identifier)
+	capability, err := eris.ParseURN(eris.CapabilityURNPrefix + identifier)
 	if err != nil {
 		return Link{}, ErrInvalidLink
 	}
@@ -255,13 +255,13 @@ func OwnerName(name string) (string, error) {
 	}
 	absolute := strings.HasSuffix(name, ".")
 	name = strings.TrimSuffix(name, ".")
-	if len(name) >= len(dnsPrefix) && strings.EqualFold(name[:len(dnsPrefix)], dnsPrefix) {
-		name = name[len(dnsPrefix):]
+	if len(name) >= len(OwnerPrefix) && strings.EqualFold(name[:len(OwnerPrefix)], OwnerPrefix) {
+		name = name[len(OwnerPrefix):]
 	}
 	if !validDNSName(name) {
 		return "", ErrInvalidName
 	}
-	owner := dnsPrefix + name
+	owner := OwnerPrefix + name
 	if absolute {
 		owner += "."
 	}
@@ -269,7 +269,7 @@ func OwnerName(name string) (string, error) {
 }
 
 func validDNSName(name string) bool {
-	if name == "" || len(name) > 253-len(dnsPrefix) {
+	if name == "" || len(name) > 253-len(OwnerPrefix) {
 		return false
 	}
 	for label := range strings.SplitSeq(name, ".") {

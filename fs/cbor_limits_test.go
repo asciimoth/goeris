@@ -32,7 +32,7 @@ func TestIndexRejectsDuplicateKeysBeforeAllocation(t *testing.T) {
 	for _, version := range []byte{1, 2} {
 		// The second entry repeats the first key. Reject it before decoding
 		// the rest of a large map or sorting the resulting entries.
-		data := append([]byte(nil), indexTagHeader[:]...)
+		data := append([]byte(nil), []byte(MagicPrefix)...)
 		data = append(data, 0x82, version)
 		data = cborwire.AppendHead(data, 5, 1<<18)
 		data = append(data, bytes.Repeat([]byte{0x81, 0x61, 'a', 0x82, 2, 0x80}, 1<<18)...)

@@ -19,3 +19,10 @@
 //
 // [ERIS object-storage recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/object-storage/index.md
 package s3
+
+const (
+	// ContentType is the media type for encrypted ERIS blocks.
+	ContentType = "application/octet-stream"
+	// PublicReadACL is the canned ACL for public block access.
+	PublicReadACL = "public-read"
+)

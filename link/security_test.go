@@ -58,7 +58,7 @@ func TestUntrustedLinkFields(t *testing.T) {
 	t.Parallel()
 	base, _ := New(testCapability(), 0, "")
 	encoded, _ := base.MarshalBinary()
-	prefix := encoded[:len(header)+eris.CapabilitySize]
+	prefix := encoded[:HeaderSize+eris.CapabilitySize]
 	for _, suffix := range []string{
 		"007bffffffffffffffff",           // MIME length.
 		"0060bbffffffffffffffff",         // Attribute count.

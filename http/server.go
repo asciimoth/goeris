@@ -52,7 +52,7 @@ func (handler Handler) ServeHTTP(writer nethttp.ResponseWriter, request *nethttp
 		writer.WriteHeader(nethttp.StatusInternalServerError)
 		return
 	}
-	if strings.HasPrefix(request.URL.RawQuery, "urn:blake2b:") {
+	if strings.HasPrefix(request.URL.RawQuery, eris.ReferenceURNPrefix) {
 		handler.serveBlock(writer, request)
 		return
 	}

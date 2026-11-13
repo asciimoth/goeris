@@ -13,12 +13,10 @@ import (
 	"github.com/asciimoth/goeris/internal/cborwire"
 )
 
-var indexTagHeader = [...]byte{0xda, 0x65, 0x72, 0x69, 0x74}
-
 // HasIndexHeader reports whether data starts with the five-byte ERIS-FS CBOR
 // tag. It detects a possible image but does not validate the remaining data.
 func HasIndexHeader(data []byte) bool {
-	return len(data) >= len(indexTagHeader) && bytes.Equal(data[:len(indexTagHeader)], indexTagHeader[:])
+	return len(data) >= len(MagicPrefix) && string(data[:len(MagicPrefix)]) == MagicPrefix
 }
 
 // MarshalBinary returns the version 2 representation in RFC 8949 section
@@ -68,7 +66,7 @@ func (index Index) MarshalBinary() ([]byte, error) {
 	slices.SortFunc(encoded, func(a, b encodedEntry) int {
 		return bytes.Compare(a.key, b.key)
 	})
-	out := append([]byte(nil), indexTagHeader[:]...)
+	out := append([]byte(nil), MagicPrefix...)
 	out = cborwire.AppendHead(out, 4, 2)
 	out = cborwire.AppendHead(out, 0, SpecificationVersion)
 	out = cborwire.AppendHead(out, 5, uint64(len(encoded)))
@@ -87,13 +85,13 @@ func (index *Index) UnmarshalBinary(data []byte) error {
 	if index == nil || !HasIndexHeader(data) {
 		return ErrInvalidIndex
 	}
-	decoder := cborDecoder{data: data, offset: len(indexTagHeader)}
+	decoder := cborDecoder{data: data, offset: len(MagicPrefix)}
 	arrayLength, err := decoder.head(4)
 	if err != nil || arrayLength != 2 {
 		return ErrInvalidIndex
 	}
 	version, err := decoder.head(0)
-	if err != nil || (version != 1 && version != SpecificationVersion) {
+	if err != nil || (version != LegacySpecificationVersion && version != SpecificationVersion) {
 		return ErrInvalidIndex
 	}
 	count, err := decoder.head(5)
@@ -119,7 +117,7 @@ func (index *Index) UnmarshalBinary(data []byte) error {
 			// Stop as soon as no permitted ordering can accept this map.
 			// Otherwise repeated keys can allocate entries for the entire
 			// input before validation rejects the duplicate paths.
-			if !bytewise && (version != 1 || !lengthFirst) {
+			if !bytewise && (version != LegacySpecificationVersion || !lengthFirst) {
 				return ErrInvalidIndex
 			}
 		}
@@ -181,7 +179,7 @@ func (decoder *cborDecoder) entry(version uint64) (Entry, int, error) {
 		return Entry{}, 0, ErrInvalidIndex
 	}
 	if entry.Type == Symlink {
-		if version == 1 && decoder.offset < len(decoder.data) && decoder.data[decoder.offset]>>5 == 3 {
+		if version == LegacySpecificationVersion && decoder.offset < len(decoder.data) && decoder.data[decoder.offset]>>5 == 3 {
 			entry.Target, err = decoder.text()
 		} else {
 			entry.Target, err = decoder.target()

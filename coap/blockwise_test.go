@@ -491,7 +491,7 @@ func TestBlockWiseBodyLimitCannotExceedERISBlock(t *testing.T) {
 	for number := uint32(0); number <= 32; number++ {
 		option, _ := (protocol.Block{Number: number, More: true, Size: 1024}).Option(protocol.OptionBlock1)
 		request := &protocol.Message{Code: protocol.PUT, Options: []protocol.Option{
-			protocol.StringOption(protocol.OptionURIPath, blocksSegment), option,
+			protocol.StringOption(protocol.OptionURIPath, BlocksResource), option,
 		}, Payload: make([]byte, 1024)}
 		response := serve(t, handler, request)
 		want := protocol.Continue

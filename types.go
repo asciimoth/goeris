@@ -10,6 +10,14 @@ const (
 	CapabilitySize = 66
 	// PairSize is the size of a reference-key pair.
 	PairSize = 64
+	// ReferenceSize is the size of a block reference.
+	ReferenceSize = 32
+	// KeySize is the size of a node key or convergence secret.
+	KeySize = 32
+	// ReferenceTextSize is the length of an unpadded Base32 block reference.
+	ReferenceTextSize = 52
+	// ReferenceURNPrefix starts a canonical ERIS block-reference URN.
+	ReferenceURNPrefix = "urn:blake2b:"
 )
 
 var (
@@ -42,6 +50,10 @@ const (
 	BlockSize1KiB BlockSize = 1 << 10
 	// BlockSize32KiB is suitable for content of 16 KiB or more.
 	BlockSize32KiB BlockSize = 1 << 15
+	// BlockSize1KiBCode is the capability byte for 1 KiB blocks.
+	BlockSize1KiBCode byte = 0x0a
+	// BlockSize32KiBCode is the capability byte for 32 KiB blocks.
+	BlockSize32KiBCode byte = 0x0f
 )
 
 // Valid reports whether s is an ERIS block size.
@@ -60,9 +72,9 @@ func (s BlockSize) Arity() (int, error) {
 func (s BlockSize) code() (byte, error) {
 	switch s {
 	case BlockSize1KiB:
-		return 0x0a, nil
+		return BlockSize1KiBCode, nil
 	case BlockSize32KiB:
-		return 0x0f, nil
+		return BlockSize32KiBCode, nil
 	default:
 		return 0, ErrInvalidBlockSize
 	}
@@ -70,9 +82,9 @@ func (s BlockSize) code() (byte, error) {
 
 func blockSizeFromCode(code byte) (BlockSize, error) {
 	switch code {
-	case 0x0a:
+	case BlockSize1KiBCode:
 		return BlockSize1KiB, nil
-	case 0x0f:
+	case BlockSize32KiBCode:
 		return BlockSize32KiB, nil
 	default:
 		return 0, ErrInvalidCapability
@@ -83,13 +95,13 @@ func blockSizeFromCode(code byte) (BlockSize, error) {
 type Level uint8
 
 // Reference is the BLAKE2b-256 digest of an encrypted block.
-type Reference [32]byte
+type Reference [ReferenceSize]byte
 
 // Key is a ChaCha20 node encryption key.
-type Key [32]byte
+type Key [KeySize]byte
 
 // Secret is a convergence secret. The zero value is the null secret.
-type Secret [32]byte
+type Secret [KeySize]byte
 
 // Pair identifies an encrypted block and contains the key that decrypts it.
 type Pair struct {
@@ -141,13 +153,13 @@ func (r Reference) String() string {
 
 // URN returns the canonical URN for r.
 func (r Reference) URN() string {
-	return "urn:blake2b:" + r.String()
+	return ReferenceURNPrefix + r.String()
 }
 
 // ParseReference parses a canonical unpadded Base32 reference.
 func ParseReference(text string) (Reference, error) {
 	var ref Reference
-	if len(text) != 52 {
+	if len(text) != ReferenceTextSize {
 		return ref, ErrInvalidBlock
 	}
 	b, err := base32Encoding.DecodeString(text)
@@ -160,11 +172,10 @@ func ParseReference(text string) (Reference, error) {
 
 // ParseReferenceURN parses a canonical ERIS block URN.
 func ParseReferenceURN(urn string) (Reference, error) {
-	const prefix = "urn:blake2b:"
-	if len(urn) != len(prefix)+52 || urn[:len(prefix)] != prefix {
+	if len(urn) != len(ReferenceURNPrefix)+ReferenceTextSize || urn[:len(ReferenceURNPrefix)] != ReferenceURNPrefix {
 		return Reference{}, ErrInvalidBlock
 	}
-	return ParseReference(urn[len(prefix):])
+	return ParseReference(urn[len(ReferenceURNPrefix):])
 }
 
 // ChooseBlockSize returns the block size recommended by the specification.

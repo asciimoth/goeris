@@ -54,7 +54,7 @@ func FuzzParseLink(f *testing.F) {
 func FuzzParseLinkBody(f *testing.F) {
 	base, _ := New(testCapability(), 0, "")
 	encoded, _ := base.MarshalBinary()
-	prefix := encoded[:len(header)+eris.CapabilitySize]
+	prefix := encoded[:HeaderSize+eris.CapabilitySize]
 	for _, seed := range []string{
 		"0060a0", "0060a1617800", "187b7f6161ffbf61619f00ffff",
 		"0060bf6178007f6178ff01ff", "0060bbffffffffffffffff",

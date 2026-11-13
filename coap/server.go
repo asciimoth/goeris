@@ -69,7 +69,7 @@ func (handler Handler) ServeCOAP(ctx context.Context, request *protocol.Message)
 	if request == nil {
 		return &protocol.Message{Code: protocol.BadRequest}, nil
 	}
-	if !matchesPath(request, handler.Path, blocksSegment) {
+	if !matchesPath(request, handler.Path, BlocksResource) {
 		return handler.next(ctx, request)
 	}
 	if len(request.Token) > maxTokenSize {

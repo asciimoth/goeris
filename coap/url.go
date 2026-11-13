@@ -11,7 +11,16 @@ import (
 	protocol "github.com/asciimoth/coaperation"
 )
 
-const blocksSegment = "blocks"
+const (
+	// SchemeUDP identifies CoAP over UDP in a store URL.
+	SchemeUDP = "coap"
+	// SchemeTCP identifies CoAP over TCP in a store URL.
+	SchemeTCP = "coap+tcp"
+	// BlocksResource is the path segment for the block resource.
+	BlocksResource = "blocks"
+	// WellKnownStorePath is the optional endpoint-wide ERIS store path.
+	WellKnownStorePath = "/.well-known/eris"
+)
 
 // StoreURL is a canonical CoAP block-store URL. It supports plain CoAP over
 // UDP and plain CoAP over TCP.
@@ -96,7 +105,7 @@ func (store StoreURL) String() string {
 }
 
 func (store StoreURL) validate() error {
-	if store.scheme != "coap" && store.scheme != "coap+tcp" || store.host == "" || !utf8.ValidString(store.host) || strings.IndexFunc(store.host, unicode.IsControl) >= 0 || store.port == 0 {
+	if store.scheme != SchemeUDP && store.scheme != SchemeTCP || store.host == "" || !utf8.ValidString(store.host) || strings.IndexFunc(store.host, unicode.IsControl) >= 0 || store.port == 0 {
 		return ErrInvalidStoreURL
 	}
 	for index, segment := range store.path {
@@ -136,7 +145,7 @@ func (store StoreURL) requestOptions() ([]protocol.Option, error) {
 	for _, segment := range store.path {
 		options = append(options, protocol.StringOption(protocol.OptionURIPath, segment))
 	}
-	options = append(options, protocol.StringOption(protocol.OptionURIPath, blocksSegment))
+	options = append(options, protocol.StringOption(protocol.OptionURIPath, BlocksResource))
 	return options, nil
 }
 

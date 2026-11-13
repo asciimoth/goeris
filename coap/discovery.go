@@ -76,7 +76,7 @@ func (advertisement Advertisement) validate() error {
 	if _, err := linkformat.Marshal([]linkformat.Link{{Target: canonicalTarget}}); err != nil {
 		return ErrInvalidAdvertisement
 	}
-	if advertisement.Base != "" && advertisement.Base != "coap:" && advertisement.Base != "coap+tcp:" {
+	if advertisement.Base != "" && advertisement.Base != SchemeUDP+":" && advertisement.Base != SchemeTCP+":" {
 		return ErrInvalidAdvertisement
 	}
 	for _, scheme := range advertisement.ProxySchemes {

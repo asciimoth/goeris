@@ -13,6 +13,8 @@ import (
 )
 
 const (
+	// ContentType is the media type for encrypted ERIS blocks.
+	ContentType = "application/octet-stream"
 	// ContentFormatOctetStream is the CoAP content-format number for
 	// application/octet-stream.
 	ContentFormatOctetStream uint32 = 42

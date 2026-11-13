@@ -123,7 +123,7 @@ func FuzzHandler(f *testing.F) {
 		if len(payload) > int(eris.BlockSize32KiB)+1 {
 			payload = payload[:int(eris.BlockSize32KiB)+1]
 		}
-		options := []protocol.Option{protocol.StringOption(protocol.OptionURIPath, blocksSegment)}
+		options := []protocol.Option{protocol.StringOption(protocol.OptionURIPath, BlocksResource)}
 		if query != nil {
 			options = append(options, protocol.NewOption(protocol.OptionURIQuery, query))
 		}
@@ -153,7 +153,7 @@ func FuzzPrepareForward(f *testing.F) {
 	f.Add([]byte{1, 0})
 	f.Fuzz(func(t *testing.T, value []byte) {
 		request := &protocol.Message{Code: protocol.GET, Options: []protocol.Option{
-			protocol.StringOption(protocol.OptionURIPath, blocksSegment),
+			protocol.StringOption(protocol.OptionURIPath, BlocksResource),
 			protocol.NewOption(protocol.OptionHopLimit, value),
 		}}
 		forwarded, err := PrepareForward(request)
@@ -189,7 +189,7 @@ func FuzzBlockWiseHandler(f *testing.F) {
 			request := &protocol.Message{
 				Type: protocol.Confirmable, Code: protocol.Code(code), Payload: payload,
 				Options: []protocol.Option{
-					protocol.StringOption(protocol.OptionURIPath, blocksSegment),
+					protocol.StringOption(protocol.OptionURIPath, BlocksResource),
 					protocol.NewOption(65000, []byte{byte(i % 3)}),
 				},
 			}

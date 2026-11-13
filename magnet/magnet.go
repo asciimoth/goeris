@@ -12,7 +12,18 @@ import (
 	"github.com/asciimoth/goeris"
 )
 
-const scheme = "magnet:"
+const (
+	// Scheme is the URI scheme for Magnet links.
+	Scheme = "magnet"
+	// URIPrefix starts the canonical form of an ERIS Magnet URI.
+	URIPrefix = Scheme + ":"
+	// ExactTopicParameter carries the ERIS capability URN.
+	ExactTopicParameter = "xt"
+	// DisplayNameParameter carries a human-readable name.
+	DisplayNameParameter = "dn"
+	// ExactLengthParameter carries the content length in bytes.
+	ExactLengthParameter = "xl"
+)
 
 // ErrInvalidURI means that text is not a valid ERIS Magnet URI.
 var ErrInvalidURI = errors.New("eris magnet: invalid URI")
@@ -71,7 +82,7 @@ func (uri URI) Validate() error {
 // dn or xl parameter.
 func Parse(text string) (URI, error) {
 	colon := strings.IndexByte(text, ':')
-	if colon < 0 || !strings.EqualFold(text[:colon], "magnet") {
+	if colon < 0 || !strings.EqualFold(text[:colon], Scheme) {
 		return URI{}, ErrInvalidURI
 	}
 	query := strings.TrimPrefix(text[colon+1:], "?")
@@ -96,7 +107,7 @@ func Parse(text string) (URI, error) {
 		}
 
 		switch name {
-		case "xt":
+		case ExactTopicParameter:
 			if hasTopic {
 				return URI{}, ErrInvalidURI
 			}
@@ -106,13 +117,13 @@ func Parse(text string) (URI, error) {
 			}
 			uri.ExactTopic = capability
 			hasTopic = true
-		case "dn":
+		case DisplayNameParameter:
 			if hasName {
 				return URI{}, ErrInvalidURI
 			}
 			uri.DisplayName = value
 			hasName = true
-		case "xl":
+		case ExactLengthParameter:
 			if hasLength {
 				return URI{}, ErrInvalidURI
 			}
@@ -144,16 +155,17 @@ func (uri URI) MarshalText() ([]byte, error) {
 	}
 	topic := uri.ExactTopic.String()
 
-	out := make([]byte, 0, len(scheme)+3+len(topic))
-	out = append(out, scheme...)
-	out = appendParameter(out, "xt", topic)
+	out := make([]byte, 0, len(URIPrefix)+3+len(topic))
+	out = append(out, URIPrefix...)
+	out = appendParameter(out, ExactTopicParameter, topic)
 	if uri.DisplayName != "" {
 		out = append(out, '&')
-		out = appendParameter(out, "dn", uri.DisplayName)
+		out = appendParameter(out, DisplayNameParameter, uri.DisplayName)
 	}
 	if uri.ExactLength != nil {
 		out = append(out, '&')
-		out = append(out, "xl="...)
+		out = append(out, ExactLengthParameter...)
+		out = append(out, '=')
 		out = strconv.AppendUint(out, *uri.ExactLength, 10)
 	}
 
@@ -215,7 +227,7 @@ func isUnescaped(char byte) bool {
 }
 
 func isReserved(name string) bool {
-	return name == "xt" || name == "dn" || name == "xl"
+	return name == ExactTopicParameter || name == DisplayNameParameter || name == ExactLengthParameter
 }
 
 func parseExactLength(value string) (uint64, bool) {

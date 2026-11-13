@@ -46,11 +46,11 @@ func ResourceURL(base *url.URL, urn string) (*url.URL, error) {
 }
 
 func validURN(urn string) bool {
-	if strings.HasPrefix(urn, "urn:blake2b:") {
+	if strings.HasPrefix(urn, eris.ReferenceURNPrefix) {
 		_, err := eris.ParseReferenceURN(urn)
 		return err == nil
 	}
-	if strings.HasPrefix(urn, "urn:eris:") {
+	if strings.HasPrefix(urn, eris.CapabilityURNPrefix) {
 		_, err := eris.ParseURN(urn)
 		return err == nil
 	}
@@ -58,5 +58,5 @@ func validURN(urn string) bool {
 }
 
 func supportedURN(urn string) bool {
-	return strings.HasPrefix(urn, "urn:eris:") || strings.HasPrefix(urn, "urn:blake2b:")
+	return strings.HasPrefix(urn, eris.CapabilityURNPrefix) || strings.HasPrefix(urn, eris.ReferenceURNPrefix)
 }

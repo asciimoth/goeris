@@ -19,7 +19,7 @@ import (
 // These fixtures have one entry, so key order does not affect their encoding.
 func storeV1Index(t testing.TB, index Index, blocks eris.BlockSet) eris.Capability {
 	t.Helper()
-	data := append(bytes.Clone(indexTagHeader[:]), 0x82, 1)
+	data := append(bytes.Clone([]byte(MagicPrefix)), 0x82, 1)
 	data = cborwire.AppendHead(data, 5, uint64(len(index.Entries)))
 	for _, entry := range index.Entries {
 		data = cborwire.AppendHead(data, 4, uint64(len(entry.Path)))

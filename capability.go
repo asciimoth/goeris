@@ -8,10 +8,12 @@ import (
 const (
 	// CapabilityCBORTag is the registered CBOR tag for an ERIS capability.
 	CapabilityCBORTag = 276
-
-	capabilityURNPrefix = "urn:eris:"
-	capabilityTextSize  = 115
-	capabilityCBORSize  = 71
+	// CapabilityURNPrefix starts a canonical ERIS read-capability URN.
+	CapabilityURNPrefix = "urn:eris:"
+	// CapabilityTextSize is the length of a canonical capability URN.
+	CapabilityTextSize = len(CapabilityURNPrefix) + 106
+	// CapabilityCBORSize is the length of a tagged CBOR capability.
+	CapabilityCBORSize = 71
 )
 
 var capabilityCBORHeader = [5]byte{0xd9, 0x01, 0x14, 0x58, 0x42}
@@ -76,20 +78,20 @@ func (c Capability) MarshalText() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]byte, 0, capabilityTextSize)
-	out = append(out, capabilityURNPrefix...)
+	out := make([]byte, 0, CapabilityTextSize)
+	out = append(out, CapabilityURNPrefix...)
 	out = base32Encoding.AppendEncode(out, binary)
 	return out, nil
 }
 
 // UnmarshalText parses a canonical ERIS capability URN.
 func (c *Capability) UnmarshalText(text []byte) error {
-	if c == nil || len(text) != capabilityTextSize || !bytes.HasPrefix(text, []byte(capabilityURNPrefix)) {
+	if c == nil || len(text) != CapabilityTextSize || !bytes.HasPrefix(text, []byte(CapabilityURNPrefix)) {
 		return ErrInvalidCapability
 	}
-	binary, err := base32Encoding.DecodeString(string(text[len(capabilityURNPrefix):]))
+	binary, err := base32Encoding.DecodeString(string(text[len(CapabilityURNPrefix):]))
 	if err != nil || len(binary) != CapabilitySize ||
-		base32Encoding.EncodeToString(binary) != string(text[len(capabilityURNPrefix):]) {
+		base32Encoding.EncodeToString(binary) != string(text[len(CapabilityURNPrefix):]) {
 		return ErrInvalidCapability
 	}
 	return c.UnmarshalBinary(binary)
@@ -118,7 +120,7 @@ func (c Capability) MarshalCBOR() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]byte, capabilityCBORSize)
+	out := make([]byte, CapabilityCBORSize)
 	copy(out, capabilityCBORHeader[:])
 	copy(out[len(capabilityCBORHeader):], binary)
 	return out, nil
@@ -126,7 +128,7 @@ func (c Capability) MarshalCBOR() ([]byte, error) {
 
 // UnmarshalCBOR parses tag 276 containing a binary capability.
 func (c *Capability) UnmarshalCBOR(data []byte) error {
-	if len(data) != capabilityCBORSize || !bytes.Equal(data[:len(capabilityCBORHeader)], capabilityCBORHeader[:]) {
+	if len(data) != CapabilityCBORSize || !bytes.Equal(data[:len(capabilityCBORHeader)], capabilityCBORHeader[:]) {
 		return ErrInvalidCapability
 	}
 	return c.UnmarshalBinary(data[len(capabilityCBORHeader):])

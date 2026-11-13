@@ -64,7 +64,7 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if request == nil || !matchesPath(request, handler.handler.Path, blocksSegment) {
+	if request == nil || !matchesPath(request, handler.handler.Path, BlocksResource) {
 		return handler.handler.ServeCOAP(ctx, request)
 	}
 	// Reassembly clones the final request, including its exchange token.

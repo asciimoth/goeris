@@ -113,7 +113,7 @@ func (handler Handler) get(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store returned an invalid block.")
 		return
 	}
-	writer.Header().Set("Content-Type", "application/octet-stream")
+	writer.Header().Set("Content-Type", ContentType)
 	writer.Header().Set("Cache-Control", "max-age=31536000, immutable")
 	http.ServeContent(writer, request, ref.String(), time.Time{}, bytes.NewReader(block))
 }
@@ -182,7 +182,7 @@ func publicReadACL(headers http.Header) bool {
 		if !strings.EqualFold(name, "x-amz-acl") {
 			continue
 		}
-		if found || len(values) != 1 || values[0] != "public-read" {
+		if found || len(values) != 1 || values[0] != PublicReadACL {
 			return false
 		}
 		found = true

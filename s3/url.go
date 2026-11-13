@@ -9,6 +9,9 @@ import (
 	"github.com/asciimoth/goeris"
 )
 
+// Scheme identifies the object-storage URL format.
+const Scheme = "s3"
+
 // StoreURL identifies one bucket at an HTTPS S3 endpoint. Its zero value is
 // invalid.
 type StoreURL struct {
@@ -23,7 +26,7 @@ type StoreURL struct {
 // untrusted store URLs must enforce their own network access policy.
 func ParseStoreURL(text string) (StoreURL, error) {
 	parsed, err := url.Parse(text)
-	if err != nil || parsed.Scheme != "s3" || parsed.Host == "" || parsed.User != nil ||
+	if err != nil || parsed.Scheme != Scheme || parsed.Host == "" || parsed.User != nil ||
 		parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
 		return StoreURL{}, ErrInvalidStoreURL
 	}
@@ -104,7 +107,7 @@ func (store StoreURL) String() string {
 	if store.host == "" || !validBucket(store.bucket) {
 		return ""
 	}
-	return "s3://" + store.host + "/" + store.bucket + "/"
+	return Scheme + "://" + store.host + "/" + store.bucket + "/"
 }
 
 // Host returns the HTTPS endpoint host, including its optional port.

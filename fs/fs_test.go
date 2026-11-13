@@ -189,7 +189,7 @@ func TestCBORPrimitives(t *testing.T) {
 	if _, err := decoder.fixed(3, 0); err == nil {
 		t.Fatal("accepted invalid fixed integer size")
 	}
-	malformedEntry := append(append([]byte(nil), indexTagHeader[:]...), 0x82, 0x01, 0xa1, 0x00)
+	malformedEntry := append(append([]byte(nil), []byte(MagicPrefix)...), 0x82, 0x01, 0xa1, 0x00)
 	if _, err := ParseIndex(malformedEntry); !errors.Is(err, ErrInvalidIndex) {
 		t.Fatalf("malformed entry error = %v", err)
 	}
@@ -1124,7 +1124,7 @@ func TestRegularFileStatAfterClose(t *testing.T) {
 func BenchmarkIndexInvalidCounts(b *testing.B) {
 	for _, pathCount := range []bool{false, true} {
 		b.Run(fmt.Sprintf("path=%t", pathCount), func(b *testing.B) {
-			data := append([]byte(nil), indexTagHeader[:]...)
+			data := append([]byte(nil), []byte(MagicPrefix)...)
 			data = append(data, 0x82, 0x01)
 			if pathCount {
 				data = append(data, 0xa1)

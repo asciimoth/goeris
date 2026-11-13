@@ -145,7 +145,7 @@ func TestRequestValidationDoesNotCopyLargeValues(t *testing.T) {
 		if _, err := parseReferenceQuery(query); err == nil {
 			t.Fatal("oversized reference accepted")
 		}
-		if matchesPath(path, nil, blocksSegment) {
+		if matchesPath(path, nil, BlocksResource) {
 			t.Fatal("oversized path matched")
 		}
 	}); allocations != 0 {

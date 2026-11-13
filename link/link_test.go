@@ -47,7 +47,7 @@ func TestLinkRoundTrip(t *testing.T) {
 	if err != nil || !bytes.Equal(first, second) {
 		t.Fatalf("non-deterministic encoding: %x != %x (%v)", first, second, err)
 	}
-	if !HasHeader(first) || HasHeader(first[:len(header)-1]) || HasHeader(nil) {
+	if !HasHeader(first) || HasHeader(first[:HeaderSize-1]) || HasHeader(nil) {
 		t.Fatal("header detection failed")
 	}
 
@@ -136,7 +136,7 @@ func TestUnmarshalFlexibleCBOR(t *testing.T) {
 	t.Parallel()
 	base, _ := New(testCapability(), 0, "")
 	encoded, _ := base.MarshalBinary()
-	prefix := append([]byte(nil), encoded[:len(header)+eris.CapabilitySize]...)
+	prefix := append([]byte(nil), encoded[:HeaderSize+eris.CapabilitySize]...)
 	// Non-minimal uint(1), an indefinite text string, and an indefinite map.
 	data := append(prefix, 0x18, 0x01, 0x7f, 0x62, 't', 'e', 0x62, 'x', 't', 0xff, 0xbf)
 	data = append(data, 0x61, 'x', 0x9f, 0x01, 0x02, 0xff, 0xff)
@@ -176,14 +176,14 @@ func TestInvalidLinks(t *testing.T) {
 	t.Parallel()
 	valid, _ := New(testCapability(), 0, "")
 	good, _ := valid.MarshalBinary()
-	capEnd := len(header) + eris.CapabilitySize
+	capEnd := HeaderSize + eris.CapabilitySize
 	prefix := append([]byte(nil), good[:capEnd]...)
 
 	cases := [][]byte{
 		nil,
-		good[:len(header)-1],
+		good[:HeaderSize-1],
 		append([]byte(nil), good[:capEnd-1]...),
-		append(append([]byte(nil), good[:len(header)]...), make([]byte, eris.CapabilitySize)...),
+		append(append([]byte(nil), good[:HeaderSize]...), make([]byte, eris.CapabilitySize)...),
 		append(append([]byte(nil), prefix...), 0x20),
 		append(append([]byte(nil), prefix...), 0x00, 0x7c),
 		append(append([]byte(nil), prefix...), 0x00, 0x7f),

@@ -142,7 +142,7 @@ func TestCapabilityEncoding(t *testing.T) {
 	}
 
 	cbor, err := capability.MarshalCBOR()
-	if err != nil || len(cbor) != capabilityCBORSize {
+	if err != nil || len(cbor) != CapabilityCBORSize {
 		t.Fatalf("MarshalCBOR() = (%x, %v)", cbor, err)
 	}
 	var fromCBOR Capability
@@ -198,9 +198,9 @@ func TestCapabilityRejectsInvalidEncoding(t *testing.T) {
 	validText, _ := valid.MarshalText()
 	for _, text := range [][]byte{
 		nil,
-		append([]byte("URN:eris:"), validText[len(capabilityURNPrefix):]...),
-		append([]byte(capabilityURNPrefix), bytes.Repeat([]byte{'!'}, 106)...),
-		append([]byte(capabilityURNPrefix), bytes.Repeat([]byte{'a'}, 106)...),
+		append([]byte("URN:eris:"), validText[len(CapabilityURNPrefix):]...),
+		append([]byte(CapabilityURNPrefix), bytes.Repeat([]byte{'!'}, 106)...),
+		append([]byte(CapabilityURNPrefix), bytes.Repeat([]byte{'a'}, 106)...),
 	} {
 		if err := capability.UnmarshalText(text); !errors.Is(err, ErrInvalidCapability) {
 			t.Errorf("UnmarshalText(%q) error = %v", text, err)

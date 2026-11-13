@@ -24,7 +24,7 @@ func writeLzip(output io.Writer, content io.Reader) (int64, error) {
 	// Fixed fixtures in lzip-conformance-v1.json guard dependency updates too.
 	compressor, err := (lzma.WriterConfig{
 		Properties: &lzma.Properties{LC: 3, LP: 0, PB: 2},
-		DictCap:    8 << 20,
+		DictCap:    LzipDictionarySize,
 		BufSize:    4096,
 		Matcher:    lzma.HashTable4,
 		EOSMarker:  true,

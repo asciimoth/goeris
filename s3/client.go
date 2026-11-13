@@ -82,8 +82,8 @@ func (client *Client) newRequest(ctx context.Context, method string, ref eris.Re
 		return nil, err
 	}
 	if method == http.MethodPut {
-		request.Header.Set("Content-Type", "application/octet-stream")
-		request.Header.Set("x-amz-acl", "public-read")
+		request.Header.Set("Content-Type", ContentType)
+		request.Header.Set("x-amz-acl", PublicReadACL)
 	}
 	if client.signer != nil {
 		if err := client.signer.Sign(request, block); err != nil {
