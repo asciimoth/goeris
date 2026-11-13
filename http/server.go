@@ -20,6 +20,8 @@ import (
 //
 // A nil Next handler is equivalent to net/http.NotFoundHandler.
 // Requests with more than 16 range entries receive HTTP 416 before block I/O.
+// Successful responses use a one-year immutable cache policy unless the caller
+// has already set Cache-Control on the response writer.
 type Handler struct {
 	Blocks eris.BlockSource
 	Next   nethttp.Handler
@@ -155,7 +157,9 @@ func (handler Handler) next() nethttp.Handler {
 func setResourceHeaders(writer nethttp.ResponseWriter) {
 	writer.Header().Set("Content-Type", ContentType)
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
-	writer.Header().Set("Cache-Control", "max-age=31536000, immutable")
+	if _, set := writer.Header()["Cache-Control"]; !set {
+		writer.Header().Set("Cache-Control", "max-age=31536000, immutable")
+	}
 }
 
 func writeSourceError(writer nethttp.ResponseWriter, err error) {

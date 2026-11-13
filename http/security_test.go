@@ -220,6 +220,33 @@ func TestHandlerMultipartContent(t *testing.T) {
 	}
 }
 
+func TestHandlerPreservesCachePolicy(t *testing.T) {
+	capability, blocks, _ := testData(t)
+	for _, urn := range []string{capability.String(), capability.Root.Reference.URN()} {
+		for _, method := range []string{nethttp.MethodGet, nethttp.MethodHead} {
+			for _, byteRange := range []string{"", "bytes=0-10", "bytes=0-10,20-30"} {
+				request := httptest.NewRequest(method, N2RPath+"?"+urn, nil)
+				request.Header.Set("Range", byteRange)
+				recorder := httptest.NewRecorder()
+				// An outer handler can restrict caching of sensitive content.
+				recorder.Header().Add("Cache-Control", "private")
+				recorder.Header().Add("Cache-Control", "no-store")
+				Handler{Blocks: blocks}.ServeHTTP(recorder, request)
+				wantStatus := nethttp.StatusOK
+				if byteRange != "" {
+					wantStatus = nethttp.StatusPartialContent
+				}
+				if recorder.Code != wantStatus {
+					t.Fatalf("%s range %q: status %d", method, byteRange, recorder.Code)
+				}
+				if got := strings.Join(recorder.Result().Header.Values("Cache-Control"), ", "); got != "private, no-store" {
+					t.Fatalf("%s range %q: cache policy changed to %q", method, byteRange, got)
+				}
+			}
+		}
+	}
+}
+
 func TestResponseErrorDoesNotExposeServerText(t *testing.T) {
 	err := &ResponseError{StatusCode: 503, Status: "503 \x1b[2Jprivate server details"}
 	if got := err.Error(); got != "eris http: response status 503 (Service Unavailable)" {

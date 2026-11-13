@@ -23,6 +23,10 @@
 // net/http.ErrAbortHandler to abort the response. Middleware must preserve this
 // behavior. Errors before streaming starts produce an HTTP error status.
 //
+// Successful responses allow caching for one year by default. An outer handler
+// can set Cache-Control (for example, "no-store" for sensitive decoded content)
+// before calling Handler to replace this default.
+//
 // Configure client timeouts and redirect policy in the supplied HTTPClient.
 // OpenContent returns unverified bytes and has no response size limit. An ERIS
 // capability contains a decryption key; remote decoding sends that key in the
