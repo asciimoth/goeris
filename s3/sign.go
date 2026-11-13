@@ -228,13 +228,9 @@ func validRequestHost(host string) bool {
 	if host == "" {
 		return false
 	}
-	for index := 0; index < len(host); index++ {
-		char := host[index]
-		if char <= ' ' || char == 0x7f {
-			return false
-		}
-	}
-	return true
+	parsed, err := url.Parse("https://" + host)
+	return err == nil && parsed.Host == host && parsed.User == nil && parsed.Path == "" &&
+		parsed.RawQuery == "" && !parsed.ForceQuery && parsed.Fragment == "" && validEndpointHost(parsed)
 }
 
 func signedHeaderNames(request *http.Request) []string {
@@ -438,6 +434,13 @@ func (authenticator V4Authenticator) Authenticate(request *http.Request, payload
 		parsed.scope != credentialScope(date, authenticator.Region) {
 		return "", ErrAuthentication
 	}
+	if hashValues[0] != sha256Hex(payload) {
+		return "", ErrAuthentication
+	}
+	canonical, _, err := canonicalRequestForVerification(request, parsed.signedHeaders)
+	if err != nil {
+		return "", ErrAuthentication
+	}
 	credentials, err := authenticator.Credentials.Credential(request.Context(), parsed.accessKey)
 	if err != nil || !credentials.Valid() || credentials.AccessKey != parsed.accessKey {
 		return "", ErrAuthentication
@@ -447,13 +450,6 @@ func (authenticator V4Authenticator) Authenticate(request *http.Request, payload
 		token = tokenValues[0]
 	}
 	if !validSessionToken(token, credentials.SessionToken) {
-		return "", ErrAuthentication
-	}
-	if hashValues[0] != sha256Hex(payload) {
-		return "", ErrAuthentication
-	}
-	canonical, _, err := canonicalRequestForVerification(request, parsed.signedHeaders)
-	if err != nil {
 		return "", ErrAuthentication
 	}
 	stringToSign := algorithm + "\n" + date.Format(amzDateFormat) + "\n" + parsed.scope + "\n" + sha256Hex([]byte(canonical))
@@ -475,6 +471,9 @@ type authorization struct {
 
 func parseAuthorization(value string) (authorization, error) {
 	if !strings.HasPrefix(value, algorithm+" ") {
+		return authorization{}, ErrAuthentication
+	}
+	if strings.Count(value, ",") != 2 {
 		return authorization{}, ErrAuthentication
 	}
 	fields := strings.Split(strings.TrimPrefix(value, algorithm+" "), ",")
@@ -506,6 +505,11 @@ func parseAuthorization(value string) (authorization, error) {
 }
 
 func canonicalRequestForVerification(request *http.Request, names string) (string, string, error) {
+	// A valid list cannot name more fields than the request contains, plus
+	// host. Check before splitting attacker-controlled input into strings.
+	if strings.Count(names, ";") > len(request.Header) {
+		return "", "", ErrAuthentication
+	}
 	list := strings.Split(names, ";")
 	if len(list) == 0 || list[0] == "" || !sort.StringsAreSorted(list) {
 		return "", "", ErrAuthentication

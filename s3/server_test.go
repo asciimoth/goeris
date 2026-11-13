@@ -167,6 +167,11 @@ func TestHandlerWriteChecks(t *testing.T) {
 		{"denied", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow, Authorize: func(_ context.Context, _, _, _ string, _ eris.Reference) bool { return false }}, base, 403},
 		{"bad acl", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request { request := base(); request.Header.Del("x-amz-acl"); return request }, 400},
 		{"duplicate acl", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request { request := base(); request.Header.Add("x-amz-acl", "private"); return request }, 400},
+		{"case variant acl", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
+			request := base()
+			request.Header["x-amz-acl"] = []string{"private"}
+			return request
+		}, 400},
 		{"bad block", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Body = io.NopCloser(bytes.NewReader(make([]byte, eris.BlockSize1KiB)))

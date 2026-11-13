@@ -423,6 +423,39 @@ func TestAuthenticationErrors(t *testing.T) {
 	}
 }
 
+func TestMalformedAuthenticationSkipsCredentialLookup(t *testing.T) {
+	t.Parallel()
+	request, err := http.NewRequest(http.MethodPut, "https://example/key", strings.NewReader("body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SignV4(request, []byte("body"), testCredentials, "region", testTime); err != nil {
+		t.Fatal(err)
+	}
+	lookups := 0
+	auth := V4Authenticator{
+		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+			lookups++
+			return testCredentials, nil
+		}),
+		Region: "region", Clock: func() time.Time { return testTime },
+	}
+	wrongHash := request.Clone(context.Background())
+	wrongHash.Header.Set("x-amz-content-sha256", sha256Hex(nil))
+	if _, err := auth.Authenticate(wrongHash, []byte("body")); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("wrong hash: %v", err)
+	}
+	badList := request.Clone(context.Background())
+	badList.Header.Set("Authorization", strings.Replace(request.Header.Get("Authorization"),
+		"SignedHeaders=host;", "SignedHeaders="+strings.Repeat("host;", 10000), 1))
+	if _, err := auth.Authenticate(badList, []byte("body")); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("malformed signed headers: %v", err)
+	}
+	if lookups != 0 {
+		t.Fatalf("credential source called %d times for malformed requests", lookups)
+	}
+}
+
 func TestAuthorizationAndCanonicalVerificationErrors(t *testing.T) {
 	t.Parallel()
 	badAuthorization := []string{
@@ -432,6 +465,7 @@ func TestAuthorizationAndCanonicalVerificationErrors(t *testing.T) {
 		algorithm + " Credential=bäd/scope,SignedHeaders=host,Signature=" + strings.Repeat("0", 64),
 		algorithm + " Credential=key/scope,SignedHeaders=host,Signature=short",
 		algorithm + " Credential=key/scope,SignedHeaders=host,Signature=" + strings.Repeat("z", 64),
+		algorithm + " Credential=key/scope,SignedHeaders=" + strings.Repeat(",", 10000) + ",Signature=" + strings.Repeat("0", 64),
 	}
 	for _, value := range badAuthorization {
 		if _, err := parseAuthorization(value); !errors.Is(err, ErrAuthentication) {
@@ -445,6 +479,7 @@ func TestAuthorizationAndCanonicalVerificationErrors(t *testing.T) {
 		"", "x-amz-date;host", "host;host;x-amz-content-sha256;x-amz-date",
 		"Host;x-amz-content-sha256;x-amz-date", "host;missing;x-amz-content-sha256;x-amz-date",
 		"host;x-amz-date", "host;x-amz-content-sha256",
+		strings.Repeat("host;", 10000),
 	}
 	for _, names := range badHeaders {
 		if _, _, err := canonicalRequestForVerification(request, names); !errors.Is(err, ErrAuthentication) {
@@ -619,6 +654,10 @@ func TestSigV4RejectsInvalidRequestTarget(t *testing.T) {
 		{"method newline", func(request *http.Request) { request.Method = "GET\nPUT" }},
 		{"host space", func(request *http.Request) { request.Host = " example" }},
 		{"host control", func(request *http.Request) { request.Host = "example\x00" }},
+		{"host with path", func(request *http.Request) { request.Host = "example/path" }},
+		{"host with userinfo", func(request *http.Request) { request.Host = "user@example" }},
+		{"host with ambiguous port", func(request *http.Request) { request.Host = "example:1:2" }},
+		{"unicode host", func(request *http.Request) { request.Host = "bücher.example" }},
 		{"query space", func(request *http.Request) { request.URL.RawQuery = "a=b c" }},
 		{"query newline", func(request *http.Request) { request.URL.RawQuery = "a=b\n" }},
 		{"query fragment", func(request *http.Request) { request.URL.RawQuery = "a=b#c" }},

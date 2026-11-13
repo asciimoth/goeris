@@ -134,8 +134,7 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusForbidden, "AccessDenied", "The identity cannot write this block.")
 		return
 	}
-	acl := request.Header.Values("x-amz-acl")
-	if len(acl) != 1 || acl[0] != "public-read" {
+	if !publicReadACL(request.Header) {
 		writeS3Error(writer, http.StatusBadRequest, "InvalidArgument", "x-amz-acl must be public-read.")
 		return
 	}
@@ -158,6 +157,20 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		return
 	}
 	writer.WriteHeader(http.StatusOK)
+}
+
+func publicReadACL(headers http.Header) bool {
+	found := false
+	for name, values := range headers {
+		if !strings.EqualFold(name, "x-amz-acl") {
+			continue
+		}
+		if found || len(values) != 1 || values[0] != "public-read" {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 func (handler Handler) getBlock(ctx context.Context, ref eris.Reference) ([]byte, error) {

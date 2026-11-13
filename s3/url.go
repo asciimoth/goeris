@@ -23,7 +23,7 @@ func ParseStoreURL(text string) (StoreURL, error) {
 		parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
 		return StoreURL{}, ErrInvalidStoreURL
 	}
-	if parsed.Hostname() == "" || invalidPort(parsed) {
+	if !validEndpointHost(parsed) {
 		return StoreURL{}, ErrInvalidStoreURL
 	}
 	path := strings.TrimPrefix(parsed.Path, "/")
@@ -39,6 +39,21 @@ func ParseStoreURL(text string) (StoreURL, error) {
 		return StoreURL{}, ErrInvalidStoreURL
 	}
 	return store, nil
+}
+
+func validEndpointHost(parsed *url.URL) bool {
+	if parsed.Hostname() == "" || invalidPort(parsed) ||
+		(!strings.HasPrefix(parsed.Host, "[") && strings.Contains(parsed.Hostname(), ":")) {
+		return false
+	}
+	// Keep the signed Host value equal to the authority sent on the wire.
+	// Unicode hostnames can be converted to IDNA names by an HTTP client.
+	for index := 0; index < len(parsed.Host); index++ {
+		if parsed.Host[index] <= ' ' || parsed.Host[index] >= 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func invalidPort(parsed *url.URL) bool {
