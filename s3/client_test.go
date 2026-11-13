@@ -115,12 +115,16 @@ func TestClientEndToEnd(t *testing.T) {
 		Clock:  clock,
 	}
 	handler := Handler{Blocks: blocks, Bucket: "blocks", AllowPut: true, Auth: auth}
-	executor := httpClientFunc(func(request *http.Request) (*http.Response, error) {
-		recorder := httptest.NewRecorder()
-		handler.ServeHTTP(recorder, request)
-		return recorder.Result(), nil
-	})
-	client, _ := NewClient(executor, testStore(t), StaticV4Signer{Credentials: credentials, Region: "test-1", Clock: clock})
+	server := httptest.NewTLSServer(handler)
+	defer server.Close()
+	store, err := ParseStoreURL("s3://" + strings.TrimPrefix(server.URL, "https://") + "/blocks/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(server.Client(), store, StaticV4Signer{Credentials: credentials, Region: "test-1", Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if gotRef, err := client.PutBlock(block); err != nil || gotRef != ref {
 		t.Fatalf("PutBlock() = %v, %v", gotRef, err)
 	}
@@ -179,7 +183,7 @@ func TestClientErrors(t *testing.T) {
 	if _, err := client.NewRequest(nil, http.MethodGet, ref, nil); err == nil { //nolint:staticcheck
 		t.Error("nil context accepted")
 	}
-	if got := (&ResponseError{StatusCode: 500, Status: "500 Internal Server Error"}).Error(); got != "eris s3: response status 500 Internal Server Error" {
+	if got := (&ResponseError{StatusCode: 500, Status: "500\x1b[31m injected"}).Error(); got != "eris s3: response status 500" {
 		t.Errorf("ResponseError.Error() = %q", got)
 	}
 }

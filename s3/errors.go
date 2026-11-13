@@ -32,5 +32,5 @@ type ResponseError struct {
 
 // Error implements error.
 func (err *ResponseError) Error() string {
-	return fmt.Sprintf("eris s3: response status %s", err.Status)
+	return fmt.Sprintf("eris s3: response status %d", err.StatusCode)
 }

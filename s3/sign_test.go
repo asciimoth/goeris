@@ -43,7 +43,7 @@ func TestSignV4AWSExample(t *testing.T) {
 func TestCanonicalRequest(t *testing.T) {
 	t.Parallel()
 	request, _ := http.NewRequest(http.MethodGet, "https://example/a b?z=a+b&a=2&a=1&empty", nil)
-	request.Host = " override.example "
+	request.Host = "override.example"
 	request.Header["X-Amz-Meta-Test"] = []string{" a  b ", "c"}
 	request.Header.Set("User-Agent", "ignored")
 	request.Header.Set("Authorization", "ignored")
@@ -326,7 +326,12 @@ func TestSigningErrors(t *testing.T) {
 		{request, Credentials{}, "region"},
 		{request, testCredentials, ""},
 		{request, Credentials{AccessKey: "bad/key", SecretKey: "secret"}, "region"},
+		{request, Credentials{AccessKey: "bad\x00key", SecretKey: "secret"}, "region"},
+		{request, Credentials{AccessKey: "bäd", SecretKey: "secret"}, "region"},
+		{request, Credentials{AccessKey: "key", SecretKey: "secret", SessionToken: "bad\rvalue"}, "region"},
+		{request, Credentials{AccessKey: "key", SecretKey: "secret", SessionToken: " token"}, "region"},
 		{request, testCredentials, "bad/region"},
+		{request, testCredentials, "bad\x00region"},
 	} {
 		if err := SignV4(test.request, nil, test.credentials, test.region, testTime); !errors.Is(err, ErrInvalidCredentials) {
 			t.Errorf("SignV4() = %v", err)
@@ -423,6 +428,8 @@ func TestAuthorizationAndCanonicalVerificationErrors(t *testing.T) {
 	badAuthorization := []string{
 		algorithm + " Credential=key/scope,SignedHeaders=host",
 		algorithm + " Credential=/scope,SignedHeaders=host,Signature=" + strings.Repeat("0", 64),
+		algorithm + " Credential=bad\x00key/scope,SignedHeaders=host,Signature=" + strings.Repeat("0", 64),
+		algorithm + " Credential=bäd/scope,SignedHeaders=host,Signature=" + strings.Repeat("0", 64),
 		algorithm + " Credential=key/scope,SignedHeaders=host,Signature=short",
 		algorithm + " Credential=key/scope,SignedHeaders=host,Signature=" + strings.Repeat("z", 64),
 	}
@@ -464,9 +471,9 @@ func FuzzCanonicalRequest(f *testing.F) {
 		request.Header.Set("x-amz-meta-fuzz", header)
 		first, firstHeaders, firstErr := CanonicalRequest(request, sha256Hex(nil))
 		second, secondHeaders, secondErr := CanonicalRequest(request, sha256Hex(nil))
-		if _, queryErr := url.ParseQuery(query); queryErr != nil {
+		if !validRequestURL(request) || !validHeaderValue(header) {
 			if !errors.Is(firstErr, ErrInvalidRequest) || !errors.Is(secondErr, ErrInvalidRequest) {
-				t.Fatalf("malformed query errors = %v, %v", firstErr, secondErr)
+				t.Fatalf("invalid input errors = %v, %v", firstErr, secondErr)
 			}
 			return
 		}
@@ -551,5 +558,86 @@ func TestSignV4RejectsAmbiguousHeaderMap(t *testing.T) {
 	}
 	if _, err := auth.Authenticate(request, nil); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("ambiguous request authenticated: %v", err)
+	}
+}
+
+func TestSigV4RejectsInvalidWireHeaders(t *testing.T) {
+	t.Parallel()
+	auth := V4Authenticator{
+		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+			t.Fatal("invalid headers reached credential lookup")
+			return testCredentials, nil
+		}),
+		Region: "region", Clock: func() time.Time { return testTime },
+	}
+	for _, test := range []struct {
+		name   string
+		header string
+		values []string
+	}{
+		{"empty name", "", []string{"value"}},
+		{"space in name", "X Bad", []string{"value"}},
+		{"colon in name", "X:Bad", []string{"value"}},
+		{"empty value list", "X-Test", nil},
+		{"newline in value", "X-Test", []string{"first\nsecond"}},
+		{"carriage return in value", "X-Test", []string{"first\rsecond"}},
+		{"NUL in value", "X-Test", []string{"first\x00second"}},
+		{"DEL in value", "X-Test", []string{"first\x7fsecond"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, _ := http.NewRequest(http.MethodGet, "https://example/key", nil)
+			if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
+				t.Fatal(err)
+			}
+			request.Header[test.header] = test.values
+			if _, _, err := CanonicalRequest(request, sha256Hex(nil)); !errors.Is(err, ErrInvalidRequest) {
+				t.Errorf("canonical request: %v", err)
+			}
+			if err := SignV4(request, nil, testCredentials, "region", testTime); !errors.Is(err, ErrInvalidRequest) {
+				t.Errorf("sign request: %v", err)
+			}
+			if _, err := auth.Authenticate(request, nil); !errors.Is(err, ErrAuthentication) {
+				t.Errorf("authenticate request: %v", err)
+			}
+		})
+	}
+}
+
+func TestSigV4RejectsInvalidRequestTarget(t *testing.T) {
+	t.Parallel()
+	auth := V4Authenticator{
+		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+			t.Fatal("invalid target reached credential lookup")
+			return testCredentials, nil
+		}),
+		Region: "region", Clock: func() time.Time { return testTime },
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*http.Request)
+	}{
+		{"method newline", func(request *http.Request) { request.Method = "GET\nPUT" }},
+		{"host space", func(request *http.Request) { request.Host = " example" }},
+		{"host control", func(request *http.Request) { request.Host = "example\x00" }},
+		{"query space", func(request *http.Request) { request.URL.RawQuery = "a=b c" }},
+		{"query newline", func(request *http.Request) { request.URL.RawQuery = "a=b\n" }},
+		{"query fragment", func(request *http.Request) { request.URL.RawQuery = "a=b#c" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, _ := http.NewRequest(http.MethodGet, "https://example/key", nil)
+			if err := SignV4(request, nil, testCredentials, "region", testTime); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(request)
+			if _, _, err := CanonicalRequest(request, sha256Hex(nil)); !errors.Is(err, ErrInvalidRequest) {
+				t.Errorf("canonical request: %v", err)
+			}
+			if err := SignV4(request, nil, testCredentials, "region", testTime); !errors.Is(err, ErrInvalidRequest) {
+				t.Errorf("sign request: %v", err)
+			}
+			if _, err := auth.Authenticate(request, nil); !errors.Is(err, ErrAuthentication) {
+				t.Errorf("authenticate request: %v", err)
+			}
+		})
 	}
 }

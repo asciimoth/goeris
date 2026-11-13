@@ -21,7 +21,7 @@ const (
 )
 
 // Credentials contains one SigV4 identity. SessionToken is optional. AccessKey
-// must not contain whitespace or SigV4 field delimiters.
+// must contain only printable ASCII without SigV4 field delimiters.
 type Credentials struct {
 	AccessKey    string
 	SecretKey    string
@@ -30,8 +30,22 @@ type Credentials struct {
 
 // Valid reports whether the required credential fields are present.
 func (credentials Credentials) Valid() bool {
-	return credentials.AccessKey != "" && credentials.SecretKey != "" &&
-		!strings.ContainsAny(credentials.AccessKey, "/, \t\r\n")
+	return validCredentialPart(credentials.AccessKey) && credentials.SecretKey != "" &&
+		validHeaderValue(credentials.SessionToken) &&
+		strings.Trim(credentials.SessionToken, " \t") == credentials.SessionToken
+}
+
+func validCredentialPart(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		char := value[index]
+		if char < '!' || char > '~' || char == '/' || char == ',' {
+			return false
+		}
+	}
+	return true
 }
 
 // Signer adds authentication to an HTTP request. payload contains the complete
@@ -63,10 +77,10 @@ func (signer StaticV4Signer) Sign(request *http.Request, payload []byte) error {
 // The URL must use Path and optional RawPath, not Opaque. Header map keys
 // must not contain multiple case variants of the same field.
 func SignV4(request *http.Request, payload []byte, credentials Credentials, region string, now time.Time) error {
-	if !credentials.Valid() || region == "" || strings.ContainsAny(region, "/, \t\r\n") {
+	if !credentials.Valid() || !validCredentialPart(region) {
 		return ErrInvalidCredentials
 	}
-	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" ||
+	if request == nil || request.URL == nil || !validHeaderName(request.Method) || !validRequestHost(requestHost(request)) ||
 		!validRequestURL(request) {
 		return ErrInvalidRequest
 	}
@@ -99,7 +113,7 @@ func SignV4(request *http.Request, payload []byte, credentials Credentials, regi
 // The URL must use Path and optional RawPath, not Opaque. Header map keys
 // must not contain multiple case variants of the same field.
 func CanonicalRequest(request *http.Request, payloadHash string) (string, string, error) {
-	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" ||
+	if request == nil || request.URL == nil || !validHeaderName(request.Method) || !validRequestHost(requestHost(request)) ||
 		!validSHA256Hex(payloadHash) || !validRequestURL(request) {
 		return "", "", ErrInvalidRequest
 	}
@@ -118,13 +132,46 @@ func CanonicalRequest(request *http.Request, payloadHash string) (string, string
 func normalizedHeaders(input http.Header) (http.Header, error) {
 	output := make(http.Header, len(input))
 	for name, values := range input {
+		if !validHeaderName(name) || len(values) == 0 {
+			return nil, ErrInvalidRequest
+		}
 		canonical := http.CanonicalHeaderKey(name)
 		if _, exists := output[canonical]; exists {
 			return nil, ErrInvalidRequest
 		}
+		for _, value := range values {
+			if !validHeaderValue(value) {
+				return nil, ErrInvalidRequest
+			}
+		}
 		output[canonical] = append([]string(nil), values...)
 	}
 	return output, nil
+}
+
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index := 0; index < len(name); index++ {
+		char := name[index]
+		if (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') ||
+			(char >= '0' && char <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(char)) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validHeaderValue(value string) bool {
+	for index := 0; index < len(value); index++ {
+		char := value[index]
+		if char != '\t' && (char < ' ' || char == 0x7f) {
+			return false
+		}
+	}
+	return true
 }
 
 func canonicalRequest(request *http.Request, payloadHash string) (string, string) {
@@ -165,8 +212,29 @@ func validRequestURL(request *http.Request) bool {
 	if request.URL.Opaque != "" {
 		return false
 	}
+	// RawQuery is copied into the request target without escaping. A raw
+	// separator or control byte can change how a peer parses that target.
+	for index := 0; index < len(request.URL.RawQuery); index++ {
+		char := request.URL.RawQuery[index]
+		if char <= ' ' || char == 0x7f || char == '#' {
+			return false
+		}
+	}
 	_, err := url.ParseQuery(request.URL.RawQuery)
 	return err == nil
+}
+
+func validRequestHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	for index := 0; index < len(host); index++ {
+		char := host[index]
+		if char <= ' ' || char == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func signedHeaderNames(request *http.Request) []string {
@@ -331,9 +399,8 @@ type V4Authenticator struct {
 // Authenticate verifies request and returns its access key. It rejects
 // header maps with multiple case variants of the same field.
 func (authenticator V4Authenticator) Authenticate(request *http.Request, payload []byte) (string, error) {
-	if request == nil || request.URL == nil || request.Method == "" || requestHost(request) == "" ||
-		authenticator.Credentials == nil || authenticator.Region == "" ||
-		strings.ContainsAny(authenticator.Region, "/, \t\r\n") || !validRequestURL(request) {
+	if request == nil || request.URL == nil || !validHeaderName(request.Method) || !validRequestHost(requestHost(request)) ||
+		authenticator.Credentials == nil || !validCredentialPart(authenticator.Region) || !validRequestURL(request) {
 		return "", ErrAuthentication
 	}
 	headers, err := normalizedHeaders(request.Header)
@@ -432,6 +499,9 @@ func parseAuthorization(value string) (authorization, error) {
 		return authorization{}, ErrAuthentication
 	}
 	result.accessKey, result.scope = credential[:slash], credential[slash+1:]
+	if !validCredentialPart(result.accessKey) {
+		return authorization{}, ErrAuthentication
+	}
 	return result, nil
 }
 
