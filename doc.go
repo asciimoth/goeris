@@ -3,9 +3,10 @@
 //
 // See the [ERIS 1.0.0 specification].
 //
-// The package contains only deterministic, in-memory operations. It does not
-// read content, generate secrets, or store and transport blocks. Applications
-// must do those operations outside this package.
+// The package provides deterministic encoding and decoding, storage interfaces,
+// an in-memory BlockSet, and a CombinedBlockStore that tries caller-supplied
+// stores in order. Applications supply persistent storage, network transports,
+// content I/O, and secret generation.
 //
 // [ERIS 1.0.0 specification]: https://github.com/asciimoth/goeris/blob/master/specs/eris-v1.0.0.html
 package eris

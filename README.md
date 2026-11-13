@@ -11,9 +11,10 @@ The `eris` package implements:
 - ERIS padding and recommended block-size selection;
 - BLAKE2b-256 references and ChaCha20 node encryption;
 - read capability binary, URN, and CBOR encodings;
-- deterministic encoding to an in-memory block set; and
+- deterministic encoding to an in-memory block set;
 - verified decoding from an in-memory block set, with abstract block storage
-  interfaces.
+  interfaces; and
+- combined block storage with ordered fallback and optional error reporting.
 
 The `cbor` package implements the
 [ERIS CBOR transport format](specs/eer/cbor/index.md):
@@ -146,8 +147,9 @@ The `link` and `magnet` packages implement the
 [ERIS link file](specs/eer/linkfile/index.md) and
 [ERIS Magnet URI](specs/eer/magnet-uri/index.md) recommendations.
 
-The core `eris` package does not implement storage, file or stream I/O,
-networking, random-secret generation, or ERIS extensions.
+The core `eris` package provides storage interfaces, an in-memory block set, and
+a combined store. Applications supply persistent storage, file or stream I/O,
+networking, and random-secret generation. ERIS extensions use separate packages.
 
 ```go
 secret := eris.Secret{} // The null convergence secret.
@@ -167,6 +169,60 @@ whose decoded content exceeds the selected size limit before expansion.
 `BlockSink.PutBlock(block, expected)` rejects a block that does not match the
 expected reference. `BlockSource.GetBlock(ref)` returns only a matching block;
 the source verifies stored or received data if it can be incorrect.
+
+Use `eris.NewCombinedBlockStore` to try several stores in order:
+
+```go
+readOnlySource := struct{ eris.BlockSource }{source}
+store := eris.NewCombinedBlockStore(readOnlySource, primaryStore, fallbackStore)
+store.OnError = func(index int, err error) {
+	log.Printf("block storage %d failed: %v", index, err)
+}
+block, err := store.GetBlock(reference)
+```
+
+Each operation stops at the first success. Writes skip entries without a sink
+and store the block in the first successful sink. The wrapper above exposes only
+`GetBlock`. Assigning a store to a `BlockSource` variable alone does not hide
+its write methods from the constructor.
+
+The wrapper also hides context methods. If `source` implements both read
+interfaces, preserve its cancellation support with this wrapper:
+
+```go
+readOnlySource := struct {
+	eris.BlockSource
+	eris.ContextBlockSource
+}{source, source}
+```
+
+The constructor also accepts sinks or implementations that support only context
+methods. Plain `GetBlock` and `PutBlock` calls skip entries that provide only
+context methods. The constructor selects methods for each operation. Entries
+without a suitable method are skipped. Changing the input slice after
+construction does not change the combined store.
+
+Context methods prefer an entry's `ContextBlockSource` or `ContextBlockSink`
+method and pass the context unchanged. If an entry has only a plain method, they
+use it after checking for cancellation. Cancellation cannot stop a plain method
+while it runs.
+
+A successful attempt returns its result. If the final compatible entry fails,
+its error is kept even if the context was canceled during that attempt.
+Otherwise, cancellation stops further attempts and returns the context error. An
+already canceled context takes priority over `eris.ErrNoBlockStorage`.
+
+If all compatible entries fail, the method returns the last error unchanged and
+a zero result. `OnError` receives each discarded attempt's error and its
+original index in the constructor's input. Calls are synchronous and occur
+before the next attempt, or before returning a context error if cancellation
+prevents that attempt. The final attempt is not reported when its error is
+returned to the caller. Separate attempts can return the same error value. Leave
+`OnError` nil to discard these reports. If no entry supports the operation, the
+method returns `eris.ErrNoBlockStorage`.
+
+Concurrent calls are safe when `OnError` stays fixed and the stores and callback
+support concurrent calls.
 
 Build and open an ERIS-FS image without host file-system access:
 

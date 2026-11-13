@@ -51,6 +51,26 @@ func testData(t *testing.T) (eris.Capability, eris.BlockSet, []byte) {
 	return capability, blocks, content
 }
 
+func TestHandlerCombinedPlainBlockSets(t *testing.T) {
+	t.Parallel()
+	capability, blocks, content := testData(t)
+	store := eris.NewCombinedBlockStore(make(eris.BlockSet), blocks)
+	handler := Handler{Blocks: store}
+	for _, test := range []struct {
+		name string
+		want []byte
+	}{
+		{capability.Root.Reference.URN(), blocks[capability.Root.Reference]},
+		{capability.String(), content},
+	} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+test.name, nil))
+		if recorder.Code != nethttp.StatusOK || !bytes.Equal(recorder.Body.Bytes(), test.want) {
+			t.Errorf("GET %s: status = %d, body length = %d; want status 200 and %d bytes", test.name, recorder.Code, recorder.Body.Len(), len(test.want))
+		}
+	}
+}
+
 type contextSource struct {
 	blocks       eris.BlockSet
 	wantContext  context.Context
