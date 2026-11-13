@@ -263,7 +263,7 @@ func signedHeaderNames(request *http.Request) []string {
 
 func ignoredHeader(name string) bool {
 	switch name {
-	case "authorization", "connection", "content-length", "expect", "transfer-encoding", "user-agent":
+	case "authorization", "connection", "content-length", "expect", "trailer", "transfer-encoding", "user-agent":
 		return true
 	default:
 		return false

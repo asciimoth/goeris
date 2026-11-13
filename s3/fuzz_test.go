@@ -25,6 +25,22 @@ func FuzzSignV4WireRoundTrip(f *testing.F) {
 	})
 }
 
+func FuzzSignV4WireHeaders(f *testing.F) {
+	f.Add("Trailer", "X-Checksum", "X-Other")
+	f.Add("X-Amz-Meta-Test", " a  b\t c ", "second")
+	f.Add("Content-Length", "1024", "2048")
+	f.Add("Host", "other.example", "example")
+	f.Add("Connection", "close", "keep-alive")
+	f.Fuzz(func(t *testing.T, name, first, second string) {
+		request, err := http.NewRequest(http.MethodGet, "https://example/key", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header[name] = []string{first, second}
+		checkSignedWireRequest(t, request)
+	})
+}
+
 // Callers can set URL fields directly, without the checks in url.Parse.
 func FuzzSignV4WirePath(f *testing.F) {
 	f.Add("/bucket/key", "", "")
