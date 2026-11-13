@@ -18,7 +18,7 @@ type opaqueBlocks struct {
 	writes int
 }
 
-func (store *opaqueBlocks) PutBlock(block []byte, expected ...eris.Reference) (eris.Reference, error) {
+func (store *opaqueBlocks) PutBlock(block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -31,7 +31,7 @@ func (store *opaqueBlocks) PutBlock(block []byte, expected ...eris.Reference) (e
 	return ref, nil
 }
 
-func (store *opaqueBlocks) GetBlock(ref eris.Reference) ([]byte, error) {
+func (store *opaqueBlocks) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	store.reads++
 	block, ok := store.data[ref]
 	if !ok {

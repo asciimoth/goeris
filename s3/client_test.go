@@ -70,11 +70,11 @@ func TestClientRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	put, err := client.NewRequest(context.Background(), http.MethodPut, ref, block)
+	put, err := client.NewRequest(context.Background(), http.MethodPut, ref, block, 0)
 	if err != nil || put.URL.String() != "https://s3.example/blocks/"+ref.String() || signed != 1 {
 		t.Fatalf("PUT request = %v, %v, signed %d", put, err, signed)
 	}
-	get, err := client.NewRequest(context.Background(), http.MethodGet, ref, nil)
+	get, err := client.NewRequest(context.Background(), http.MethodGet, ref, nil, 0)
 	if err != nil || signed != 2 || get.Method != http.MethodGet {
 		t.Fatalf("GET request = %v, %v, signed %d", get, err, signed)
 	}
@@ -92,7 +92,7 @@ func TestClientPublicReadIsUnsigned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := client.GetBlock(ref)
+	got, err := client.GetBlock(ref, 0)
 	if err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
@@ -125,10 +125,10 @@ func TestClientEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotRef, err := client.PutBlock(block); err != nil || gotRef != ref {
+	if gotRef, err := client.PutBlock(block, 0); err != nil || gotRef != ref {
 		t.Fatalf("PutBlock() = %v, %v", gotRef, err)
 	}
-	got, err := client.GetBlock(ref)
+	got, err := client.GetBlock(ref, 0)
 	if err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
@@ -162,9 +162,9 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
 		var requestErr error
 		if method == http.MethodGet {
-			_, requestErr = client.GetBlock(ref)
+			_, requestErr = client.GetBlock(ref, 0)
 		} else {
-			_, requestErr = client.PutBlock(block)
+			_, requestErr = client.PutBlock(block, 0)
 		}
 		var responseErr *ResponseError
 		if !errors.As(requestErr, &responseErr) || responseErr.StatusCode != http.StatusTemporaryRedirect {
@@ -196,40 +196,40 @@ func TestClientErrors(t *testing.T) {
 	client, _ := NewClient(httpClientFunc(func(*http.Request) (*http.Response, error) {
 		return response(http.StatusOK, bytes.NewReader(block)), nil
 	}), store, nil)
-	if _, err := client.NewRequest(context.Background(), http.MethodPut, ref, block); !errors.Is(err, ErrAuthentication) {
+	if _, err := client.NewRequest(context.Background(), http.MethodPut, ref, block, 0); !errors.Is(err, ErrAuthentication) {
 		t.Errorf("unsigned PUT: %v", err)
 	}
-	if _, err := client.NewRequest(context.Background(), http.MethodPost, ref, nil); !errors.Is(err, ErrUnsupportedMethod) {
+	if _, err := client.NewRequest(context.Background(), http.MethodPost, ref, nil, 0); !errors.Is(err, ErrUnsupportedMethod) {
 		t.Errorf("POST error = %v", err)
 	}
-	if _, err := client.NewRequest(context.Background(), http.MethodGet, ref, block); !errors.Is(err, eris.ErrInvalidBlock) {
+	if _, err := client.NewRequest(context.Background(), http.MethodGet, ref, block, 0); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Errorf("GET body: %v", err)
 	}
 	bad := append([]byte(nil), block...)
 	bad[0]++
 	signed, _ := NewClient(httpClientFunc(nil), store, signerFunc(func(*http.Request, []byte) error { return nil }))
-	if _, err := signed.NewRequest(context.Background(), http.MethodPut, ref, bad); !errors.Is(err, eris.ErrInvalidBlock) {
+	if _, err := signed.NewRequest(context.Background(), http.MethodPut, ref, bad, 0); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Errorf("bad PUT block: %v", err)
 	}
 	sentinel := errors.New("sign")
 	signed.signer = signerFunc(func(*http.Request, []byte) error { return sentinel })
-	if _, err := signed.NewRequest(context.Background(), http.MethodGet, ref, nil); !errors.Is(err, sentinel) {
+	if _, err := signed.NewRequest(context.Background(), http.MethodGet, ref, nil, 0); !errors.Is(err, sentinel) {
 		t.Errorf("signing error: %v", err)
 	}
 	var nilClient *Client
-	if _, err := nilClient.NewRequest(context.Background(), http.MethodGet, ref, nil); !errors.Is(err, ErrNilHTTPClient) {
+	if _, err := nilClient.NewRequest(context.Background(), http.MethodGet, ref, nil, 0); !errors.Is(err, ErrNilHTTPClient) {
 		t.Errorf("nil client: %v", err)
 	}
-	if _, err := nilClient.GetBlockContext(context.Background(), ref); !errors.Is(err, ErrNilHTTPClient) {
+	if _, err := nilClient.GetBlockContext(context.Background(), ref, 0); !errors.Is(err, ErrNilHTTPClient) {
 		t.Errorf("nil client read: %v", err)
 	}
 	client.store = StoreURL{}
-	if _, err := client.NewRequest(context.Background(), http.MethodGet, ref, nil); !errors.Is(err, ErrInvalidStoreURL) {
+	if _, err := client.NewRequest(context.Background(), http.MethodGet, ref, nil, 0); !errors.Is(err, ErrInvalidStoreURL) {
 		t.Errorf("damaged client store: %v", err)
 	}
 	client.store = store
 	// A nil context is invalid input and must reach the standard constructor.
-	if _, err := client.NewRequest(nil, http.MethodGet, ref, nil); err == nil { //nolint:staticcheck
+	if _, err := client.NewRequest(nil, http.MethodGet, ref, nil, 0); err == nil { //nolint:staticcheck
 		t.Error("nil context accepted")
 	}
 	if got := (&ResponseError{StatusCode: 500, Status: "500\x1b[31m injected"}).Error(); got != "eris s3: response status 500" {
@@ -260,7 +260,7 @@ func TestClientResponseErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client, _ := NewClient(test.do, testStore(t), nil)
-			_, err := client.GetBlock(ref)
+			_, err := client.GetBlock(ref, 0)
 			var responseErr *ResponseError
 			if _, ok := test.want.(*ResponseError); ok {
 				if !errors.As(err, &responseErr) || responseErr.StatusCode != 500 {
@@ -274,7 +274,7 @@ func TestClientResponseErrors(t *testing.T) {
 	client, _ := NewClient(httpClientFunc(func(*http.Request) (*http.Response, error) {
 		return response(200, bytes.NewReader(block)), nil
 	}), testStore(t), nil)
-	if got, err := client.GetBlockContext(context.Background(), ref); err != nil || !bytes.Equal(got, block) {
+	if got, err := client.GetBlockContext(context.Background(), ref, 0); err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("valid GetBlockContext = %x, %v", got, err)
 	}
 }
@@ -288,7 +288,7 @@ func TestClientRejectsPartialContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.GetBlock(ref)
+	_, err = client.GetBlock(ref, 0)
 	var responseErr *ResponseError
 	if !errors.As(err, &responseErr) || responseErr.StatusCode != http.StatusPartialContent {
 		t.Fatalf("partial GET = %v", err)
@@ -315,7 +315,7 @@ func TestClientPutResponses(t *testing.T) {
 	}
 	for index, test := range tests {
 		client, _ := NewClient(test.do, testStore(t), signerFunc(func(*http.Request, []byte) error { return nil }))
-		_, err := client.PutBlockContext(context.Background(), block, ref)
+		_, err := client.PutBlockContext(context.Background(), block, 0, ref)
 		if test.want == nil && err != nil {
 			t.Errorf("case %d: %v", index, err)
 		} else if test.want != nil {
@@ -330,7 +330,7 @@ func TestClientPutResponses(t *testing.T) {
 		}
 	}
 	unsigned, _ := NewClient(httpClientFunc(nil), testStore(t), nil)
-	if _, err := unsigned.PutBlockContext(context.Background(), block, ref); !errors.Is(err, ErrAuthentication) {
+	if _, err := unsigned.PutBlockContext(context.Background(), block, 0, ref); !errors.Is(err, ErrAuthentication) {
 		t.Errorf("request construction error = %v", err)
 	}
 }
@@ -358,13 +358,13 @@ func TestClientPutValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := test.client.PutBlockContext(context.Background(), test.block, test.expected...); !errors.Is(err, test.want) {
+			if _, err := test.client.PutBlockContext(context.Background(), test.block, 0, test.expected...); !errors.Is(err, test.want) {
 				t.Fatalf("PutBlockContext() error = %v, want %v", err, test.want)
 			}
 		})
 	}
 	badStore := &Client{httpClient: client.httpClient, signer: client.signer}
-	if _, err := badStore.PutBlockContext(context.Background(), block); !errors.Is(err, ErrInvalidStoreURL) {
+	if _, err := badStore.PutBlockContext(context.Background(), block, 0); !errors.Is(err, ErrInvalidStoreURL) {
 		t.Fatalf("bad store error = %v", err)
 	}
 }

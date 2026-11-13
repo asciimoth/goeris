@@ -165,10 +165,51 @@ decoded, err := eris.Decode(capability, blocks)
 source, use `DecodeWithLimit(capability, blocks, maxBytes)` to reject a tree
 whose decoded content exceeds the selected size limit before expansion.
 
-`BlockSink.PutBlock(block)` returns the reference computed by storage.
-`BlockSink.PutBlock(block, expected)` rejects a block that does not match the
-expected reference. `BlockSource.GetBlock(ref)` returns only a matching block;
-the source verifies stored or received data if it can be incorrect.
+`BlockSink.PutBlock(block, ttl)` returns the reference computed by storage.
+`BlockSink.PutBlock(block, ttl, expected)` rejects a block that does not match
+the expected reference. `BlockSource.GetBlock(ref, ttl)` returns only a matching
+block; the source verifies stored or received data if it can be incorrect.
+
+All block storage methods now require an `eris.TTL` argument. This is a breaking
+Go API change; there are no adapters for the old signatures:
+
+```go
+GetBlock(ref Reference, ttl TTL) ([]byte, error)
+PutBlock(block []byte, ttl TTL, expected ...Reference) (Reference, error)
+GetBlockContext(ctx context.Context, ref Reference, ttl TTL) ([]byte, error)
+PutBlockContext(ctx context.Context, block []byte, ttl TTL, expected ...Reference) (Reference, error)
+```
+
+TTL limits network forwarding along each request path. It does not set a time
+limit or block expiry. Use `eris.NoTTL` (`0`) when the caller does not specify a
+limit. Terminal stores, such as `BlockSet`, may ignore TTL. Middleware must pass
+it unchanged to all attempts, fallbacks, and copied writes. A network client
+calls `ttl.Forward()`: `0` starts with a wire value of `16`, `1` returns
+`eris.ErrTTLExpired` without network I/O, and `2` through `255` decrease by one.
+Thus, `2` reaches one remote store, which can use local storage but cannot
+forward the request again. Never forward an exhausted value as `0`, because that
+would start a new budget.
+
+HTTP and S3 use the optional `Eris-TTL` request header with a decimal value from
+`1` through `255`. S3 signs this header; it is not object metadata. CoAP uses
+standard Hop-Limit option 16 from
+[RFC 8768](https://www.rfc-editor.org/rfc/rfc8768.html), compatible with Kapla's
+GET forwarding. The same limit applies to CoAP PUT. Servers pass the received
+value unchanged to storage. An absent header or option means `1` (local access
+only), so old clients can still use terminal stores. Invalid wire values are
+rejected. Peers that ignore these extensions can still serve blocks, but do not
+enforce forwarding limits.
+
+HTTP and S3 report an exhausted downstream limit with HTTP 508; CoAP uses 5.08.
+Client errors for those responses match `eris.ErrTTLExpired` through
+`errors.Is`. If HTTP content streaming has already started, a later failure
+aborts the stream instead. CoAP's `RequestConfig.HopLimit` can set the initial
+wire value when an operation uses `NoTTL`; an explicit operation TTL takes
+precedence. Low-level CoAP request builders send `RequestConfig.HopLimit` as is,
+and omit it when zero. Use `PrepareForward` to forward an existing CoAP message.
+HTTP `NewRequest`, `Resolve`, and `OpenContent`, and S3 `NewRequest` also take
+TTL. Encoding and decoding helpers start block operations with `NoTTL`; HTTP
+content handlers bind the incoming request budget to every decoded block read.
 
 Use `eris.NewCombinedBlockStore` to try several stores in order:
 
@@ -178,7 +219,7 @@ store := eris.NewCombinedBlockStore(readOnlySource, primaryStore, fallbackStore)
 store.OnError = func(index int, err error) {
 	log.Printf("block storage %d failed: %v", index, err)
 }
-block, err := store.GetBlock(reference)
+block, err := store.GetBlock(reference, eris.NoTTL)
 ```
 
 Each operation stops at the first success. Writes skip entries without a sink

@@ -42,7 +42,7 @@ func ExampleClient() {
 		panic(err)
 	}
 
-	body, err := client.OpenContent(context.Background(), capability)
+	body, err := client.OpenContent(context.Background(), capability, 0)
 	if err != nil {
 		panic(err)
 	}

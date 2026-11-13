@@ -93,7 +93,7 @@ func DecodeIndexWithLimit(capability eris.Capability, source eris.BlockSource, l
 	if limit <= 0 {
 		return Index{}, ErrInvalidLimit
 	}
-	reader, err := erisreader.NewReaderWithLimit(capability, source, limit)
+	reader, err := erisreader.NewReaderWithLimit(capability, source, limit, eris.NoTTL)
 	if err != nil {
 		return Index{}, err
 	}
@@ -109,7 +109,7 @@ func putNode(node []byte, secret eris.Secret, level eris.Level, sink eris.BlockS
 	if err != nil {
 		return eris.Pair{}, err
 	}
-	ref, err := sink.PutBlock(block)
+	ref, err := sink.PutBlock(block, eris.NoTTL)
 	if err != nil {
 		return eris.Pair{}, err
 	}

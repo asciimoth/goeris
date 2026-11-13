@@ -124,7 +124,7 @@ func TestHandlerLimitsRangeCount(t *testing.T) {
 				calls := 0
 				handler := Handler{Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
 					calls++
-					return blocks.GetBlock(ref)
+					return blocks.GetBlock(ref, 0)
 				})}
 				request := httptest.NewRequest(method, N2RPath+"?"+urn, nil)
 				request.Header.Set("Range", "bytes=0-0"+strings.Repeat(",0-0", count-1))
@@ -232,7 +232,7 @@ func TestHandlerLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	calls := 0
 	handler := Handler{MaxContentSize: 1024, Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
 		calls++
-		return blocks.GetBlock(ref)
+		return blocks.GetBlock(ref, 0)
 	})}
 	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
 	request.Header.Set("Range", "bytes=0-0")
@@ -254,7 +254,7 @@ func TestHandlerStopsCanceledTreeScan(t *testing.T) {
 		handler := Handler{Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
 			calls++
 			cancel()
-			return blocks.GetBlock(ref)
+			return blocks.GetBlock(ref, 0)
 		})}
 		request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil).WithContext(ctx)
 		response := httptest.NewRecorder()

@@ -112,12 +112,12 @@ func TestConcurrentBlockWiseUploads(t *testing.T) {
 		get: func(ref eris.Reference) ([]byte, error) {
 			mu.Lock()
 			defer mu.Unlock()
-			return blocks.GetBlock(ref)
+			return blocks.GetBlock(ref, 0)
 		},
 		put: func(ref eris.Reference, block []byte) error {
 			mu.Lock()
 			defer mu.Unlock()
-			_, err := blocks.PutBlock(block, ref)
+			_, err := blocks.PutBlock(block, 0, ref)
 			return err
 		},
 	}
@@ -146,7 +146,7 @@ func TestConcurrentBlockWiseUploads(t *testing.T) {
 	for _, marker := range []byte{11, 12} {
 		block, _ := makeBlock(int(eris.BlockSize1KiB), marker)
 		go func() {
-			_, err := client.PutBlock(block)
+			_, err := client.PutBlock(block, 0)
 			done <- err
 		}()
 	}

@@ -21,12 +21,12 @@ func ExampleNewCombinedBlockStore() {
 		panic(err)
 	}
 	ref := capability.Root.Reference
-	stored, err := store.PutBlock(blocks[ref], ref)
+	stored, err := store.PutBlock(blocks[ref], 0, ref)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("stored:", stored == ref)
-	got, err := store.GetBlock(ref)
+	got, err := store.GetBlock(ref, 0)
 	if err != nil {
 		panic(err)
 	}

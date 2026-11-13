@@ -117,7 +117,7 @@ func FuzzClientGetBlock(f *testing.F) {
 		client, _ := NewClient(clientFunc(func(*nethttp.Request) (*nethttp.Response, error) {
 			return response(200, contentType, bytes.NewReader(body)), nil
 		}), base)
-		block, err := client.GetBlockContext(context.Background(), capability.Root.Reference)
+		block, err := client.GetBlockContext(context.Background(), capability.Root.Reference, 0)
 		if err == nil {
 			if !bytes.Equal(block, valid) {
 				t.Fatal("GetBlock accepted an incorrect block")

@@ -15,7 +15,9 @@ import (
 
 type sourceFunc func(eris.Reference) ([]byte, error)
 
-func (function sourceFunc) GetBlock(ref eris.Reference) ([]byte, error) { return function(ref) }
+func (function sourceFunc) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+	return function(ref)
+}
 
 type storeFunc struct {
 	get func(eris.Reference) ([]byte, error)
@@ -24,7 +26,7 @@ type storeFunc struct {
 
 type wrongReferenceStore struct{ eris.BlockSet }
 
-func (wrongReferenceStore) PutBlock(_ []byte, expected ...eris.Reference) (eris.Reference, error) {
+func (wrongReferenceStore) PutBlock(_ []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	ref := expected[0]
 	ref[0] ^= 1
 	return ref, nil
@@ -37,11 +39,11 @@ type contextStore struct {
 	writes int
 }
 
-func (store *contextStore) GetBlock(eris.Reference) ([]byte, error) {
+func (store *contextStore) GetBlock(eris.Reference, eris.TTL) ([]byte, error) {
 	return nil, errors.New("non-context read used")
 }
 
-func (store *contextStore) GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error) {
+func (store *contextStore) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	if ctx == nil || ref != store.ref {
 		return nil, errors.New("incorrect context read")
 	}
@@ -49,7 +51,7 @@ func (store *contextStore) GetBlockContext(ctx context.Context, ref eris.Referen
 	return append([]byte(nil), store.block...), nil
 }
 
-func (store *contextStore) PutBlockContext(ctx context.Context, block []byte, expected ...eris.Reference) (eris.Reference, error) {
+func (store *contextStore) PutBlockContext(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	if ctx == nil || len(expected) != 1 || expected[0] != store.ref {
 		return eris.Reference{}, errors.New("incorrect context write")
 	}
@@ -58,8 +60,10 @@ func (store *contextStore) PutBlockContext(ctx context.Context, block []byte, ex
 	return store.ref, nil
 }
 
-func (store storeFunc) GetBlock(ref eris.Reference) ([]byte, error) { return store.get(ref) }
-func (store storeFunc) PutBlock(block []byte, expected ...eris.Reference) (eris.Reference, error) {
+func (store storeFunc) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+	return store.get(ref)
+}
+func (store storeFunc) PutBlock(block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -268,7 +272,7 @@ func TestHandlerDefaultRejectsPutBeforeAuthentication(t *testing.T) {
 	if recorder.Code != http.StatusMethodNotAllowed || recorder.Header().Get("Allow") != "GET, HEAD" || authCalled {
 		t.Fatalf("default PUT = status %d, Allow %q, auth called %t", recorder.Code, recorder.Header().Get("Allow"), authCalled)
 	}
-	if _, err := blocks.GetBlock(ref); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err := blocks.GetBlock(ref, 0); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("default PUT stored block: %v", err)
 	}
 }
@@ -323,7 +327,7 @@ func TestHandlerAuthenticatedWrite(t *testing.T) {
 	if recorder.Code != 200 || !authorized {
 		t.Fatalf("response = %d, authorized %t: %s", recorder.Code, authorized, recorder.Body.String())
 	}
-	stored, err := blocks.GetBlock(ref)
+	stored, err := blocks.GetBlock(ref, 0)
 	if err != nil || !bytes.Equal(stored, block) {
 		t.Fatalf("stored block = %x, %v", stored, err)
 	}

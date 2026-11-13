@@ -22,19 +22,19 @@ func TestClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotRef, err := client.PutBlock(block); err != nil || gotRef != ref {
+	if gotRef, err := client.PutBlock(block, 0); err != nil || gotRef != ref {
 		t.Fatalf("PutBlock() = %v, %v", gotRef, err)
 	}
-	got, err := client.GetBlockContext(context.Background(), ref)
+	got, err := client.GetBlockContext(context.Background(), ref, 0)
 	if err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("GetBlockContext() = %x, %v", got, err)
 	}
 	got[0]++
-	stored, _ := blocks.GetBlock(ref)
+	stored, _ := blocks.GetBlock(ref, 0)
 	if !bytes.Equal(stored, block) {
 		t.Fatal("client result aliases response")
 	}
-	if got, err = client.GetBlock(ref); err != nil || len(got) != len(block) {
+	if got, err = client.GetBlock(ref, 0); err != nil || len(got) != len(block) {
 		t.Fatalf("GetBlock() = %d bytes, %v", len(got), err)
 	}
 }
@@ -66,7 +66,7 @@ func TestClientErrors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = client.GetBlock(ref)
+			_, err = client.GetBlock(ref, 0)
 			var responseError *ResponseError
 			if _, isResponse := test.want.(*ResponseError); isResponse {
 				if !errors.As(err, &responseError) || responseError.Code != protocol.InternalServerError {
@@ -78,16 +78,16 @@ func TestClientErrors(t *testing.T) {
 		})
 	}
 
-	if _, err := (&Client{}).PutBlock(block, ref); !errors.Is(err, ErrNilRequester) {
+	if _, err := (&Client{}).PutBlock(block, 0, ref); !errors.Is(err, ErrNilRequester) {
 		t.Errorf("nil client PUT error = %v", err)
 	}
-	if _, err := (*Client)(nil).GetBlock(ref); !errors.Is(err, ErrNilRequester) {
+	if _, err := (*Client)(nil).GetBlock(ref, 0); !errors.Is(err, ErrNilRequester) {
 		t.Errorf("nil client GET error = %v", err)
 	}
 	client, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.Created, Payload: ref[:]}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if _, err := client.PutBlock(block, otherRef); !errors.Is(err, eris.ErrInvalidBlock) {
+	if _, err := client.PutBlock(block, 0, otherRef); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Errorf("invalid PUT error = %v", err)
 	}
 	requests := 0
@@ -95,37 +95,37 @@ func TestClientErrors(t *testing.T) {
 		requests++
 		return &protocol.Message{Code: protocol.Created, Payload: ref[:]}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if _, err := checkedClient.PutBlock(block, otherRef); !errors.Is(err, eris.ErrInvalidBlock) || requests != 0 {
+	if _, err := checkedClient.PutBlock(block, 0, otherRef); !errors.Is(err, eris.ErrInvalidBlock) || requests != 0 {
 		t.Errorf("mismatched expected reference sent %d requests, error = %v", requests, err)
 	}
 	wrongReferenceClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.Created, Payload: otherRef[:]}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if _, err := wrongReferenceClient.PutBlock(block); !errors.Is(err, ErrInvalidReference) {
+	if _, err := wrongReferenceClient.PutBlock(block, 0); !errors.Is(err, ErrInvalidReference) {
 		t.Errorf("wrong returned reference error = %v", err)
 	}
-	if _, err := wrongReferenceClient.PutBlock(block, ref); !errors.Is(err, ErrInvalidReference) {
+	if _, err := wrongReferenceClient.PutBlock(block, 0, ref); !errors.Is(err, ErrInvalidReference) {
 		t.Errorf("wrong returned expected reference error = %v", err)
 	}
 	badRequestClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.BadRequest}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if _, err := badRequestClient.PutBlock(block, ref); !errors.Is(err, eris.ErrInvalidBlock) {
+	if _, err := badRequestClient.PutBlock(block, 0, ref); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Errorf("rejected reference error = %v", err)
 	}
 	malformedClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.Created}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if gotRef, err := malformedClient.PutBlock(block); err != nil || gotRef != ref {
+	if gotRef, err := malformedClient.PutBlock(block, 0); err != nil || gotRef != ref {
 		t.Errorf("legacy response reference = %v, %v", gotRef, err)
 	}
-	if _, err := malformedClient.PutBlock(block, ref); !errors.Is(err, ErrInvalidReference) {
+	if _, err := malformedClient.PutBlock(block, 0, ref); !errors.Is(err, ErrInvalidReference) {
 		t.Errorf("missing response reference with expectation error = %v", err)
 	}
 	shortResponseClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.Created, Payload: []byte{1}}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if _, err := shortResponseClient.PutBlock(block); !errors.Is(err, ErrInvalidReference) {
+	if _, err := shortResponseClient.PutBlock(block, 0); !errors.Is(err, ErrInvalidReference) {
 		t.Errorf("short response reference error = %v", err)
 	}
 
@@ -140,7 +140,7 @@ func TestClientErrors(t *testing.T) {
 	}
 	for _, test := range putTests {
 		client, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) { return test.response, test.err }), mustStore(t, "coap://example/"), ClientConfig{})
-		_, err := client.PutBlock(block, ref)
+		_, err := client.PutBlock(block, 0, ref)
 		var responseError *ResponseError
 		if _, ok := test.want.(*ResponseError); ok {
 			if !errors.As(err, &responseError) || responseError.Code != protocol.Content {
@@ -176,7 +176,7 @@ func TestClientStopsOversizedBlockWiseResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.GetBlock(ref); !errors.Is(err, ErrResponseTooLarge) {
+	if _, err := client.GetBlock(ref, 0); !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("oversized block-wise response error = %v", err)
 	}
 	if requests != 33 {
@@ -199,7 +199,7 @@ func TestClientRejectsOversizedSize2BeforeContinuation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := client.GetBlock(eris.Reference{}); !errors.Is(err, ErrResponseTooLarge) {
+		if _, err := client.GetBlock(eris.Reference{}, 0); !errors.Is(err, ErrResponseTooLarge) {
 			t.Fatalf("Size2 %d: got %v, want ErrResponseTooLarge", size, err)
 		}
 		if calls != 1 {
@@ -222,8 +222,8 @@ func TestClientChecksCompleteResponseSize(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, getErr := client.GetBlock(ref)
-		_, putErr := client.PutBlock(block)
+		_, getErr := client.GetBlock(ref, 0)
+		_, putErr := client.PutBlock(block, 0)
 		for _, result := range []struct {
 			name   string
 			length int
@@ -267,7 +267,7 @@ func TestClientLimitsTotalResponseOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.GetBlock(ref); !errors.Is(err, ErrResponseTooLarge) {
+	if _, err := client.GetBlock(ref, 0); !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("total response options: %v", err)
 	}
 	if calls >= 64 {
@@ -308,7 +308,7 @@ func TestClientRejectsAmbiguousTransferResponses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := client.GetBlock(ref); !errors.Is(err, ErrInvalidResponseOption) || calls != 1 {
+		if _, err := client.GetBlock(ref, 0); !errors.Is(err, ErrInvalidResponseOption) || calls != 1 {
 			t.Fatalf("options %+v: calls %d, error %v", options, calls, err)
 		}
 	}

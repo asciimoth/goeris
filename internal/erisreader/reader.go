@@ -37,6 +37,7 @@ type treeSummary struct {
 type Reader struct {
 	mu          sync.Mutex
 	source      eris.BlockSource
+	ttl         eris.TTL
 	capability  eris.Capability
 	size        int64
 	position    int64
@@ -57,7 +58,7 @@ type Reader struct {
 // internal node. Other leaf blocks are fetched when read. Use
 // NewReaderWithSize when a v2 index already supplies the decoded length.
 func NewReader(capability eris.Capability, source eris.BlockSource) (*Reader, error) {
-	return NewReaderWithLimit(capability, source, -1)
+	return NewReaderWithLimit(capability, source, -1, eris.NoTTL)
 }
 
 // NewReaderWithSize opens content with a known decoded size, without block I/O.
@@ -87,13 +88,13 @@ func NewReaderWithSize(capability eris.Capability, source eris.BlockSource, size
 }
 
 // NewReaderWithLimit scans the tree and rejects decoded content above maxSize.
-// A negative maxSize disables the limit.
-func NewReaderWithLimit(capability eris.Capability, source eris.BlockSource, maxSize int64) (*Reader, error) {
+// A negative maxSize disables the size limit. Every block read uses ttl unchanged.
+func NewReaderWithLimit(capability eris.Capability, source eris.BlockSource, maxSize int64, ttl eris.TTL) (*Reader, error) {
 	if source == nil || capability.Validate() != nil {
 		return nil, eris.ErrInvalidCapability
 	}
 	reader := &Reader{
-		source: source, capability: capability, maxSize: maxSize,
+		source: source, capability: capability, maxSize: maxSize, ttl: ttl,
 		cache: make(map[nodeID][]eris.Pair), summaries: make(map[nodeID]treeSummary),
 	}
 	leaves, last, err := reader.inspect(capability.Root, capability.Level, true)
@@ -363,7 +364,7 @@ func (reader *Reader) checkLast() error {
 }
 
 func (reader *Reader) decrypt(pair eris.Pair, level eris.Level) ([]byte, error) {
-	block, err := reader.source.GetBlock(pair.Reference)
+	block, err := reader.source.GetBlock(pair.Reference, reader.ttl)
 	if err != nil {
 		// A block fetch is not the end of the decoded content. Keep a source
 		// EOF from making io.ReadAll or io.Copy accept a truncated file.

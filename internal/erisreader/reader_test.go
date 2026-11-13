@@ -129,7 +129,7 @@ func TestReaderLimits(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, limit := range []int64{-1, 0, int64(size) - 1, int64(size), int64(size) + 1} {
-			reader, err := NewReaderWithLimit(capability, blocks, limit)
+			reader, err := NewReaderWithLimit(capability, blocks, limit, eris.NoTTL)
 			if limit >= 0 && limit < int64(size) {
 				if !errors.Is(err, ErrTooLarge) {
 					t.Fatalf("size %d, limit %d: %v", size, limit, err)
@@ -335,7 +335,7 @@ func TestReaderRejectsSourceEOF(t *testing.T) {
 	}
 }
 
-func (source malformedSource) GetBlock(eris.Reference) ([]byte, error) { return source, nil }
+func (source malformedSource) GetBlock(eris.Reference, eris.TTL) ([]byte, error) { return source, nil }
 
 type failAfterSource struct {
 	eris.BlockSource
@@ -343,18 +343,18 @@ type failAfterSource struct {
 	err           error
 }
 
-func (source *failAfterSource) GetBlock(ref eris.Reference) ([]byte, error) {
+func (source *failAfterSource) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	source.calls++
 	if source.calls == source.failAt {
 		return nil, source.err
 	}
-	return source.BlockSource.GetBlock(ref)
+	return source.BlockSource.GetBlock(ref, 0)
 }
 func putNode(node []byte, secret eris.Secret, level eris.Level, sink eris.BlockSink) (eris.Pair, error) {
 	block, pair, err := eris.EncryptNode(node, secret, level)
 	if err != nil {
 		return eris.Pair{}, err
 	}
-	_, err = sink.PutBlock(block)
+	_, err = sink.PutBlock(block, 0)
 	return pair, err
 }

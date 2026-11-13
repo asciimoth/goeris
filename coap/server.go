@@ -121,8 +121,11 @@ func (handler Handler) get(ctx context.Context, request *protocol.Message) *prot
 	if size, present, sizeErr := oneUintOption(request, protocol.OptionSize1); sizeErr != nil || present && size != uint32(eris.BlockSize1KiB) && size != uint32(eris.BlockSize32KiB) {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
-	block, err := handler.getBlock(ctx, ref)
+	block, err := handler.getBlock(ctx, ref, requestTTL(request))
 	if err != nil {
+		if errors.Is(err, eris.ErrTTLExpired) {
+			return &protocol.Message{Code: protocol.HopLimitReached}
+		}
 		if errors.Is(err, eris.ErrMissingBlock) {
 			return &protocol.Message{Code: protocol.NotFound}
 		}
@@ -175,8 +178,11 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 	if err != nil || len(expected) == 1 && expected[0] != actual {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
-	ref, err := handler.putBlock(ctx, request.Payload, expected...)
+	ref, err := handler.putBlock(ctx, request.Payload, requestTTL(request), expected...)
 	if err != nil {
+		if errors.Is(err, eris.ErrTTLExpired) {
+			return &protocol.Message{Code: protocol.HopLimitReached}
+		}
 		if errors.Is(err, eris.ErrMissingBlock) {
 			return &protocol.Message{Code: protocol.NotFound}
 		}
@@ -191,11 +197,11 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 	return &protocol.Message{Code: protocol.Created, Payload: ref[:]}
 }
 
-func (handler Handler) getBlock(ctx context.Context, ref eris.Reference) ([]byte, error) {
+func (handler Handler) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	if contextual, ok := handler.Blocks.(eris.ContextBlockSource); ok {
-		return contextual.GetBlockContext(ctx, ref)
+		return contextual.GetBlockContext(ctx, ref, ttl)
 	}
-	return handler.Blocks.GetBlock(ref)
+	return handler.Blocks.GetBlock(ref, ttl)
 }
 
 func (handler Handler) writable() bool {
@@ -204,11 +210,11 @@ func (handler Handler) writable() bool {
 	return sink || contextual
 }
 
-func (handler Handler) putBlock(ctx context.Context, block []byte, expected ...eris.Reference) (eris.Reference, error) {
+func (handler Handler) putBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	if contextual, ok := handler.Blocks.(eris.ContextBlockSink); ok {
-		return contextual.PutBlockContext(ctx, append([]byte(nil), block...), expected...)
+		return contextual.PutBlockContext(ctx, append([]byte(nil), block...), ttl, expected...)
 	}
-	return handler.Blocks.(eris.BlockSink).PutBlock(append([]byte(nil), block...), expected...)
+	return handler.Blocks.(eris.BlockSink).PutBlock(append([]byte(nil), block...), ttl, expected...)
 }
 
 var _ protocol.Handler = Handler{}

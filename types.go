@@ -112,11 +112,12 @@ type Pair struct {
 // BlockSet is an in-memory set of encrypted blocks, indexed by reference.
 // Encode owns the slices in the set. Decode does not modify them. Concurrent
 // reads are safe only while no caller changes the map or its blocks.
+// BlockSet is a terminal store and ignores TTL for reads and writes.
 type BlockSet map[Reference][]byte
 
 // GetBlock verifies and returns a copy of the encrypted block for ref. The map
 // can be changed directly, so each read checks the reference.
-func (s BlockSet) GetBlock(ref Reference) ([]byte, error) {
+func (s BlockSet) GetBlock(ref Reference, ttl TTL) ([]byte, error) {
 	block, ok := s[ref]
 	if !ok {
 		return nil, ErrMissingBlock
@@ -129,7 +130,7 @@ func (s BlockSet) GetBlock(ref Reference) ([]byte, error) {
 
 // PutBlock stores a copy of an encrypted block and returns its reference. It
 // rejects a block that does not match an optional expected reference.
-func (s BlockSet) PutBlock(block []byte, expected ...Reference) (Reference, error) {
+func (s BlockSet) PutBlock(block []byte, ttl TTL, expected ...Reference) (Reference, error) {
 	if s == nil {
 		return Reference{}, ErrMissingBlock
 	}

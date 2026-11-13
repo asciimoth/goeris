@@ -124,7 +124,7 @@ func TestResponseMetadataLimits(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := client.GetBlock(ref); err == nil {
+		if _, err := client.GetBlock(ref, 0); err == nil {
 			t.Fatal("invalid response metadata accepted")
 		}
 		if calls != 1 {
@@ -177,7 +177,7 @@ func TestOversizedTokensStopBeforeTransfer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = client.GetBlock(ref)
+			_, err = client.GetBlock(ref, 0)
 			if size <= 8 && err != nil || size > 8 && !errors.Is(err, ErrResponseTooLarge) {
 				t.Fatalf("GET error = %v", err)
 			}

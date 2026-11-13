@@ -218,7 +218,7 @@ func TestSizedReaderRejectsMalformedVisitedTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := blocks.PutBlock(encrypted)
+	ref, err := blocks.PutBlock(encrypted, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

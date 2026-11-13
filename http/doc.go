@@ -8,6 +8,17 @@
 // register in their own server. Both components support custom transports,
 // including in-memory transports and Unix sockets.
 //
+// Clients send the optional Eris-TTL request header (TTLHeader). A zero Go TTL
+// sends eris.DefaultTTL (16); other values decrease by one before sending.
+// A TTL of 1 returns eris.ErrTTLExpired without network I/O. Handler passes
+// the received value to every storage read, including reads for decoded
+// content, HEAD, and ranges. A missing header permits local access only (1).
+// Invalid or repeated headers produce HTTP 400. An exhausted downstream TTL
+// produces HTTP 508 before streaming starts; later failures abort the stream.
+// ResponseError matches eris.ErrTTLExpired via errors.Is for HTTP 508.
+// Peers that ignore this optional extension can still serve blocks, but cannot
+// enforce the forwarding limit. TTL is a request budget, not cache lifetime.
+//
 // For untrusted requests, set Handler.MaxContentSize and configure server
 // timeouts, header limits, and concurrency limits. A zero MaxContentSize allows
 // unlimited decoded content. The handler scans the tree to find its size, even

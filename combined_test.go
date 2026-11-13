@@ -21,19 +21,19 @@ type combinedProbe struct {
 	ref   Reference
 }
 
-func (probe *combinedProbe) GetBlock(ref Reference) ([]byte, error) {
+func (probe *combinedProbe) GetBlock(ref Reference, ttl TTL) ([]byte, error) {
 	return probe.block, probe.call("GetBlock", nil, ref, nil, nil)
 }
 
-func (probe *combinedProbe) PutBlock(block []byte, expected ...Reference) (Reference, error) {
+func (probe *combinedProbe) PutBlock(block []byte, ttl TTL, expected ...Reference) (Reference, error) {
 	return probe.ref, probe.call("PutBlock", nil, Reference{}, block, expected)
 }
 
-func (probe *combinedProbe) GetBlockContext(ctx context.Context, ref Reference) ([]byte, error) {
+func (probe *combinedProbe) GetBlockContext(ctx context.Context, ref Reference, ttl TTL) ([]byte, error) {
 	return probe.block, probe.call("GetBlockContext", ctx, ref, nil, nil)
 }
 
-func (probe *combinedProbe) PutBlockContext(ctx context.Context, block []byte, expected ...Reference) (Reference, error) {
+func (probe *combinedProbe) PutBlockContext(ctx context.Context, block []byte, ttl TTL, expected ...Reference) (Reference, error) {
 	return probe.ref, probe.call("PutBlockContext", ctx, Reference{}, block, expected)
 }
 
@@ -46,16 +46,16 @@ type combinedOperation struct {
 
 var combinedOperations = []combinedOperation{
 	{"GetBlock", false, false, func(store *CombinedBlockStore, _ context.Context, _ []byte, ref Reference, _ []Reference) (any, error) {
-		return store.GetBlock(ref)
+		return store.GetBlock(ref, 0)
 	}},
 	{"PutBlock", true, false, func(store *CombinedBlockStore, _ context.Context, block []byte, _ Reference, expected []Reference) (any, error) {
-		return store.PutBlock(block, expected...)
+		return store.PutBlock(block, 0, expected...)
 	}},
 	{"GetBlockContext", false, true, func(store *CombinedBlockStore, ctx context.Context, _ []byte, ref Reference, _ []Reference) (any, error) {
-		return store.GetBlockContext(ctx, ref)
+		return store.GetBlockContext(ctx, ref, 0)
 	}},
 	{"PutBlockContext", true, true, func(store *CombinedBlockStore, ctx context.Context, block []byte, _ Reference, expected []Reference) (any, error) {
-		return store.PutBlockContext(ctx, block, expected...)
+		return store.PutBlockContext(ctx, block, 0, expected...)
 	}},
 }
 
@@ -683,7 +683,7 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 				t.Fatalf("unexpected callback: (%d, %v)", index, err)
 			}
 		}
-		got, err := store.GetBlock(pair.Reference)
+		got, err := store.GetBlock(pair.Reference, 0)
 		if err != nil || !bytes.Equal(got, block) || !slices.Equal(indexes, []int{0, 1}) {
 			t.Fatalf("read error = %v, callback indexes = %v", err, indexes)
 		}
@@ -700,7 +700,7 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 			}
 		}
 		input := append([]byte(nil), block...)
-		ref, err := store.PutBlock(input, pair.Reference)
+		ref, err := store.PutBlock(input, 0, pair.Reference)
 		if err != nil || ref != pair.Reference || !slices.Equal(indexes, []int{1}) {
 			t.Fatalf("write = (%v, %v), callback indexes = %v", ref, err, indexes)
 		}
@@ -721,7 +721,7 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 		} {
 			first, second := make(BlockSet), make(BlockSet)
 			store := NewCombinedBlockStore(first, second)
-			ref, err := store.PutBlock(test.block, test.expected...)
+			ref, err := store.PutBlock(test.block, 0, test.expected...)
 			if !errors.Is(err, ErrInvalidBlock) || ref != (Reference{}) || len(first) != 0 || len(second) != 0 {
 				t.Fatalf("invalid write = (%v, %v), store lengths = %d, %d", ref, err, len(first), len(second))
 			}

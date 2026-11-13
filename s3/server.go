@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
 // RequestAuthenticator authenticates a complete request body and returns an
@@ -60,16 +61,21 @@ func (handler Handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		writeS3Error(writer, http.StatusNotFound, "NoSuchKey", "The specified key does not exist.")
 		return
 	}
+	ttl, err := httpttl.Parse(request.Header)
+	if err != nil {
+		writeS3Error(writer, http.StatusBadRequest, "InvalidArgument", "The TTL header is invalid.")
+		return
+	}
 	switch request.Method {
 	case http.MethodGet, http.MethodHead:
-		handler.get(writer, request, ref)
+		handler.get(writer, request, ref, ttl)
 	case http.MethodPut:
 		if !handler.AllowPut {
 			writer.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
 			writeS3Error(writer, http.StatusMethodNotAllowed, "MethodNotAllowed", "The handler is read-only.")
 			return
 		}
-		handler.put(writer, request, ref)
+		handler.put(writer, request, ref, ttl)
 	default:
 		allow := http.MethodGet + ", " + http.MethodHead
 		if handler.AllowPut {
@@ -89,7 +95,7 @@ func (handler Handler) reference(path string) (eris.Reference, bool) {
 	return ref, err == nil
 }
 
-func (handler Handler) get(writer http.ResponseWriter, request *http.Request, ref eris.Reference) {
+func (handler Handler) get(writer http.ResponseWriter, request *http.Request, ref eris.Reference, ttl eris.TTL) {
 	// ServeContent limits the sum of range lengths, but many small ranges
 	// can still produce a large response through multipart headers.
 	ranges := 0
@@ -100,9 +106,11 @@ func (handler Handler) get(writer http.ResponseWriter, request *http.Request, re
 			return
 		}
 	}
-	block, err := handler.getBlock(request.Context(), ref)
+	block, err := handler.getBlock(request.Context(), ref, ttl)
 	if err != nil {
-		if errors.Is(err, eris.ErrMissingBlock) {
+		if errors.Is(err, eris.ErrTTLExpired) {
+			writeS3Error(writer, http.StatusLoopDetected, "LoopDetected", "The request TTL is exhausted.")
+		} else if errors.Is(err, eris.ErrMissingBlock) {
 			writeS3Error(writer, http.StatusNotFound, "NoSuchKey", "The specified key does not exist.")
 		} else {
 			writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store could not read the block.")
@@ -118,7 +126,7 @@ func (handler Handler) get(writer http.ResponseWriter, request *http.Request, re
 	http.ServeContent(writer, request, ref.String(), time.Time{}, bytes.NewReader(block))
 }
 
-func (handler Handler) put(writer http.ResponseWriter, request *http.Request, ref eris.Reference) {
+func (handler Handler) put(writer http.ResponseWriter, request *http.Request, ref eris.Reference, ttl eris.TTL) {
 	if handler.Auth == nil {
 		writeS3Error(writer, http.StatusUnauthorized, "AccessDenied", "Write authentication is required.")
 		return
@@ -165,8 +173,10 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store is not writable.")
 		return
 	}
-	if err := handler.putBlock(request.Context(), ref, block); err != nil {
-		if errors.Is(err, eris.ErrInvalidBlock) {
+	if err := handler.putBlock(request.Context(), ref, block, ttl); err != nil {
+		if errors.Is(err, eris.ErrTTLExpired) {
+			writeS3Error(writer, http.StatusLoopDetected, "LoopDetected", "The request TTL is exhausted.")
+		} else if errors.Is(err, eris.ErrInvalidBlock) {
 			writeS3Error(writer, http.StatusBadRequest, "BadDigest", "The block does not match its key.")
 		} else {
 			writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store could not write the block.")
@@ -190,26 +200,26 @@ func publicReadACL(headers http.Header) bool {
 	return found
 }
 
-func (handler Handler) getBlock(ctx context.Context, ref eris.Reference) ([]byte, error) {
+func (handler Handler) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if source, ok := handler.Blocks.(eris.ContextBlockSource); ok {
-		return source.GetBlockContext(ctx, ref)
+		return source.GetBlockContext(ctx, ref, ttl)
 	}
-	return handler.Blocks.GetBlock(ref)
+	return handler.Blocks.GetBlock(ref, ttl)
 }
 
-func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte) error {
+func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte, ttl eris.TTL) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	var stored eris.Reference
 	var err error
 	if contextual, ok := handler.Blocks.(eris.ContextBlockSink); ok {
-		stored, err = contextual.PutBlockContext(ctx, block, ref)
+		stored, err = contextual.PutBlockContext(ctx, block, ttl, ref)
 	} else {
-		stored, err = handler.Blocks.(eris.BlockSink).PutBlock(block, ref)
+		stored, err = handler.Blocks.(eris.BlockSink).PutBlock(block, ttl, ref)
 	}
 	if err != nil {
 		return err

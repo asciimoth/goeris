@@ -49,7 +49,7 @@ func TestClientCancelsPartialResponse(t *testing.T) {
 			result := make(chan error, 1)
 			go func() {
 				if decoded {
-					body, err := client.OpenContent(ctx, capability)
+					body, err := client.OpenContent(ctx, capability, 0)
 					if err == nil {
 						_, err = io.Copy(io.Discard, body)
 						_ = body.Close()
@@ -57,7 +57,7 @@ func TestClientCancelsPartialResponse(t *testing.T) {
 					result <- err
 					return
 				}
-				block, err := client.GetBlockContext(ctx, capability.Root.Reference)
+				block, err := client.GetBlockContext(ctx, capability.Root.Reference, 0)
 				if block != nil {
 					result <- errors.New("partial block accepted")
 					return
@@ -104,7 +104,7 @@ func TestHandlerAbortsFailedStream(t *testing.T) {
 					if ref == pairs[0].Reference {
 						return nil, sourceErr
 					}
-					return blocks.GetBlock(ref)
+					return blocks.GetBlock(ref, 0)
 				})}
 				request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
 				request.Header.Set("Range", byteRange)
@@ -155,7 +155,7 @@ func TestHandlerStreamFailureClosesResponse(t *testing.T) {
 		if ref == pairs[0].Reference {
 			return nil, eris.ErrMissingBlock
 		}
-		return blocks.GetBlock(ref)
+		return blocks.GetBlock(ref, 0)
 	})})
 	defer server.Close()
 	for _, byteRange := range []string{"", "bytes=0-10", "bytes=0-10,1024-1030"} {
@@ -275,7 +275,7 @@ func TestClientBodyErrorsDoNotExposeServerText(t *testing.T) {
 			}
 		}
 		if decoded {
-			content, err := client.OpenContent(context.Background(), capability)
+			content, err := client.OpenContent(context.Background(), capability, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -283,7 +283,7 @@ func TestClientBodyErrorsDoNotExposeServerText(t *testing.T) {
 			check(err)
 			check(content.Close())
 		} else {
-			block, err := client.GetBlock(capability.Root.Reference)
+			block, err := client.GetBlock(capability.Root.Reference, 0)
 			if block != nil {
 				t.Fatal("accepted a failed block read")
 			}
@@ -323,14 +323,14 @@ func TestClientRejectsMalformedTrailerWithoutExposingText(t *testing.T) {
 	}
 	for _, decoded := range []bool{false, true} {
 		if decoded {
-			body, openErr := client.OpenContent(context.Background(), capability)
+			body, openErr := client.OpenContent(context.Background(), capability, 0)
 			if openErr != nil {
 				t.Fatal(openErr)
 			}
 			_, err = io.ReadAll(body)
 			_ = body.Close()
 		} else {
-			_, err = client.GetBlock(capability.Root.Reference)
+			_, err = client.GetBlock(capability.Root.Reference, 0)
 		}
 		if err == nil || strings.Contains(err.Error(), privateText) {
 			t.Fatalf("decoded %v: unsafe trailer error: %v", decoded, err)
@@ -358,7 +358,7 @@ func TestClientRequestErrorsDoNotExposeURLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.Resolve(context.Background(), capability.String())
+	_, err = client.Resolve(context.Background(), capability.String(), 0)
 	if err == nil || err.Error() != "eris http: request failed" {
 		t.Fatalf("unsafe request error: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestClientRequestErrorsDoNotExposeURLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.NewRequest(context.Background(), capability.String())
+	_, err = client.NewRequest(context.Background(), capability.String(), 0)
 	if err == nil || err.Error() != "eris http: request failed" || !errors.As(err, &urlErr) {
 		t.Fatalf("unsafe URL parse error: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestClientRejectsUnexpectedSuccessStatus(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		block, err := client.GetBlock(ref)
+		block, err := client.GetBlock(ref, 0)
 		var statusErr *ResponseError
 		if block != nil || !errors.As(err, &statusErr) || statusErr.StatusCode != status {
 			t.Fatalf("status %d: block %x, error %v", status, block, err)
@@ -433,7 +433,7 @@ func TestClientBoundsBlockResponseReads(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		block, err := client.GetBlock(eris.Reference{})
+		block, err := client.GetBlock(eris.Reference{}, 0)
 		if block != nil || !errors.Is(err, ErrResponseTooLarge) || !body.closed {
 			t.Fatalf("length %d: block size %d, error %v, closed %v", length, len(block), err, body.closed)
 		}
@@ -470,7 +470,7 @@ func TestClientBoundsDecompressedBlockResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	block, err := client.GetBlock(eris.Reference{})
+	block, err := client.GetBlock(eris.Reference{}, 0)
 	if block != nil || !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("block size %d, error %v", len(block), err)
 	}
@@ -478,11 +478,11 @@ func TestClientBoundsDecompressedBlockResponse(t *testing.T) {
 
 type contextSourceFunc func(context.Context, eris.Reference) ([]byte, error)
 
-func (source contextSourceFunc) GetBlock(ref eris.Reference) ([]byte, error) {
+func (source contextSourceFunc) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	return source(context.Background(), ref)
 }
 
-func (source contextSourceFunc) GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error) {
+func (source contextSourceFunc) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	return source(ctx, ref)
 }
 
@@ -519,7 +519,7 @@ func TestHandlerCancelsMultipartReadAfterWriteFailure(t *testing.T) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}
-		return blocks.GetBlock(ref)
+		return blocks.GetBlock(ref, 0)
 	})}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

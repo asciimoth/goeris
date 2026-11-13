@@ -648,25 +648,25 @@ type failAfterSource struct {
 	err    error
 }
 
-func (source *failAfterSource) GetBlock(ref eris.Reference) ([]byte, error) {
+func (source *failAfterSource) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	source.calls++
 	if source.calls == source.failAt {
 		return nil, source.err
 	}
-	return source.BlockSource.GetBlock(ref)
+	return source.BlockSource.GetBlock(ref, 0)
 }
 
-func (source *flakySource) GetBlock(ref eris.Reference) ([]byte, error) {
+func (source *flakySource) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	if ref == source.ref && source.remaining > 0 {
 		source.remaining--
 		return nil, source.err
 	}
-	return source.BlockSource.GetBlock(ref)
+	return source.BlockSource.GetBlock(ref, 0)
 }
 
 type errorSink struct{ err error }
 
-func (sink errorSink) PutBlock([]byte, ...eris.Reference) (eris.Reference, error) {
+func (sink errorSink) PutBlock([]byte, eris.TTL, ...eris.Reference) (eris.Reference, error) {
 	return eris.Reference{}, sink.err
 }
 
@@ -676,7 +676,7 @@ type countingSink struct {
 	err    error
 }
 
-func (sink *countingSink) PutBlock(block []byte, _ ...eris.Reference) (eris.Reference, error) {
+func (sink *countingSink) PutBlock(block []byte, ttl eris.TTL, _ ...eris.Reference) (eris.Reference, error) {
 	sink.calls++
 	if sink.calls == sink.failAt {
 		return eris.Reference{}, sink.err
@@ -946,27 +946,27 @@ func TestBlockSetStorageMethods(t *testing.T) {
 	node := make([]byte, eris.BlockSize1KiB)
 	block, pair, _ := eris.EncryptNode(node, eris.Secret{}, 0)
 	blocks := make(eris.BlockSet)
-	if _, err := blocks.PutBlock(block, pair.Reference); err != nil {
+	if _, err := blocks.PutBlock(block, 0, pair.Reference); err != nil {
 		t.Fatal(err)
 	}
 	block[0] ^= 1
-	got, err := blocks.GetBlock(pair.Reference)
+	got, err := blocks.GetBlock(pair.Reference, 0)
 	if err != nil || got[0] == block[0] {
 		t.Fatal("store did not copy input")
 	}
 	got[0] ^= 1
-	again, _ := blocks.GetBlock(pair.Reference)
+	again, _ := blocks.GetBlock(pair.Reference, 0)
 	if got[0] == again[0] {
 		t.Fatal("store did not copy output")
 	}
-	if _, err = blocks.GetBlock(eris.Reference{9}); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err = blocks.GetBlock(eris.Reference{9}, 0); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("missing error = %v", err)
 	}
-	if _, err = (eris.BlockSet(nil)).PutBlock(again, pair.Reference); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err = (eris.BlockSet(nil)).PutBlock(again, 0, pair.Reference); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("nil put error = %v", err)
 	}
 	again[0] ^= 1
-	if _, err = blocks.PutBlock(again, pair.Reference); !errors.Is(err, eris.ErrInvalidBlock) {
+	if _, err = blocks.PutBlock(again, 0, pair.Reference); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Fatalf("corrupt put error = %v", err)
 	}
 }

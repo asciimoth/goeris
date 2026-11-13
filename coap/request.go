@@ -40,10 +40,13 @@ type RequestConfig struct {
 	ReferenceEncoding ReferenceEncoding
 	// SizeHint adds Size1 to a GET request. Zero omits it.
 	SizeHint eris.BlockSize
-	// ProxyURI adds an absolute Proxy-Uri without a fragment. HopLimit must
-	// also be nonzero.
+	// ProxyURI adds an absolute Proxy-Uri without a fragment. Low-level request
+	// builders require a nonzero HopLimit; Client sets it from the operation TTL.
 	ProxyURI string
-	// HopLimit adds Hop-Limit. Valid values are from 1 through 255.
+	// HopLimit adds Hop-Limit. Valid values are from 1 through 255. In Client,
+	// it sets the initial wire value for operations with eris.NoTTL; zero uses
+	// eris.DefaultTTL. An explicit operation TTL overrides this field.
+	// Low-level request builders send this value as is; zero omits the option.
 	HopLimit uint8
 }
 
@@ -183,6 +186,16 @@ func validateHopLimit(message *protocol.Message) error {
 		return ErrInvalidHopLimit
 	}
 	return nil
+}
+
+// requestTTL is used only after validateHopLimit succeeds. The ERIS CoAP
+// specification permits local access only when Hop-Limit is absent.
+func requestTTL(message *protocol.Message) eris.TTL {
+	value, present, _ := oneUintOption(message, protocol.OptionHopLimit)
+	if !present {
+		return eris.LocalTTL
+	}
+	return eris.TTL(value)
 }
 
 // singleOptionValue borrows one value for validation. Do not copy untrusted

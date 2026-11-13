@@ -153,10 +153,10 @@ func TestInternalValidationErrors(t *testing.T) {
 		t.Fatal("nil content format response succeeded")
 	}
 	badClient := &Client{requester: RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) { return nil, nil }), store: badStore}
-	if _, err := badClient.GetBlock(ref); !errors.Is(err, ErrInvalidStoreURL) {
+	if _, err := badClient.GetBlock(ref, 0); !errors.Is(err, ErrInvalidStoreURL) {
 		t.Errorf("bad client GET error = %v", err)
 	}
-	if _, err := badClient.PutBlock(block, blockRef); !errors.Is(err, ErrInvalidStoreURL) {
+	if _, err := badClient.PutBlock(block, 0, blockRef); !errors.Is(err, ErrInvalidStoreURL) {
 		t.Errorf("bad client PUT error = %v", err)
 	}
 }

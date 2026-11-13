@@ -40,40 +40,40 @@ func TestBlockSetStorage(t *testing.T) {
 	node := make([]byte, BlockSize1KiB)
 	block, pair, _ := EncryptNode(node, Secret{}, 0)
 	blocks := make(BlockSet)
-	if ref, err := blocks.PutBlock(block); err != nil || ref != pair.Reference {
+	if ref, err := blocks.PutBlock(block, 0); err != nil || ref != pair.Reference {
 		t.Fatalf("PutBlock() = %v, %v", ref, err)
 	}
 	block[0] ^= 1
-	got, err := blocks.GetBlock(pair.Reference)
+	got, err := blocks.GetBlock(pair.Reference, 0)
 	if err != nil || got[0] == block[0] {
 		t.Fatal("block set did not copy input")
 	}
 	got[0] ^= 1
-	again, _ := blocks.GetBlock(pair.Reference)
+	again, _ := blocks.GetBlock(pair.Reference, 0)
 	if got[0] == again[0] {
 		t.Fatal("block set did not copy output")
 	}
-	if _, err = blocks.GetBlock(Reference{1}); !errors.Is(err, ErrMissingBlock) {
+	if _, err = blocks.GetBlock(Reference{1}, 0); !errors.Is(err, ErrMissingBlock) {
 		t.Fatalf("missing error = %v", err)
 	}
-	if _, err = (BlockSet(nil)).PutBlock(again, pair.Reference); !errors.Is(err, ErrMissingBlock) {
+	if _, err = (BlockSet(nil)).PutBlock(again, 0, pair.Reference); !errors.Is(err, ErrMissingBlock) {
 		t.Fatalf("nil set error = %v", err)
 	}
 	again[0] ^= 1
-	if _, err = blocks.PutBlock(again, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
+	if _, err = blocks.PutBlock(again, 0, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("invalid block error = %v", err)
 	}
-	if _, err = blocks.PutBlock(block, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
+	if _, err = blocks.PutBlock(block, 0, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("mismatched reference error = %v", err)
 	}
-	if _, err = blocks.PutBlock(nil); !errors.Is(err, ErrInvalidBlockSize) {
+	if _, err = blocks.PutBlock(nil, 0); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Fatalf("invalid size error = %v", err)
 	}
-	if _, err = blocks.PutBlock(again, pair.Reference, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
+	if _, err = blocks.PutBlock(again, 0, pair.Reference, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("multiple references error = %v", err)
 	}
 	blocks[pair.Reference][0] ^= 1
-	if _, err = blocks.GetBlock(pair.Reference); !errors.Is(err, ErrInvalidBlock) {
+	if _, err = blocks.GetBlock(pair.Reference, 0); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("corrupt stored block error = %v", err)
 	}
 }

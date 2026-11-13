@@ -155,9 +155,9 @@ func TestClientBoundsResponseBodies(t *testing.T) {
 			t.Fatal(err)
 		}
 		if method == http.MethodGet {
-			_, err = client.GetBlock(ref)
+			_, err = client.GetBlock(ref, 0)
 		} else {
-			_, err = client.PutBlock(block)
+			_, err = client.PutBlock(block, 0)
 		}
 		if !errors.Is(err, ErrResponseTooLarge) || body.read != int(eris.BlockSize32KiB)+1 || !body.closed {
 			t.Fatalf("%s: error %v, read %d, closed %t", method, err, body.read, body.closed)

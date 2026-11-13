@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	protocol "github.com/asciimoth/coaperation"
+	"github.com/asciimoth/goeris"
 )
 
 var (
@@ -35,7 +36,7 @@ var (
 	// absolute Proxy-Uri value without a fragment or has no Hop-Limit.
 	ErrInvalidProxyURI = errors.New("eris coap: invalid Proxy-Uri")
 	// ErrHopLimitReached means that forwarding would exhaust Hop-Limit.
-	ErrHopLimitReached = errors.New("eris coap: Hop-Limit reached")
+	ErrHopLimitReached = eris.ErrTTLExpired
 	// ErrInvalidAdvertisement means that discovery data does not describe a
 	// valid block store or proxy.
 	ErrInvalidAdvertisement = errors.New("eris coap: invalid advertisement")
@@ -45,6 +46,11 @@ var (
 type ResponseError struct {
 	// Code is the response code returned by the remote endpoint.
 	Code protocol.Code
+}
+
+// Is identifies a remote forwarding limit failure.
+func (err *ResponseError) Is(target error) bool {
+	return target == eris.ErrTTLExpired && err.Code == protocol.HopLimitReached
 }
 
 // Error implements error.

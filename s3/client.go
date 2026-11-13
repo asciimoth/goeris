@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
 // HTTPClient executes HTTP requests. *http.Client implements HTTPClient.
@@ -17,6 +18,11 @@ import (
 type HTTPClient interface {
 	Do(request *http.Request) (*http.Response, error)
 }
+
+// TTLHeader carries the optional request hop limit as a decimal integer from
+// 1 through 255. It is signed with the request and is not object metadata.
+// A missing header permits local storage access only.
+const TTLHeader = httpttl.Header
 
 // Client reads and writes ERIS blocks in one S3 bucket.
 type Client struct {
@@ -50,11 +56,12 @@ func NewClient(httpClient HTTPClient, store StoreURL, signer Signer) (*Client, e
 
 // NewRequest returns a request for ref and signs it when the client has a
 // signer. It does not execute the request. Only GET, HEAD, and PUT are allowed.
-func (client *Client) NewRequest(ctx context.Context, method string, ref eris.Reference, block []byte) (*http.Request, error) {
-	return client.newRequest(ctx, method, ref, block, true)
+// It sets TTLHeader to ttl.Forward() before signing, or returns eris.ErrTTLExpired.
+func (client *Client) NewRequest(ctx context.Context, method string, ref eris.Reference, block []byte, ttl eris.TTL) (*http.Request, error) {
+	return client.newRequest(ctx, method, ref, block, ttl, true)
 }
 
-func (client *Client) newRequest(ctx context.Context, method string, ref eris.Reference, block []byte, check bool) (*http.Request, error) {
+func (client *Client) newRequest(ctx context.Context, method string, ref eris.Reference, block []byte, ttl eris.TTL, check bool) (*http.Request, error) {
 	if client == nil || client.httpClient == nil {
 		return nil, ErrNilHTTPClient
 	}
@@ -85,6 +92,9 @@ func (client *Client) newRequest(ctx context.Context, method string, ref eris.Re
 		request.Header.Set("Content-Type", ContentType)
 		request.Header.Set("x-amz-acl", PublicReadACL)
 	}
+	if err := httpttl.Set(request.Header, ttl); err != nil {
+		return nil, err
+	}
 	if client.signer != nil {
 		if err := client.signer.Sign(request, block); err != nil {
 			return nil, err
@@ -94,13 +104,13 @@ func (client *Client) newRequest(ctx context.Context, method string, ref eris.Re
 }
 
 // GetBlock retrieves and verifies one block.
-func (client *Client) GetBlock(ref eris.Reference) ([]byte, error) {
-	return client.GetBlockContext(context.Background(), ref)
+func (client *Client) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+	return client.GetBlockContext(context.Background(), ref, ttl)
 }
 
 // GetBlockContext retrieves and verifies one block.
-func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error) {
-	request, err := client.NewRequest(ctx, http.MethodGet, ref, nil)
+func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+	request, err := client.newRequest(ctx, http.MethodGet, ref, nil, ttl, true)
 	if err != nil {
 		return nil, err
 	}
@@ -130,12 +140,12 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 }
 
 // PutBlock stores one block and returns its reference.
-func (client *Client) PutBlock(block []byte, expected ...eris.Reference) (eris.Reference, error) {
-	return client.PutBlockContext(context.Background(), block, expected...)
+func (client *Client) PutBlock(block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+	return client.PutBlockContext(context.Background(), block, ttl, expected...)
 }
 
 // PutBlockContext stores one block and returns its reference.
-func (client *Client) PutBlockContext(ctx context.Context, block []byte, expected ...eris.Reference) (eris.Reference, error) {
+func (client *Client) PutBlockContext(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	if client == nil || client.httpClient == nil {
 		return eris.Reference{}, ErrNilHTTPClient
 	}
@@ -149,7 +159,7 @@ func (client *Client) PutBlockContext(ctx context.Context, block []byte, expecte
 	if len(expected) > 1 || len(expected) == 1 && expected[0] != ref {
 		return eris.Reference{}, eris.ErrInvalidBlock
 	}
-	request, err := client.newRequest(ctx, http.MethodPut, ref, block, false)
+	request, err := client.newRequest(ctx, http.MethodPut, ref, block, ttl, false)
 	if err != nil {
 		return eris.Reference{}, err
 	}

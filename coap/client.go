@@ -47,16 +47,20 @@ func NewClient(requester protocol.Requester, store StoreURL, config ClientConfig
 }
 
 // GetBlock retrieves and verifies one encrypted block.
-func (client *Client) GetBlock(ref eris.Reference) ([]byte, error) {
-	return client.GetBlockContext(context.Background(), ref)
+func (client *Client) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+	return client.GetBlockContext(context.Background(), ref, ttl)
 }
 
 // GetBlockContext retrieves and verifies one encrypted block.
-func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error) {
+func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	if client == nil || client.requester == nil {
 		return nil, ErrNilRequester
 	}
-	request, err := NewGetRequest(client.store, ref, client.config.Request)
+	config, err := client.requestConfig(ttl)
+	if err != nil {
+		return nil, err
+	}
+	request, err := NewGetRequest(client.store, ref, config)
 	if err != nil {
 		return nil, err
 	}
@@ -86,14 +90,14 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 }
 
 // PutBlock stores one encrypted block and returns its reference.
-func (client *Client) PutBlock(block []byte, expected ...eris.Reference) (eris.Reference, error) {
-	return client.PutBlockContext(context.Background(), block, expected...)
+func (client *Client) PutBlock(block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+	return client.PutBlockContext(context.Background(), block, ttl, expected...)
 }
 
 // PutBlockContext stores one encrypted block and returns its reference. If an
 // older server returns no reference, it computes the reference locally when
 // no expected reference was supplied.
-func (client *Client) PutBlockContext(ctx context.Context, block []byte, expected ...eris.Reference) (eris.Reference, error) {
+func (client *Client) PutBlockContext(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	if client == nil || client.requester == nil {
 		return eris.Reference{}, ErrNilRequester
 	}
@@ -104,7 +108,11 @@ func (client *Client) PutBlockContext(ctx context.Context, block []byte, expecte
 	if len(expected) > 1 || len(expected) == 1 && expected[0] != ref {
 		return eris.Reference{}, eris.ErrInvalidBlock
 	}
-	request, err := NewPutRequest(client.store, block, client.config.Request, expected...)
+	config, err := client.requestConfig(ttl)
+	if err != nil {
+		return eris.Reference{}, err
+	}
+	request, err := NewPutRequest(client.store, block, config, expected...)
 	if err != nil {
 		return eris.Reference{}, err
 	}
@@ -146,6 +154,21 @@ func (client *Client) PutBlockContext(ctx context.Context, block []byte, expecte
 		return eris.Reference{}, ErrInvalidReference
 	}
 	return ref, nil
+}
+
+// requestConfig copies configuration so concurrent calls cannot change each
+// other's hop limit. An explicit operation TTL always takes precedence.
+func (client *Client) requestConfig(ttl eris.TTL) (RequestConfig, error) {
+	config := client.config.Request
+	if ttl == eris.NoTTL && config.HopLimit != 0 {
+		return config, nil
+	}
+	next, err := ttl.Forward()
+	if err != nil {
+		return RequestConfig{}, err
+	}
+	config.HopLimit = uint8(next)
+	return config, nil
 }
 
 func validateContentFormat(message *protocol.Message, expected uint32) error {
@@ -196,6 +219,11 @@ func (requester *limitedRequester) Request(ctx context.Context, request *protoco
 		return nil, ErrResponseTooLarge
 	}
 	requester.remaining -= len(response.Payload)
+	// Stop before RequestBody can turn a peer's TTL failure into a missing
+	// Block1 acknowledgement or a changed Block2 response-code error.
+	if response.Code == protocol.HopLimitReached {
+		return nil, &ResponseError{Code: response.Code}
+	}
 	return response, nil
 }
 

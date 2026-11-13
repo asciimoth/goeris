@@ -9,6 +9,7 @@ import (
 	"net/url"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
 // HTTPClient executes HTTP requests. *net/http.Client implements HTTPClient.
@@ -25,6 +26,15 @@ type ResponseError struct {
 	// Error uses the standard status text instead.
 	Status string
 }
+
+// Is identifies a remote forwarding limit failure.
+func (err *ResponseError) Is(target error) bool {
+	return target == eris.ErrTTLExpired && err.StatusCode == nethttp.StatusLoopDetected
+}
+
+// TTLHeader carries the optional request hop limit as a decimal integer from
+// 1 through 255. A missing header permits local storage access only.
+const TTLHeader = httpttl.Header
 
 // Error implements error.
 func (err *ResponseError) Error() string {
@@ -78,7 +88,8 @@ func NewClient(httpClient HTTPClient, baseURL *url.URL) (*Client, error) {
 
 // NewRequest returns a GET request for urn. It does not execute the request.
 // URL parse errors are wrapped to keep capability keys out of error text.
-func (client *Client) NewRequest(ctx context.Context, urn string) (*nethttp.Request, error) {
+// It sets TTLHeader to ttl.Forward(), or returns eris.ErrTTLExpired.
+func (client *Client) NewRequest(ctx context.Context, urn string, ttl eris.TTL) (*nethttp.Request, error) {
 	if client == nil || client.httpClient == nil {
 		return nil, ErrNilHTTPClient
 	}
@@ -90,6 +101,9 @@ func (client *Client) NewRequest(ctx context.Context, urn string) (*nethttp.Requ
 	if err != nil {
 		return nil, &requestError{cause: err}
 	}
+	if err := httpttl.Set(request.Header, ttl); err != nil {
+		return nil, err
+	}
 	return request, nil
 }
 
@@ -98,8 +112,8 @@ func (client *Client) NewRequest(ctx context.Context, urn string) (*nethttp.Requ
 // The response body is unchanged; its errors can contain untrusted text.
 // Request errors are wrapped to omit URLs and transport details from error
 // text. The original cause is available through errors.Is and errors.As.
-func (client *Client) Resolve(ctx context.Context, urn string) (*nethttp.Response, error) {
-	request, err := client.NewRequest(ctx, urn)
+func (client *Client) Resolve(ctx context.Context, urn string, ttl eris.TTL) (*nethttp.Response, error) {
+	request, err := client.NewRequest(ctx, urn, ttl)
 	if err != nil {
 		return nil, err
 	}
@@ -113,15 +127,15 @@ func (client *Client) Resolve(ctx context.Context, urn string) (*nethttp.Respons
 // GetBlock retrieves and verifies one encrypted ERIS block. It uses a
 // background context so Client implements the block-source interfaces in this
 // module. Use GetBlockContext when a call needs cancellation or a deadline.
-func (client *Client) GetBlock(ref eris.Reference) ([]byte, error) {
-	return client.GetBlockContext(context.Background(), ref)
+func (client *Client) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+	return client.GetBlockContext(context.Background(), ref, ttl)
 }
 
 // GetBlockContext retrieves and verifies one encrypted ERIS block.
 // It requires a 200 OK response with the application/octet-stream media type.
 // Request and body read errors omit transport text but retain their causes.
-func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error) {
-	response, err := client.Resolve(ctx, ref.URN())
+func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+	response, err := client.Resolve(ctx, ref.URN(), ttl)
 	if err != nil {
 		return nil, err
 	}
@@ -158,11 +172,11 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 // Applications should prefer local decoding from verified blocks when
 // possible.
 // Body read and close errors omit transport text but retain their causes.
-func (client *Client) OpenContent(ctx context.Context, capability eris.Capability) (io.ReadCloser, error) {
+func (client *Client) OpenContent(ctx context.Context, capability eris.Capability, ttl eris.TTL) (io.ReadCloser, error) {
 	if capability.Validate() != nil {
 		return nil, ErrInvalidURN
 	}
-	response, err := client.Resolve(ctx, capability.String())
+	response, err := client.Resolve(ctx, capability.String(), ttl)
 	if err != nil {
 		return nil, err
 	}

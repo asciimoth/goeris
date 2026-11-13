@@ -107,7 +107,7 @@ func FuzzTreeShape(f *testing.F) {
 		}
 		valid = valid && int64(wantSize) <= limit
 		decoded, coreErr := eris.DecodeWithLimit(capability, blocks, limit)
-		reader, readerErr := NewReaderWithLimit(capability, blocks, limit)
+		reader, readerErr := NewReaderWithLimit(capability, blocks, limit, eris.NoTTL)
 		if (coreErr == nil) != valid || (readerErr == nil) != valid {
 			t.Fatalf("counts %v, limit %d: core = %v, reader = %v; valid = %t", counts, limit, coreErr, readerErr, valid)
 		}

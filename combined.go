@@ -28,14 +28,16 @@ var ErrNoBlockStorage = errors.New("eris: no compatible block storage")
 // Wrapped stores must meet the contracts of the interfaces they implement,
 // including block verification and copying data that they retain. The combined
 // store passes arguments through and does not verify blocks again.
+// Every attempt receives the original TTL unchanged, including NoTTL and
+// LocalTTL. Only a downstream network client consumes a forward.
 //
 // Concurrent calls are safe if the wrapped stores and OnError support concurrent
 // calls and no caller changes OnError during use.
 type CombinedBlockStore struct {
-	get        []combinedBlockMethod[func(Reference) ([]byte, error)]
-	put        []combinedBlockMethod[func([]byte, ...Reference) (Reference, error)]
-	getContext []combinedBlockMethod[func(context.Context, Reference) ([]byte, error)]
-	putContext []combinedBlockMethod[func(context.Context, []byte, ...Reference) (Reference, error)]
+	get        []combinedBlockMethod[func(Reference, TTL) ([]byte, error)]
+	put        []combinedBlockMethod[func([]byte, TTL, ...Reference) (Reference, error)]
+	getContext []combinedBlockMethod[func(context.Context, Reference, TTL) ([]byte, error)]
+	putContext []combinedBlockMethod[func(context.Context, []byte, TTL, ...Reference) (Reference, error)]
 
 	// OnError receives errors that an operation discards. The index is the
 	// zero-based position in the constructor's input, including skipped entries.
@@ -81,23 +83,23 @@ func NewCombinedBlockStore(stores ...any) *CombinedBlockStore {
 	combined := &CombinedBlockStore{}
 	for index, entry := range stores {
 		if source, ok := entry.(BlockSource); ok {
-			combined.get = append(combined.get, combinedBlockMethod[func(Reference) ([]byte, error)]{index, source.GetBlock})
+			combined.get = append(combined.get, combinedBlockMethod[func(Reference, TTL) ([]byte, error)]{index, source.GetBlock})
 		}
 		if sink, ok := entry.(BlockSink); ok {
-			combined.put = append(combined.put, combinedBlockMethod[func([]byte, ...Reference) (Reference, error)]{index, sink.PutBlock})
+			combined.put = append(combined.put, combinedBlockMethod[func([]byte, TTL, ...Reference) (Reference, error)]{index, sink.PutBlock})
 		}
 		if source, ok := entry.(ContextBlockSource); ok {
-			combined.getContext = append(combined.getContext, combinedBlockMethod[func(context.Context, Reference) ([]byte, error)]{index, source.GetBlockContext})
+			combined.getContext = append(combined.getContext, combinedBlockMethod[func(context.Context, Reference, TTL) ([]byte, error)]{index, source.GetBlockContext})
 		} else if source, ok := entry.(BlockSource); ok {
-			combined.getContext = append(combined.getContext, combinedBlockMethod[func(context.Context, Reference) ([]byte, error)]{index, func(_ context.Context, ref Reference) ([]byte, error) {
-				return source.GetBlock(ref)
+			combined.getContext = append(combined.getContext, combinedBlockMethod[func(context.Context, Reference, TTL) ([]byte, error)]{index, func(_ context.Context, ref Reference, ttl TTL) ([]byte, error) {
+				return source.GetBlock(ref, ttl)
 			}})
 		}
 		if sink, ok := entry.(ContextBlockSink); ok {
-			combined.putContext = append(combined.putContext, combinedBlockMethod[func(context.Context, []byte, ...Reference) (Reference, error)]{index, sink.PutBlockContext})
+			combined.putContext = append(combined.putContext, combinedBlockMethod[func(context.Context, []byte, TTL, ...Reference) (Reference, error)]{index, sink.PutBlockContext})
 		} else if sink, ok := entry.(BlockSink); ok {
-			combined.putContext = append(combined.putContext, combinedBlockMethod[func(context.Context, []byte, ...Reference) (Reference, error)]{index, func(_ context.Context, block []byte, expected ...Reference) (Reference, error) {
-				return sink.PutBlock(block, expected...)
+			combined.putContext = append(combined.putContext, combinedBlockMethod[func(context.Context, []byte, TTL, ...Reference) (Reference, error)]{index, func(_ context.Context, block []byte, ttl TTL, expected ...Reference) (Reference, error) {
+				return sink.PutBlock(block, ttl, expected...)
 			}})
 		}
 	}
@@ -106,18 +108,18 @@ func NewCombinedBlockStore(stores ...any) *CombinedBlockStore {
 
 // GetBlock tries each resolved BlockSource method until one returns a block without
 // an error. Entries that implement only ContextBlockSource are skipped.
-func (store *CombinedBlockStore) GetBlock(ref Reference) ([]byte, error) {
-	return tryBlockStores(context.Background(), store.get, store.OnError, func(get func(Reference) ([]byte, error)) ([]byte, error) {
-		return get(ref)
+func (store *CombinedBlockStore) GetBlock(ref Reference, ttl TTL) ([]byte, error) {
+	return tryBlockStores(context.Background(), store.get, store.OnError, func(get func(Reference, TTL) ([]byte, error)) ([]byte, error) {
+		return get(ref, ttl)
 	})
 }
 
 // PutBlock tries each resolved BlockSink method until one stores the block without
 // an error. Read-only entries and entries that implement only ContextBlockSink
 // are skipped. Each attempt receives the same block and expected references.
-func (store *CombinedBlockStore) PutBlock(block []byte, expected ...Reference) (Reference, error) {
-	return tryBlockStores(context.Background(), store.put, store.OnError, func(put func([]byte, ...Reference) (Reference, error)) (Reference, error) {
-		return put(block, expected...)
+func (store *CombinedBlockStore) PutBlock(block []byte, ttl TTL, expected ...Reference) (Reference, error) {
+	return tryBlockStores(context.Background(), store.put, store.OnError, func(put func([]byte, TTL, ...Reference) (Reference, error)) (Reference, error) {
+		return put(block, ttl, expected...)
 	})
 }
 
@@ -125,9 +127,9 @@ func (store *CombinedBlockStore) PutBlock(block []byte, expected ...Reference) (
 // without an error. It uses GetBlockContext when available and otherwise uses
 // GetBlock. It passes ctx unchanged to context methods. The caller must supply
 // a non-nil context.
-func (store *CombinedBlockStore) GetBlockContext(ctx context.Context, ref Reference) ([]byte, error) {
-	return tryBlockStores(ctx, store.getContext, store.OnError, func(get func(context.Context, Reference) ([]byte, error)) ([]byte, error) {
-		return get(ctx, ref)
+func (store *CombinedBlockStore) GetBlockContext(ctx context.Context, ref Reference, ttl TTL) ([]byte, error) {
+	return tryBlockStores(ctx, store.getContext, store.OnError, func(get func(context.Context, Reference, TTL) ([]byte, error)) ([]byte, error) {
+		return get(ctx, ref, ttl)
 	})
 }
 
@@ -135,9 +137,9 @@ func (store *CombinedBlockStore) GetBlockContext(ctx context.Context, ref Refere
 // without an error. It uses PutBlockContext when available and otherwise uses
 // PutBlock. Read-only entries are excluded. It passes ctx unchanged to context
 // methods. The caller must supply a non-nil context.
-func (store *CombinedBlockStore) PutBlockContext(ctx context.Context, block []byte, expected ...Reference) (Reference, error) {
-	return tryBlockStores(ctx, store.putContext, store.OnError, func(put func(context.Context, []byte, ...Reference) (Reference, error)) (Reference, error) {
-		return put(ctx, block, expected...)
+func (store *CombinedBlockStore) PutBlockContext(ctx context.Context, block []byte, ttl TTL, expected ...Reference) (Reference, error) {
+	return tryBlockStores(ctx, store.putContext, store.OnError, func(put func(context.Context, []byte, TTL, ...Reference) (Reference, error)) (Reference, error) {
+		return put(ctx, block, ttl, expected...)
 	})
 }
 

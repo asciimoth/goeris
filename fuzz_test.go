@@ -23,7 +23,7 @@ func FuzzBlockSetPut(f *testing.F) {
 			copy(ref[:], reference)
 			expected = append(expected, ref)
 		}
-		got, err := store.PutBlock(block, expected...)
+		got, err := store.PutBlock(block, 0, expected...)
 		actual, sizeErr := ReferenceOf(block)
 		if sizeErr != nil {
 			if !errors.Is(err, ErrInvalidBlockSize) || len(store) != 0 {
@@ -37,7 +37,7 @@ func FuzzBlockSetPut(f *testing.F) {
 			}
 			return
 		}
-		stored, readErr := store.GetBlock(actual)
+		stored, readErr := store.GetBlock(actual, 0)
 		if err != nil || readErr != nil || got != actual || !bytes.Equal(stored, block) {
 			t.Fatalf("stored block mismatch: ref %v, write %v, read %v", got, err, readErr)
 		}

@@ -3,6 +3,9 @@ package s3
 import (
 	"errors"
 	"fmt"
+	"net/http"
+
+	"github.com/asciimoth/goeris"
 )
 
 var (
@@ -28,6 +31,11 @@ var (
 type ResponseError struct {
 	StatusCode int
 	Status     string
+}
+
+// Is identifies a remote forwarding limit failure.
+func (err *ResponseError) Is(target error) bool {
+	return target == eris.ErrTTLExpired && err.StatusCode == http.StatusLoopDetected
 }
 
 // Error implements error.

@@ -23,7 +23,7 @@ func (function clientFunc) Do(request *nethttp.Request) (*nethttp.Response, erro
 
 type sourceFunc func(eris.Reference) ([]byte, error)
 
-func (function sourceFunc) GetBlock(ref eris.Reference) ([]byte, error) {
+func (function sourceFunc) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	return function(ref)
 }
 
@@ -80,17 +80,17 @@ type contextSource struct {
 
 type requestContextKey struct{}
 
-func (source *contextSource) GetBlock(ref eris.Reference) ([]byte, error) {
+func (source *contextSource) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	source.plainCalls++
-	return source.blocks.GetBlock(ref)
+	return source.blocks.GetBlock(ref, 0)
 }
 
-func (source *contextSource) GetBlockContext(ctx context.Context, ref eris.Reference) ([]byte, error) {
+func (source *contextSource) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	source.contextCalls++
 	if ctx.Value(requestContextKey{}) != source.wantContext.Value(requestContextKey{}) {
 		return nil, errors.New("incorrect request context")
 	}
-	return source.blocks.GetBlock(ref)
+	return source.blocks.GetBlock(ref, 0)
 }
 
 func TestResourceURL(t *testing.T) {
@@ -136,17 +136,17 @@ func TestClientConstructionAndRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	base.Host = "changed.test"
-	request, err := client.NewRequest(context.Background(), capability.String())
+	request, err := client.NewRequest(context.Background(), capability.String(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if request.Method != nethttp.MethodGet || request.URL.Host != "example.test" || request.URL.Path != N2RPath {
 		t.Fatalf("NewRequest() = %s %s", request.Method, request.URL)
 	}
-	if _, err := client.NewRequest(context.Background(), "urn:eris:bad"); !errors.Is(err, ErrInvalidURN) {
+	if _, err := client.NewRequest(context.Background(), "urn:eris:bad", 0); !errors.Is(err, ErrInvalidURN) {
 		t.Fatalf("NewRequest(invalid) error = %v", err)
 	}
-	if _, err := (*Client)(nil).NewRequest(context.Background(), capability.String()); !errors.Is(err, ErrNilHTTPClient) {
+	if _, err := (*Client)(nil).NewRequest(context.Background(), capability.String(), 0); !errors.Is(err, ErrNilHTTPClient) {
 		t.Fatalf("nil Client.NewRequest error = %v", err)
 	}
 }
@@ -285,11 +285,11 @@ func TestClientGetBlock(t *testing.T) {
 	})}
 	base, _ := url.Parse("http://in-memory.invalid")
 	client, _ := NewClient(httpClient, base)
-	got, err := client.GetBlockContext(context.Background(), ref)
+	got, err := client.GetBlockContext(context.Background(), ref, 0)
 	if err != nil || !bytes.Equal(got, blocks[ref]) {
 		t.Fatalf("GetBlockContext() = %x, %v", got, err)
 	}
-	got, err = client.GetBlock(ref)
+	got, err = client.GetBlock(ref, 0)
 	if err != nil || !bytes.Equal(got, blocks[ref]) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
@@ -309,7 +309,7 @@ func TestClientBlockSizeBoundaryAndClose(t *testing.T) {
 		response.Body = body
 		return response, nil
 	}), base)
-	got, err := client.GetBlock(ref)
+	got, err := client.GetBlock(ref, 0)
 	if err != nil || !bytes.Equal(got, blocks[ref]) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
@@ -379,7 +379,7 @@ func TestClientGetBlockErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client, _ := NewClient(test.do, base)
-			got, err := client.GetBlockContext(context.Background(), ref)
+			got, err := client.GetBlockContext(context.Background(), ref, 0)
 			if got != nil {
 				t.Fatalf("block = %x", got)
 			}
@@ -403,7 +403,7 @@ func TestClientOpenContent(t *testing.T) {
 		client, _ := NewClient(clientFunc(func(*nethttp.Request) (*nethttp.Response, error) {
 			return response(200, ContentType, bytes.NewReader(content)), nil
 		}), base)
-		body, err := client.OpenContent(context.Background(), capability)
+		body, err := client.OpenContent(context.Background(), capability, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -431,7 +431,7 @@ func TestClientOpenContent(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client, _ := NewClient(test.do, base)
-			body, err := client.OpenContent(context.Background(), test.capability)
+			body, err := client.OpenContent(context.Background(), test.capability, 0)
 			if body != nil {
 				t.Fatal("OpenContent returned a body")
 			}
@@ -458,7 +458,7 @@ func TestClientContentBodyOwnership(t *testing.T) {
 		response.Body = successBody
 		return response, nil
 	}), base)
-	body, err := client.OpenContent(context.Background(), capability)
+	body, err := client.OpenContent(context.Background(), capability, 0)
 	if err != nil || body == nil || successBody.closed {
 		t.Fatalf("OpenContent() = %#v, %v; closed = %v", body, err, successBody.closed)
 	}
@@ -473,7 +473,7 @@ func TestClientContentBodyOwnership(t *testing.T) {
 			response.Body = errorBody
 			return response, nil
 		}), base)
-		if body, err := client.OpenContent(context.Background(), capability); body != nil || err == nil {
+		if body, err := client.OpenContent(context.Background(), capability, 0); body != nil || err == nil {
 			t.Fatalf("OpenContent(status %d) = %#v, %v", status, body, err)
 		}
 		if !errorBody.closed {
@@ -493,11 +493,11 @@ func TestClientResolve(t *testing.T) {
 		}
 		return want, nil
 	}), base)
-	got, err := client.Resolve(context.Background(), capability.String())
+	got, err := client.Resolve(context.Background(), capability.String(), 0)
 	if err != nil || got != want {
 		t.Fatalf("Resolve() = %#v, %v", got, err)
 	}
-	if got, err := client.Resolve(context.Background(), "urn:eris:bad"); got != nil || !errors.Is(err, ErrInvalidURN) {
+	if got, err := client.Resolve(context.Background(), "urn:eris:bad", 0); got != nil || !errors.Is(err, ErrInvalidURN) {
 		t.Fatalf("Resolve(invalid) = %#v, %v", got, err)
 	}
 }

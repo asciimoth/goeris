@@ -12,6 +12,7 @@ import (
 
 	"github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/internal/erisreader"
+	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
 // Handler serves ERIS resources from an abstract block source. It processes
@@ -52,20 +53,25 @@ func (handler Handler) ServeHTTP(writer nethttp.ResponseWriter, request *nethttp
 		writer.WriteHeader(nethttp.StatusInternalServerError)
 		return
 	}
-	if strings.HasPrefix(request.URL.RawQuery, eris.ReferenceURNPrefix) {
-		handler.serveBlock(writer, request)
+	ttl, err := httpttl.Parse(request.Header)
+	if err != nil {
+		writer.WriteHeader(nethttp.StatusBadRequest)
 		return
 	}
-	handler.serveContent(writer, request)
+	if strings.HasPrefix(request.URL.RawQuery, eris.ReferenceURNPrefix) {
+		handler.serveBlock(writer, request, ttl)
+		return
+	}
+	handler.serveContent(writer, request, ttl)
 }
 
-func (handler Handler) serveBlock(writer nethttp.ResponseWriter, request *nethttp.Request) {
+func (handler Handler) serveBlock(writer nethttp.ResponseWriter, request *nethttp.Request, ttl eris.TTL) {
 	ref, err := eris.ParseReferenceURN(request.URL.RawQuery)
 	if err != nil {
 		writer.WriteHeader(nethttp.StatusBadRequest)
 		return
 	}
-	block, err := requestBlockSource{ctx: request.Context(), source: handler.Blocks}.GetBlock(ref)
+	block, err := requestBlockSource{ctx: request.Context(), source: handler.Blocks}.GetBlock(ref, ttl)
 	if err != nil {
 		writeSourceError(writer, err)
 		return
@@ -74,7 +80,7 @@ func (handler Handler) serveBlock(writer nethttp.ResponseWriter, request *nethtt
 	nethttp.ServeContent(writer, request, "", time.Time{}, bytes.NewReader(block))
 }
 
-func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *nethttp.Request) {
+func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *nethttp.Request, ttl eris.TTL) {
 	if handler.MaxContentSize < 0 {
 		writer.WriteHeader(nethttp.StatusInternalServerError)
 		return
@@ -90,7 +96,7 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 	}
 	ctx, cancel := context.WithCancel(request.Context())
 	defer cancel()
-	reader, err := erisreader.NewReaderWithLimit(capability, requestBlockSource{ctx: ctx, source: handler.Blocks}, limit)
+	reader, err := erisreader.NewReaderWithLimit(capability, requestBlockSource{ctx: ctx, source: handler.Blocks}, limit, ttl)
 	if err != nil {
 		if errors.Is(err, erisreader.ErrTooLarge) {
 			writer.WriteHeader(nethttp.StatusRequestEntityTooLarge)
@@ -132,19 +138,20 @@ func (reader *checkedContent) Read(buffer []byte) (int, error) {
 	return n, err
 }
 
+// requestBlockSource adds request cancellation and preserves the block TTL.
 type requestBlockSource struct {
 	ctx    context.Context
 	source eris.BlockSource
 }
 
-func (source requestBlockSource) GetBlock(ref eris.Reference) ([]byte, error) {
+func (source requestBlockSource) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	if err := source.ctx.Err(); err != nil {
 		return nil, err
 	}
 	if contextual, ok := source.source.(eris.ContextBlockSource); ok {
-		return contextual.GetBlockContext(source.ctx, ref)
+		return contextual.GetBlockContext(source.ctx, ref, ttl)
 	}
-	return source.source.GetBlock(ref)
+	return source.source.GetBlock(ref, ttl)
 }
 
 func (handler Handler) next() nethttp.Handler {
@@ -163,6 +170,10 @@ func setResourceHeaders(writer nethttp.ResponseWriter) {
 }
 
 func writeSourceError(writer nethttp.ResponseWriter, err error) {
+	if errors.Is(err, eris.ErrTTLExpired) {
+		writer.WriteHeader(nethttp.StatusLoopDetected)
+		return
+	}
 	if errors.Is(err, eris.ErrMissingBlock) {
 		writer.WriteHeader(nethttp.StatusNotFound)
 		return
