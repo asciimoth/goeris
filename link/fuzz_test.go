@@ -3,7 +3,9 @@ package link
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/asciimoth/goeris"
 )
@@ -25,12 +27,22 @@ func FuzzParseValue(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		value, err := ParseValue(data)
+		input := bytes.Clone(data)
+		value, err := ParseValue(input)
 		if err != nil {
+			if !errors.Is(err, ErrInvalidValue) || len(value.RawCBOR()) != 0 {
+				t.Fatalf("rejected value returned data or an unexpected error: %v", err)
+			}
 			return
 		}
+		clear(input)
 		if !bytes.Equal(value.RawCBOR(), data) {
-			t.Fatal("valid value changed")
+			t.Fatal("valid value changed or aliases input")
+		}
+		raw := value.RawCBOR()
+		clear(raw)
+		if !bytes.Equal(value.RawCBOR(), data) {
+			t.Fatal("value aliases output")
 		}
 		if _, err := ParseValue(value.RawCBOR()); err != nil {
 			t.Fatalf("accepted value was rejected: %v", err)
@@ -73,8 +85,25 @@ func FuzzParseLinkBody(f *testing.F) {
 
 func checkLinkRoundTrip(t *testing.T, data []byte) {
 	t.Helper()
-	parsed, err := Parse(data)
+	input := bytes.Clone(data)
+	parsed, err := Parse(input)
 	if err != nil {
+		if !errors.Is(err, ErrInvalidLink) || parsed.Capability != (eris.Capability{}) ||
+			parsed.Size != 0 || parsed.MIME != "" || parsed.Attributes != nil {
+			t.Fatalf("rejected link returned metadata or an unexpected error: %v", err)
+		}
+		// Any rejected encoding must preserve an existing receiver, not only
+		// the truncated valid encodings covered by the regression tests.
+		previous := Link{Capability: testCapability(), Size: 7, MIME: "keep",
+			Attributes: map[string]Value{"keep": BoolValue(true)}}
+		before, _ := previous.MarshalBinary()
+		if err := previous.UnmarshalBinary(input); !errors.Is(err, ErrInvalidLink) {
+			t.Fatalf("UnmarshalBinary accepted a rejected link: %v", err)
+		}
+		after, err := previous.MarshalBinary()
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("rejected input changed the receiver: %v", err)
+		}
 		return
 	}
 	encoded, err := parsed.MarshalBinary()
@@ -92,11 +121,22 @@ func checkLinkRoundTrip(t *testing.T, data []byte) {
 	if err != nil || !bytes.Equal(encoded, stable) {
 		t.Fatalf("link encoding is not stable: %v", err)
 	}
+	clear(input)
+	for _, value := range parsed.Attributes {
+		clear(value.RawCBOR())
+	}
+	owned, err := parsed.MarshalBinary()
+	if err != nil || !bytes.Equal(encoded, owned) {
+		t.Fatalf("parsed link aliases input or output: %v", err)
+	}
 }
 
 func FuzzLinkFields(f *testing.F) {
 	f.Add(uint64(0), "", "key", []byte{0xf6})
 	f.Add(uint64(42), "text/plain", "answer", []byte{0x18, 42})
+	f.Add(uint64(0), "\xff", "key", []byte{0xf6})
+	f.Add(uint64(0), "text/plain", "\xff", []byte{0xf6})
+	f.Add(^uint64(0), "", "", []byte{0xf6})
 	f.Fuzz(func(t *testing.T, size uint64, mime, key string, raw []byte) {
 		value, err := ParseValue(raw)
 		if err != nil {
@@ -109,8 +149,14 @@ func FuzzLinkFields(f *testing.F) {
 			Attributes: map[string]Value{key: value},
 		}
 		encoded, err := link.MarshalBinary()
-		if err != nil {
+		if !utf8.ValidString(mime) || !utf8.ValidString(key) {
+			if !errors.Is(err, ErrInvalidLink) || encoded != nil {
+				t.Fatalf("invalid UTF-8 was not rejected: %v", err)
+			}
 			return
+		}
+		if err != nil {
+			t.Fatalf("valid fields were rejected: %v", err)
 		}
 		parsed, err := Parse(encoded)
 		if err != nil {

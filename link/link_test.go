@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/asciimoth/goeris"
@@ -103,6 +104,34 @@ func TestAttributeOrder(t *testing.T) {
 	wantSuffix := []byte{0xa3, 0x61, 'a', 3, 0x61, 'b', 2, 0x62, 'a', 'a', 1}
 	if !bytes.HasSuffix(encoded, wantSuffix) {
 		t.Fatalf("wrong attribute order: %x", encoded)
+	}
+}
+
+func TestAttributeOrderAcrossHeaderSizes(t *testing.T) {
+	t.Parallel()
+	// Include CBOR length boundaries and equal byte lengths with different
+	// rune counts. Order must use encoded bytes, not Unicode character counts.
+	keys := []string{
+		"", "a", "zz", "π", strings.Repeat("z", 23),
+		strings.Repeat("a", 24), strings.Repeat("z", 255),
+		strings.Repeat("a", 256), strings.Repeat("z", 65535),
+		strings.Repeat("a", 65536),
+	}
+	link, _ := New(testCapability(), 0, "")
+	link.Attributes = make(map[string]Value, len(keys))
+	wantSuffix := []byte{0xaa}
+	for i, key := range keys {
+		link.Attributes[key] = UintValue(uint64(i))
+		text, err := TextValue(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantSuffix = append(wantSuffix, text.RawCBOR()...)
+		wantSuffix = append(wantSuffix, byte(i))
+	}
+	encoded, err := link.MarshalBinary()
+	if err != nil || !bytes.HasSuffix(encoded, wantSuffix) {
+		t.Fatalf("attribute order changed at a length boundary: %v", err)
 	}
 }
 

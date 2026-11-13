@@ -1,9 +1,9 @@
 package link
 
 import (
-	"bytes"
 	"errors"
 	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/asciimoth/goeris"
@@ -86,24 +86,23 @@ func (link Link) MarshalBinary() ([]byte, error) {
 	out = cborwire.AppendHead(out, 0, link.Size)
 	out = appendText(out, link.MIME)
 
-	type attribute struct {
-		key     string
-		encoded []byte
-	}
-	attributes := make([]attribute, 0, len(link.Attributes))
+	keys := make([]string, 0, len(link.Attributes))
 	for key := range link.Attributes {
-		attributes = append(attributes, attribute{key: key, encoded: appendText(nil, key)})
+		keys = append(keys, key)
 	}
-	slices.SortFunc(attributes, func(left, right attribute) int {
-		if len(left.encoded) != len(right.encoded) {
-			return len(left.encoded) - len(right.encoded)
+	// All keys are text strings. Their encoded lengths increase with their
+	// byte lengths, and equal-length keys have identical CBOR headers.
+	// Sort the strings directly to avoid a temporary encoded copy of each key.
+	slices.SortFunc(keys, func(left, right string) int {
+		if len(left) != len(right) {
+			return len(left) - len(right)
 		}
-		return bytes.Compare(left.encoded, right.encoded)
+		return strings.Compare(left, right)
 	})
-	out = cborwire.AppendHead(out, 5, uint64(len(attributes)))
-	for _, attribute := range attributes {
-		out = append(out, attribute.encoded...)
-		out = append(out, link.Attributes[attribute.key].data...)
+	out = cborwire.AppendHead(out, 5, uint64(len(keys)))
+	for _, key := range keys {
+		out = appendText(out, key)
+		out = append(out, link.Attributes[key].data...)
 	}
 	return out, nil
 }
@@ -111,52 +110,92 @@ func (link Link) MarshalBinary() ([]byte, error) {
 // UnmarshalBinary parses an ERIS link file. It does not change link on error.
 // Returned values do not alias data.
 func (link *Link) UnmarshalBinary(data []byte) error {
-	if link == nil || !HasHeader(data) {
+	if link == nil {
 		return ErrInvalidLink
 	}
+	next, err := parseLink(data)
+	if err != nil {
+		return err
+	}
+	for key, value := range next.attributes {
+		next.attributes[key] = Value{data: append([]byte(nil), value.data...)}
+	}
+	if next.attributes == nil {
+		next.attributes = make(map[string]Value)
+	}
+	*link = Link{
+		Capability: next.capability, Size: next.size,
+		MIME: next.mime.string(), Attributes: next.attributes,
+	}
+	return nil
+}
+
+// linkView holds validated metadata with borrowed MIME and attribute payloads.
+// Keep it separate from Link, whose values must not alias the input.
+type linkView struct {
+	capability eris.Capability
+	size       uint64
+	mime       textView
+	attributes map[string]Value
+}
+
+// parseLink validates the complete link. FS needs only the capability and size,
+// so it can use this view without copying MIME or attribute payloads.
+func parseLink(data []byte) (linkView, error) {
+	if !HasHeader(data) {
+		return linkView{}, ErrInvalidLink
+	}
 	decoder := linkDecoder{data: data, offset: HeaderSize}
-	var next Link
+	var next linkView
 	if len(data)-decoder.offset < eris.CapabilitySize ||
-		next.Capability.UnmarshalBinary(data[decoder.offset:decoder.offset+eris.CapabilitySize]) != nil {
-		return ErrInvalidLink
+		next.capability.UnmarshalBinary(data[decoder.offset:decoder.offset+eris.CapabilitySize]) != nil {
+		return linkView{}, ErrInvalidLink
 	}
 	decoder.offset += eris.CapabilitySize
 	var err error
-	if next.Size, err = decoder.unsigned(); err != nil {
-		return ErrInvalidLink
+	if next.size, err = decoder.unsigned(); err != nil {
+		return linkView{}, ErrInvalidLink
 	}
-	if next.MIME, err = decoder.text(); err != nil {
-		return ErrInvalidLink
+	if next.mime, err = decoder.text(); err != nil {
+		return linkView{}, ErrInvalidLink
 	}
-	count, indefinite, err := decoder.collection(5)
-	if err != nil || (!indefinite && count > uint64(len(data))) {
-		return ErrInvalidLink
+	count, indefinite, err := decoder.head(5)
+	// Each attribute needs at least one byte for its key and one for its value.
+	if err != nil || (!indefinite && count > uint64(len(data)-decoder.offset)/2) {
+		return linkView{}, ErrInvalidLink
 	}
-	next.Attributes = make(map[string]Value)
 	for index := uint64(0); indefinite || index < count; index++ {
 		if indefinite && decoder.consumeBreak() {
 			break
 		}
-		key, keyErr := decoder.text()
+		keyText, keyErr := decoder.text()
 		if keyErr != nil {
-			return ErrInvalidLink
-		}
-		if _, exists := next.Attributes[key]; exists {
-			return ErrInvalidLink
+			return linkView{}, ErrInvalidLink
 		}
 		start := decoder.offset
 		valueDecoder := valueDecoder{data: data, offset: start}
 		if valueDecoder.item(0) != nil {
-			return ErrInvalidLink
+			return linkView{}, ErrInvalidLink
 		}
 		decoder.offset = valueDecoder.offset
-		next.Attributes[key] = Value{data: append([]byte(nil), data[start:decoder.offset]...)}
+		// Validate the value before copying a potentially large key. A
+		// malformed first attribute must not allocate its key or the map.
+		key := keyText.string()
+		if _, exists := next.attributes[key]; exists {
+			return linkView{}, ErrInvalidLink
+		}
+		if next.attributes == nil {
+			next.attributes = make(map[string]Value)
+		}
+		// Keep a temporary view until the entire link passes validation.
+		// Rejected links must not copy potentially large attribute payloads.
+		next.attributes[key] = Value{data: data[start:decoder.offset]}
 	}
-	if decoder.offset != len(data) || next.Validate() != nil {
-		return ErrInvalidLink
+	// Each field was checked above. Do not scan attribute values a second time.
+	if decoder.offset != len(data) {
+		return linkView{}, ErrInvalidLink
 	}
-	*link = next
-	return nil
+	return next, nil
 }
 
 // Parse parses an ERIS link file.
@@ -192,55 +231,61 @@ func (decoder *linkDecoder) unsigned() (uint64, error) {
 	return value, nil
 }
 
-func (decoder *linkDecoder) text() (string, error) {
+// textView borrows a validated text payload until it is needed as a string.
+// For chunked text, data contains the chunk headers but not the final break.
+type textView struct {
+	data    []byte
+	length  int
+	chunked bool
+}
+
+func (decoder *linkDecoder) text() (textView, error) {
 	valueDecoder := valueDecoder{data: decoder.data, offset: decoder.offset}
 	if valueDecoder.offset >= len(valueDecoder.data) || valueDecoder.data[valueDecoder.offset]>>5 != 3 {
-		return "", ErrInvalidLink
+		return textView{}, ErrInvalidLink
 	}
 	initial := valueDecoder.data[valueDecoder.offset]
 	valueDecoder.offset++
 	length, indefinite, err := valueDecoder.argument(initial & 0x1f)
 	if err != nil {
-		return "", ErrInvalidLink
+		return textView{}, ErrInvalidLink
 	}
 	if !indefinite {
 		start := valueDecoder.offset
 		if valueDecoder.stringBytes(3, length) != nil {
-			return "", ErrInvalidLink
+			return textView{}, ErrInvalidLink
 		}
 		decoder.offset = valueDecoder.offset
-		return string(decoder.data[start:decoder.offset]), nil
+		return textView{data: decoder.data[start:decoder.offset], length: int(length)}, nil
 	}
-	var result []byte
-	for {
-		if valueDecoder.offset >= len(valueDecoder.data) {
-			return "", ErrInvalidLink
-		}
-		if valueDecoder.data[valueDecoder.offset] == 0xff {
-			valueDecoder.offset++
-			decoder.offset = valueDecoder.offset
-			return string(result), nil
-		}
-		chunk := valueDecoder.data[valueDecoder.offset]
-		valueDecoder.offset++
-		if chunk>>5 != 3 {
-			return "", ErrInvalidLink
-		}
-		chunkLength, nested, chunkErr := valueDecoder.argument(chunk & 0x1f)
-		if chunkErr != nil || nested || chunkLength > uint64(len(valueDecoder.data)-valueDecoder.offset) {
-			return "", ErrInvalidLink
-		}
-		end := valueDecoder.offset + int(chunkLength)
-		if !utf8.Valid(valueDecoder.data[valueDecoder.offset:end]) {
-			return "", ErrInvalidLink
-		}
-		result = append(result, valueDecoder.data[valueDecoder.offset:end]...)
-		valueDecoder.offset = end
+	// Validate all chunks before allocating the decoded string. In
+	// particular, a bad final chunk must not copy a large preceding payload.
+	start := valueDecoder.offset
+	textLength, err := valueDecoder.string(3, 0, true)
+	if err != nil {
+		return textView{}, ErrInvalidLink
 	}
+	decoder.offset = valueDecoder.offset
+	return textView{data: decoder.data[start : decoder.offset-1], length: textLength, chunked: true}, nil
 }
 
-func (decoder *linkDecoder) collection(major byte) (uint64, bool, error) {
-	return decoder.head(major)
+func (text textView) string() string {
+	if !text.chunked {
+		return string(text.data)
+	}
+	decoder := valueDecoder{data: text.data}
+	var result strings.Builder
+	result.Grow(text.length)
+	for decoder.offset < len(decoder.data) {
+		chunk := decoder.data[decoder.offset]
+		decoder.offset++
+		// The first pass checked the chunk type, length, and UTF-8.
+		chunkLength, _, _ := decoder.argument(chunk & 0x1f)
+		chunkEnd := decoder.offset + int(chunkLength)
+		result.Write(decoder.data[decoder.offset:chunkEnd])
+		decoder.offset = chunkEnd
+	}
+	return result.String()
 }
 
 func (decoder *linkDecoder) head(major byte) (uint64, bool, error) {

@@ -5,10 +5,48 @@ import (
 	"encoding/hex"
 	"errors"
 	"maps"
+	"strings"
 	"testing"
 
 	"github.com/asciimoth/goeris"
 )
+
+func TestChunkedLinkText(t *testing.T) {
+	t.Parallel()
+	base := Link{Capability: testCapability()}
+	encoded, err := base.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := encoded[:HeaderSize+eris.CapabilitySize]
+	for _, text := range []string{"", "\u03c0", strings.Repeat("a", 24), strings.Repeat("b", 256), strings.Repeat("c", 65536)} {
+		chunked := []byte{0x7f, 0x60}
+		chunked = appendText(chunked, text)
+		chunked = append(chunked, 0x60, 0x62, 0xcf, 0x80, 0xff)
+		data := append(bytes.Clone(prefix), 0)
+		data = append(data, chunked...)
+		data = append(data, 0xa1)
+		data = append(data, chunked...)
+		data = append(data, 0xf6)
+		parsed, err := Parse(data)
+		if err != nil || parsed.MIME != text+"\u03c0" {
+			t.Fatalf("text length %d: MIME mismatch or parse error: %v", len(text), err)
+		}
+		if value, ok := parsed.Attributes[text+"\u03c0"]; !ok || !bytes.Equal(value.RawCBOR(), []byte{0xf6}) {
+			t.Fatalf("text length %d: attribute key mismatch", len(text))
+		}
+		// Reject wrong chunk types, nested strings, invalid UTF-8, and
+		// missing breaks after an otherwise valid payload.
+		for _, tail := range [][]byte{nil, {0}, {0x7f, 0xff}, {0x61, 0xff, 0xff}} {
+			bad := append(bytes.Clone(prefix), 0)
+			bad = append(bad, chunked[:len(chunked)-1]...)
+			bad = append(bad, tail...)
+			if _, err := Parse(bad); !errors.Is(err, ErrInvalidLink) {
+				t.Fatalf("text length %d, tail %x: error = %v", len(text), tail, err)
+			}
+		}
+	}
+}
 
 func TestValueDepthForms(t *testing.T) {
 	t.Parallel()
@@ -113,5 +151,78 @@ func TestUnmarshalAtomicAtEveryTruncation(t *testing.T) {
 	clear(encoded)
 	if !equalLinks(receiver, next) || !equalLinks(original, wantOriginal) {
 		t.Fatal("successful parse retained input or changed the old attribute map")
+	}
+}
+
+func TestRejectedMIMEDoesNotAllocatePayload(t *testing.T) {
+	encoded, err := (Link{Capability: testCapability()}).MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, chunked := range []bool{false, true} {
+		mime := appendText(nil, strings.Repeat("x", 1<<20))
+		if chunked {
+			mime = append(append([]byte{0x7f}, mime...), 0xff)
+		}
+		data := append(bytes.Clone(encoded[:len(encoded)-2]), mime...)
+		data = append(data, 0xff) // The attributes field must be a map.
+		allocs := testing.AllocsPerRun(10, func() {
+			if _, err := Parse(data); !errors.Is(err, ErrInvalidLink) {
+				t.Fatalf("chunked %v: malformed map error = %v", chunked, err)
+			}
+		})
+		if allocs != 0 {
+			t.Errorf("chunked %v: rejected MIME allocated %g times", chunked, allocs)
+		}
+	}
+}
+
+func TestRejectedAttributeDoesNotAllocateKey(t *testing.T) {
+	encoded, err := (Link{Capability: testCapability()}).MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, chunked := range []bool{false, true} {
+		key := appendText(nil, strings.Repeat("x", 1<<20))
+		if chunked {
+			key = append(append([]byte{0x7f}, key...), 0xff)
+		}
+		for _, value := range [][]byte{nil, {0xff}, {0x81}, {0x61, 0xff}} {
+			data := append(bytes.Clone(encoded[:len(encoded)-1]), 0xa1)
+			data = append(data, key...)
+			data = append(data, value...)
+			allocs := testing.AllocsPerRun(10, func() {
+				if _, err := Parse(data); !errors.Is(err, ErrInvalidLink) {
+					t.Fatalf("chunked %v, value %x: error = %v", chunked, value, err)
+				}
+			})
+			if allocs != 0 {
+				t.Errorf("chunked %v, value %x: rejected attribute allocated %g times", chunked, value, allocs)
+			}
+		}
+	}
+}
+
+func TestLinkViewDoesNotCopyMIME(t *testing.T) {
+	encoded, err := (Link{Capability: testCapability()}).MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, chunked := range []bool{false, true} {
+		mime := appendText(nil, strings.Repeat("x", 1<<20))
+		if chunked {
+			mime = append(append([]byte{0x7f}, mime...), 0xff)
+		}
+		data := append(bytes.Clone(encoded[:len(encoded)-2]), mime...)
+		data = append(data, 0xa0)
+		allocs := testing.AllocsPerRun(10, func() {
+			view, err := parseLink(data)
+			if err != nil || view.capability != testCapability() || view.mime.length != 1<<20 {
+				t.Fatalf("chunked %v: invalid view: %v", chunked, err)
+			}
+		})
+		if allocs != 0 {
+			t.Errorf("chunked %v: borrowed metadata allocated %g times", chunked, allocs)
+		}
 	}
 }

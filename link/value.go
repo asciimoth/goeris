@@ -112,7 +112,8 @@ func (decoder *valueDecoder) item(depth int) error {
 			return ErrInvalidValue
 		}
 	case 2, 3:
-		return decoder.string(major, value, indefinite)
+		_, err := decoder.string(major, value, indefinite)
+		return err
 	case 4:
 		return decoder.items(depth, value, indefinite, 1)
 	case 5:
@@ -169,30 +170,37 @@ func (decoder *valueDecoder) fixed(size int) (uint64, bool, error) {
 	return value, false, nil
 }
 
-func (decoder *valueDecoder) string(major byte, length uint64, indefinite bool) error {
+// string validates all chunks and returns their total payload length. The
+// total cannot exceed the input length, so it fits in int even on 32-bit hosts.
+func (decoder *valueDecoder) string(major byte, length uint64, indefinite bool) (int, error) {
 	if !indefinite {
-		return decoder.stringBytes(major, length)
+		if err := decoder.stringBytes(major, length); err != nil {
+			return 0, err
+		}
+		return int(length), nil
 	}
+	total := 0
 	for {
 		if decoder.offset >= len(decoder.data) {
-			return ErrInvalidValue
+			return 0, ErrInvalidValue
 		}
 		if decoder.data[decoder.offset] == 0xff {
 			decoder.offset++
-			return nil
+			return total, nil
 		}
 		initial := decoder.data[decoder.offset]
 		decoder.offset++
 		if initial>>5 != major {
-			return ErrInvalidValue
+			return 0, ErrInvalidValue
 		}
 		length, nested, err := decoder.argument(initial & 0x1f)
 		if err != nil || nested {
-			return ErrInvalidValue
+			return 0, ErrInvalidValue
 		}
 		if err := decoder.stringBytes(major, length); err != nil {
-			return err
+			return 0, err
 		}
+		total += int(length)
 	}
 }
 
@@ -209,7 +217,7 @@ func (decoder *valueDecoder) stringBytes(major byte, length uint64) error {
 }
 
 func (decoder *valueDecoder) items(depth int, count uint64, indefinite bool, width uint64) error {
-	if !indefinite && count > uint64(len(decoder.data))/width {
+	if !indefinite && count > uint64(len(decoder.data)-decoder.offset)/width {
 		return ErrInvalidValue
 	}
 	if indefinite {

@@ -147,6 +147,26 @@ The `link` and `magnet` packages implement the
 [ERIS link file](specs/eer/linkfile/index.md) and
 [ERIS Magnet URI](specs/eer/magnet-uri/index.md) recommendations.
 
+`link.NewFS(base, source)` wraps any `io/fs.FS` and an `eris.BlockSource`. It
+exposes the content of ERIS link files through `Open` and `fs.ReadFile`. It
+detects links by their magic bytes and keeps the original paths, including any
+`.eris` extension. Ordinary files remain readable. Resolved files support
+`io.Seeker` and `io.ReaderAt`.
+
+`Stat` and directory entry `Info` report the declared content size and preserve
+the other base file metadata. Detection requires read access to regular files.
+These operations read base files but do not fetch linked content. Content reads
+fetch blocks as needed and check the declared size at the file end. Partial
+reads do not check unvisited blocks. Invalid links return errors. Resolution
+stops after one link; MIME and attributes do not change the content. Use the
+base FS to read a link file itself.
+
+The default limit for an encoded link is 1 MiB. Use `link.NewFSWithLimit` to
+change it. The limit does not restrict decoded content. `fs.ReadFile` reads all
+content into memory; use `Open` and `io.LimitReader` for a content byte limit.
+The wrapper follows the base FS policy for symbolic links. Network timeouts and
+cancellation must be handled by the supplied block source.
+
 The core `eris` package provides storage interfaces, an in-memory block set, and
 a combined store. Applications supply persistent storage, file or stream I/O,
 networking, and random-secret generation. ERIS extensions use separate packages.
@@ -317,8 +337,8 @@ the final leaf to obtain the content length. This scan uses temporary summaries
 that grow with the number of distinct internal nodes. The reader releases these
 summaries after the scan and applies the same 64-node cache limit during reads.
 
-The generic ERIS reader is a shared internal helper used by `fs` and `http`.
-Applications use `OpenFile` for random access to files in an image.
+The generic ERIS reader is a shared internal helper used by `fs`, `http`, and
+`link`. Applications use `OpenFile` for random access to files in an image.
 
 `Builder.AddCompressedFile` reads a file once and writes a deterministic Lzip
 stream with the recommended 8 MiB dictionary. It stores the uncompressed size in
