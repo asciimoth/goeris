@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/asciimoth/goeris"
 )
 
 // Check the signature after HTTP serialization as well as in memory. The HTTP
@@ -124,6 +127,69 @@ func FuzzSignV4Authentication(f *testing.F) {
 		changedPayload := append(append([]byte(nil), payload...), 0)
 		if _, err := authenticator.Authenticate(request, changedPayload); err == nil {
 			t.Fatal("accepted a changed payload")
+		}
+	})
+}
+
+// Mutate the complete wire request so the HTTP parser, body limits,
+// authentication, and storage checks are exercised together.
+func FuzzHandlerSignedRequest(f *testing.F) {
+	block := make([]byte, eris.BlockSize1KiB)
+	ref, err := eris.ReferenceOf(block)
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, chunked := range []bool{false, true} {
+		request, err := http.NewRequest(http.MethodPut, "https://example/blocks/"+ref.String(), bytes.NewReader(block))
+		if err != nil {
+			f.Fatal(err)
+		}
+		request.Header.Set("X-Amz-Acl", "public-read")
+		if chunked {
+			request.ContentLength = -1
+			request.TransferEncoding = []string{"chunked"}
+		}
+		if err := SignV4(request, block, testCredentials, "region", testTime); err != nil {
+			f.Fatal(err)
+		}
+		var wire bytes.Buffer
+		if err := request.Write(&wire); err != nil {
+			f.Fatal(err)
+		}
+		f.Add(wire.Bytes())
+	}
+	auth := V4Authenticator{
+		Credentials: CredentialSourceFunc(func(context.Context, string) (Credentials, error) {
+			return testCredentials, nil
+		}),
+		Region: "region", Clock: func() time.Time { return testTime },
+	}
+	f.Fuzz(func(t *testing.T, wire []byte) {
+		request, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(wire)))
+		if err != nil {
+			return
+		}
+		defer func() { _ = request.Body.Close() }()
+		writes := 0
+		store := storeFunc{
+			get: func(eris.Reference) ([]byte, error) { return nil, eris.ErrMissingBlock },
+			put: func(got eris.Reference, payload []byte) error {
+				writes++
+				if got != ref || !bytes.Equal(payload, block) {
+					t.Fatal("altered request stored unauthorized data")
+				}
+				return nil
+			},
+		}
+		handler := Handler{Blocks: store, Bucket: "blocks", AllowPut: true, Auth: auth}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if writes != 0 {
+			if writes != 1 || request.Method != http.MethodPut || recorder.Code != http.StatusOK {
+				t.Fatal("unexpected storage write")
+			}
+		} else if request.Method == http.MethodPut && recorder.Code == http.StatusOK {
+			t.Fatal("PUT succeeded without storing a block")
 		}
 	})
 }
