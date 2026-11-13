@@ -87,6 +87,11 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 		switch option.Number {
 		case protocol.OptionBlock1, protocol.OptionBlock2:
 			maximum = 3
+			// The helper can return Continue before it checks Block2. Check
+			// both options here so malformed fragments cannot retain state.
+			if _, err := protocol.ParseBlock(option.Value); err != nil {
+				return &protocol.Message{Code: protocol.BadOption}, nil
+			}
 		case protocol.OptionSize1, protocol.OptionSize2:
 		default:
 			continue

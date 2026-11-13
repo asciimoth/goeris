@@ -174,6 +174,14 @@ func (requester *limitedRequester) Request(ctx context.Context, request *protoco
 	if err := validateResponseOptions(response); err != nil {
 		return nil, err
 	}
+	if option, present := response.Option(protocol.OptionSize2); present {
+		// Cardinality and length were checked above. Do not start another
+		// exchange for a body that cannot be a valid ERIS block.
+		size, _ := option.Uint32()
+		if size > uint32(eris.BlockSize32KiB) {
+			return nil, ErrResponseTooLarge
+		}
+	}
 	if len(response.Payload) > requester.remaining {
 		return nil, ErrResponseTooLarge
 	}

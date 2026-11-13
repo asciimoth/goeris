@@ -184,6 +184,30 @@ func TestClientStopsOversizedBlockWiseResponse(t *testing.T) {
 	}
 }
 
+func TestClientRejectsOversizedSize2BeforeContinuation(t *testing.T) {
+	for _, size := range []uint32{uint32(eris.BlockSize32KiB) + 1, ^uint32(0)} {
+		calls := 0
+		requester := RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
+			calls++
+			fragment, _ := (protocol.Block{More: true, Size: 16}).Option(protocol.OptionBlock2)
+			return &protocol.Message{
+				Code: protocol.Content, Payload: make([]byte, 16),
+				Options: []protocol.Option{fragment, protocol.UintOption(protocol.OptionSize2, size)},
+			}, nil
+		})
+		client, err := NewClient(requester, mustStore(t, "coap://example/"), ClientConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.GetBlock(eris.Reference{}); !errors.Is(err, ErrResponseTooLarge) {
+			t.Fatalf("Size2 %d: got %v, want ErrResponseTooLarge", size, err)
+		}
+		if calls != 1 {
+			t.Fatalf("Size2 %d caused %d requests", size, calls)
+		}
+	}
+}
+
 func TestNewClientErrors(t *testing.T) {
 	t.Parallel()
 	store := mustStore(t, "coap://example/")

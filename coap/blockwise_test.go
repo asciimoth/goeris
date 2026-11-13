@@ -59,6 +59,26 @@ func TestBlockWiseTransferLimitAndCompletion(t *testing.T) {
 	}
 }
 
+func TestBlockWiseRejectsInvalidBlock2BeforeReassembly(t *testing.T) {
+	blocks := make(eris.BlockSet)
+	handler, err := (Handler{Blocks: blocks, AllowPut: true, MaxTransfers: 1}).BlockWise(protocol.BlockWiseConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range [][]byte{{7}, {15}, {0xff, 0xff, 0xff}, {0, 0, 0, 0}} {
+		request := addOption(uploadFragment(t, 1, 0), protocol.NewOption(protocol.OptionBlock2, value))
+		if response := serve(t, handler, request); response.Code != protocol.BadOption {
+			t.Fatalf("Block2 %x: got %s, want BadOption", value, response.Code)
+		}
+		if len(handler.transfers) != 0 || len(blocks) != 0 {
+			t.Fatal("invalid fragment retained state or reached storage")
+		}
+	}
+	if response := serve(t, handler, uploadFragment(t, 2, 0)); response.Code != protocol.Continue {
+		t.Fatalf("valid upload after invalid fragments: %s", response.Code)
+	}
+}
+
 func TestConcurrentBlockWiseUploads(t *testing.T) {
 	t.Parallel()
 	blocks := make(eris.BlockSet)
