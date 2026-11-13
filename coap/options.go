@@ -37,7 +37,7 @@ func validateResponseOptions(response *protocol.Message) error {
 		default:
 			continue
 		}
-		if seen[option.Number] || len(option.Value) > maximum {
+		if seen[option.Number] || len(option.Value) > maximum || !canonicalUint(option.Value) {
 			if option.Number == protocol.OptionContentFormat {
 				return ErrUnexpectedContentFormat
 			}
@@ -46,6 +46,11 @@ func validateResponseOptions(response *protocol.Message) error {
 		seen[option.Number] = true
 	}
 	return nil
+}
+
+// CoAP integer options use the shortest encoding. Zero has an empty value.
+func canonicalUint(value []byte) bool {
+	return len(value) == 0 || value[0] != 0
 }
 
 // rejectCriticalOptions applies RFC 7252 section 5.4.1. Unknown elective

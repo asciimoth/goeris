@@ -103,7 +103,7 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 		default:
 			continue
 		}
-		if seen[option.Number] || len(option.Value) > maximum {
+		if seen[option.Number] || len(option.Value) > maximum || option.Number != protocol.OptionSize1 && !canonicalUint(option.Value) {
 			return &protocol.Message{Code: protocol.BadOption}, nil
 		}
 		seen[option.Number] = true

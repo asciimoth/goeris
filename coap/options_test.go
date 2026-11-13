@@ -112,6 +112,8 @@ func TestResponseMetadataLimits(t *testing.T) {
 		make([]protocol.Option, MaxResponseOptionSize/8+1),
 		{protocol.UintOption(protocol.OptionContentFormat, 42), protocol.UintOption(protocol.OptionContentFormat, 42)},
 		{protocol.NewOption(protocol.OptionContentFormat, []byte{1, 0, 0})},
+		{protocol.NewOption(protocol.OptionBlock2, []byte{0, 8})},
+		{protocol.NewOption(protocol.OptionSize2, []byte{0, 1})},
 	} {
 		calls := 0
 		client, err := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
