@@ -208,6 +208,38 @@ func TestClientRejectsOversizedSize2BeforeContinuation(t *testing.T) {
 	}
 }
 
+func TestClientChecksCompleteResponseSize(t *testing.T) {
+	block, ref := makeBlock(int(eris.BlockSize1KiB), 17)
+	for _, size := range []uint32{0, 32, 1023, 1024, 1025, 32768} {
+		client, err := NewClient(RequesterFunc(func(_ context.Context, request *protocol.Message) (*protocol.Message, error) {
+			response := &protocol.Message{Code: protocol.Content, Payload: block}
+			if request.Code == protocol.PUT {
+				response.Code, response.Payload = protocol.Created, ref[:]
+			}
+			response.Options = []protocol.Option{protocol.UintOption(protocol.OptionSize2, size)}
+			return response, nil
+		}), mustStore(t, "coap://example/"), ClientConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, getErr := client.GetBlock(ref)
+		_, putErr := client.PutBlock(block)
+		for _, result := range []struct {
+			name   string
+			length int
+			err    error
+		}{{"GET", len(block), getErr}, {"PUT", len(ref), putErr}} {
+			if size == uint32(result.length) {
+				if result.err != nil {
+					t.Fatalf("%s Size2 %d: %v", result.name, size, result.err)
+				}
+			} else if !errors.Is(result.err, ErrInvalidResponseOption) {
+				t.Fatalf("%s Size2 %d: got %v, want ErrInvalidResponseOption", result.name, size, result.err)
+			}
+		}
+	}
+}
+
 func TestClientLimitsTotalResponseOptions(t *testing.T) {
 	block, ref := makeBlock(int(eris.BlockSize1KiB), 16)
 	calls := 0

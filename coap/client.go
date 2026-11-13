@@ -187,6 +187,10 @@ func (requester *limitedRequester) Request(ctx context.Context, request *protoco
 		if size > uint32(eris.BlockSize32KiB) {
 			return nil, ErrResponseTooLarge
 		}
+		if _, segmented := response.Option(protocol.OptionBlock2); !segmented && uint64(size) != uint64(len(response.Payload)) {
+			// RequestBody checks Size2 only for segmented responses.
+			return nil, ErrInvalidResponseOption
+		}
 	}
 	if len(response.Payload) > requester.remaining {
 		return nil, ErrResponseTooLarge
