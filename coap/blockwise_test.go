@@ -79,6 +79,31 @@ func TestBlockWiseRejectsInvalidBlock2BeforeReassembly(t *testing.T) {
 	}
 }
 
+func TestBlockWiseRejectsMalformedUploadFragmentBeforeState(t *testing.T) {
+	handler, err := (Handler{Blocks: make(eris.BlockSet), AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		length int
+	}{
+		{"short non-final fragment", 511},
+		{"long fragment", 513},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := uploadFragment(t, 1, 0)
+			request.Payload = make([]byte, test.length)
+			if response := serve(t, handler, request); response.Code != protocol.RequestEntityIncomplete {
+				t.Fatalf("response = %s, want RequestEntityIncomplete", response.Code)
+			}
+			if len(handler.transfers) != 0 {
+				t.Fatal("malformed fragment allocated transfer state")
+			}
+		})
+	}
+}
+
 func TestConcurrentBlockWiseUploads(t *testing.T) {
 	t.Parallel()
 	blocks := make(eris.BlockSet)

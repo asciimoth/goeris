@@ -6,23 +6,32 @@ import protocol "github.com/asciimoth/coaperation"
 // Each option uses eight bytes of the limit in addition to its value.
 const MaxResponseOptionSize = 64 << 10
 
+// MaxTransferResponseOptionSize bounds the sum of response options in one
+// client transfer, including options repeated on Block1 and Block2 messages.
+const MaxTransferResponseOptionSize = 1 << 20
+
 // The transport library supports tokens of at most eight bytes.
 const maxTokenSize = 8
 
 // validateResponseOptions runs before reassembly can remove transfer options.
 func validateResponseOptions(response *protocol.Message) error {
+	_, err := validateResponseOptionsWithSize(response)
+	return err
+}
+
+func validateResponseOptionsWithSize(response *protocol.Message) (int, error) {
 	if len(response.Token) > maxTokenSize {
-		return ErrResponseTooLarge
+		return 0, ErrResponseTooLarge
 	}
 	seen := make(map[protocol.OptionNumber]bool, 4)
 	remaining := MaxResponseOptionSize
 	for _, option := range response.Options {
 		if remaining < 8 || len(option.Value) > remaining-8 {
-			return ErrResponseTooLarge
+			return 0, ErrResponseTooLarge
 		}
 		remaining -= 8 + len(option.Value)
 		if option.Number&1 != 0 && option.Number != protocol.OptionBlock1 && option.Number != protocol.OptionBlock2 {
-			return ErrInvalidResponseOption
+			return 0, ErrInvalidResponseOption
 		}
 		maximum := 4
 		switch option.Number {
@@ -31,7 +40,7 @@ func validateResponseOptions(response *protocol.Message) error {
 		case protocol.OptionBlock1, protocol.OptionBlock2:
 			maximum = 3
 			if _, err := protocol.ParseBlock(option.Value); err != nil {
-				return ErrInvalidResponseOption
+				return 0, ErrInvalidResponseOption
 			}
 		case protocol.OptionSize1, protocol.OptionSize2:
 		default:
@@ -39,13 +48,13 @@ func validateResponseOptions(response *protocol.Message) error {
 		}
 		if seen[option.Number] || len(option.Value) > maximum || !canonicalUint(option.Value) {
 			if option.Number == protocol.OptionContentFormat {
-				return ErrUnexpectedContentFormat
+				return 0, ErrUnexpectedContentFormat
 			}
-			return ErrInvalidResponseOption
+			return 0, ErrInvalidResponseOption
 		}
 		seen[option.Number] = true
 	}
-	return nil
+	return MaxResponseOptionSize - remaining, nil
 }
 
 // CoAP integer options use the shortest encoding. Zero has an empty value.

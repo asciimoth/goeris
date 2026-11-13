@@ -131,7 +131,9 @@ Invalid reference queries, content formats, and size hints are rejected before
 upload fragments reserve transfer state. GET validation also applies to cached
 download fragments. Clients limit response bodies to 32 KiB and response options
 to 64 KiB, counting eight bytes per option in addition to its value, before
-reassembly copies them. Discovery response parsing uses the same option limit.
+reassembly copies them. Client transfers also limit the sum of response options
+across all fragments to 1 MiB. Discovery response parsing uses the 64 KiB
+per-message option limit.
 
 The `link` and `magnet` packages implement the
 [ERIS link file](specs/eer/linkfile/index.md) and

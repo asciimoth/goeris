@@ -61,7 +61,7 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference) (
 		return nil, err
 	}
 	response, err := protocol.RequestBody(ctx, &limitedRequester{
-		requester: client.requester, remaining: int(eris.BlockSize32KiB),
+		requester: client.requester, remaining: int(eris.BlockSize32KiB), remainingOptions: MaxTransferResponseOptionSize,
 	}, request, client.config.Transfer)
 	if err != nil {
 		return nil, err
@@ -120,7 +120,7 @@ func (client *Client) PutBlockContext(ctx context.Context, block []byte, expecte
 		sortOptions(request.Options)
 	}
 	response, err := protocol.RequestBody(ctx, &limitedRequester{
-		requester: client.requester, remaining: int(eris.BlockSize32KiB),
+		requester: client.requester, remaining: int(eris.BlockSize32KiB), remainingOptions: MaxTransferResponseOptionSize,
 	}, request, client.config.Transfer)
 	if err != nil {
 		return eris.Reference{}, err
@@ -162,8 +162,9 @@ func validateContentFormat(message *protocol.Message, expected uint32) error {
 // limitedRequester bounds response data before RequestBody reassembles it.
 // Each transfer has its own instance, so concurrent calls do not share state.
 type limitedRequester struct {
-	requester protocol.Requester
-	remaining int
+	requester        protocol.Requester
+	remaining        int
+	remainingOptions int
 }
 
 func (requester *limitedRequester) Request(ctx context.Context, request *protocol.Message) (*protocol.Message, error) {
@@ -171,9 +172,14 @@ func (requester *limitedRequester) Request(ctx context.Context, request *protoco
 	if err != nil || response == nil {
 		return response, err
 	}
-	if err := validateResponseOptions(response); err != nil {
+	optionSize, err := validateResponseOptionsWithSize(response)
+	if err != nil {
 		return nil, err
 	}
+	if optionSize > requester.remainingOptions {
+		return nil, ErrResponseTooLarge
+	}
+	requester.remainingOptions -= optionSize
 	if option, present := response.Option(protocol.OptionSize2); present {
 		// Cardinality and length were checked above. Do not start another
 		// exchange for a body that cannot be a valid ERIS block.

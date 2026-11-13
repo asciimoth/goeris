@@ -89,6 +89,8 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 	// The transfer helper reads only the first value and removes some options
 	// after reassembly. Reject duplicates before that information is lost.
 	seen := make(map[protocol.OptionNumber]bool, 4)
+	var uploadBlock protocol.Block
+	hasUploadBlock := false
 	for _, option := range request.Options {
 		maximum := 4
 		switch option.Number {
@@ -96,8 +98,12 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 			maximum = 3
 			// The helper can return Continue before it checks Block2. Check
 			// both options here so malformed fragments cannot retain state.
-			if _, err := protocol.ParseBlock(option.Value); err != nil {
+			block, err := protocol.ParseBlock(option.Value)
+			if err != nil {
 				return &protocol.Message{Code: protocol.BadOption}, nil
+			}
+			if option.Number == protocol.OptionBlock1 {
+				uploadBlock, hasUploadBlock = block, true
 			}
 		case protocol.OptionSize1, protocol.OptionSize2:
 		default:
@@ -134,6 +140,9 @@ func (handler *BlockWiseHandler) ServeCOAP(ctx context.Context, request *protoco
 	}
 	if len(request.Payload) > int(eris.BlockSize32KiB) {
 		return &protocol.Message{Code: protocol.RequestEntityTooLarge}, nil
+	}
+	if hasUploadBlock && (len(request.Payload) > uploadBlock.Size || uploadBlock.More && len(request.Payload) != uploadBlock.Size) {
+		return &protocol.Message{Code: protocol.RequestEntityIncomplete}, nil
 	}
 	key, ok := blockTransferKey(request)
 	if !ok {

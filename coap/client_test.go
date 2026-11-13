@@ -208,6 +208,41 @@ func TestClientRejectsOversizedSize2BeforeContinuation(t *testing.T) {
 	}
 }
 
+func TestClientLimitsTotalResponseOptions(t *testing.T) {
+	block, ref := makeBlock(int(eris.BlockSize1KiB), 16)
+	calls := 0
+	requester := RequesterFunc(func(_ context.Context, request *protocol.Message) (*protocol.Message, error) {
+		calls++
+		index := uint32(0)
+		if option, ok := request.Option(protocol.OptionBlock2); ok {
+			decoded, err := protocol.ParseBlock(option.Value)
+			if err != nil {
+				return nil, err
+			}
+			index = decoded.Number
+		}
+		fragment, _ := (protocol.Block{Number: index, More: index < 63, Size: 16}).Option(protocol.OptionBlock2)
+		return &protocol.Message{
+			Code: protocol.Content,
+			Options: []protocol.Option{
+				fragment,
+				protocol.NewOption(65000, make([]byte, 32<<10)),
+			},
+			Payload: block[int(index)*16 : (int(index)+1)*16],
+		}, nil
+	})
+	client, err := NewClient(requester, mustStore(t, "coap://example/"), ClientConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetBlock(ref); !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("total response options: %v", err)
+	}
+	if calls >= 64 {
+		t.Fatalf("client accepted all %d response fragments", calls)
+	}
+}
+
 func TestNewClientErrors(t *testing.T) {
 	t.Parallel()
 	store := mustStore(t, "coap://example/")
