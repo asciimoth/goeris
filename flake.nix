@@ -19,6 +19,13 @@
       pkgs = import nixpkgs {
         inherit system;
       };
+      goToolchain = pkgs.go_1_27.overrideAttrs (_: {
+        version = "1.27.4";
+        src = pkgs.fetchurl {
+          url = "https://go.dev/dl/go1.27.4.src.tar.gz";
+          hash = "sha256-c8+4VxrsDAEXdofbhxY9Rqog6XeWcncokaoXZU2aYJk=";
+        };
+      });
 
       # mdformat 0.7.22 works with markdown-it-py 4, but its package metadata
       # still has an upper bound of version 3.
@@ -84,7 +91,7 @@
       devShells.default = pkgs.mkShell {
         inherit (checks.pre-commit-check) shellHook;
         buildInputs = with pkgs; [
-          go_1_26
+          goToolchain
           golangci-lint
           gopls
           govulncheck

@@ -280,9 +280,9 @@ just check
 ```
 
 Go 1.26.10 can report a false `context deadline exceeded` failure when a timed
-fuzz run ends. This is a [Go fuzz-runner race](https://go.dev/issue/75804). Use
-`GOTOOLCHAIN=go1.27.4 just check` to run the checks with a toolchain that
-includes the fix. Do not ignore a failing fuzz input.
+fuzz run ends. This is a [Go fuzz-runner race](https://go.dev/issue/75804). The
+flake dev shell uses Go 1.27.4, which includes the fix. Do not ignore a failing
+fuzz input.
 
 The `vulncheck` check accepts
 [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859) while the scanned packages
