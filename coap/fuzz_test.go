@@ -216,3 +216,49 @@ func FuzzBlockWiseHandler(f *testing.F) {
 		}
 	})
 }
+
+// A peer controls response codes, tokens, options, and bodies. Successful
+// reads must still match the requested block, and successful writes must
+// return the reference of the supplied block.
+func FuzzClientResponse(f *testing.F) {
+	block, ref := makeBlock(int(eris.BlockSize1KiB), 9)
+	f.Add(uint8(protocol.Content), uint16(protocol.OptionContentFormat), []byte{42}, block, []byte(nil), false)
+	f.Add(uint8(protocol.Created), uint16(protocol.OptionSize2), []byte{32}, ref[:], []byte(nil), false)
+	f.Add(uint8(protocol.Content), uint16(protocol.OptionBlock2), []byte{0x0e}, block, []byte(nil), false)
+	f.Add(uint8(protocol.Content), uint16(protocol.OptionContentFormat), []byte{42}, block, []byte(nil), true)
+	f.Fuzz(func(t *testing.T, code uint8, number uint16, value, payload, token []byte, duplicate bool) {
+		response := &protocol.Message{
+			Code: protocol.Code(code), Token: token, Payload: payload,
+			Options: []protocol.Option{{Number: protocol.OptionNumber(number), Value: value}},
+		}
+		if duplicate {
+			response.Options = append(response.Options, response.Options[0])
+		}
+		calls := 0
+		requester := RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
+			calls++
+			// Repeating the same fragment must not keep a transfer alive.
+			if calls > 2 {
+				t.Fatal("client did not stop a repeated response")
+			}
+			return response, nil
+		})
+		store, err := ParseStoreURL("coap://example/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := NewClient(requester, store, ClientConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := client.GetBlock(ref)
+		if err == nil && !bytes.Equal(got, block) {
+			t.Fatal("client accepted an incorrect block")
+		}
+		calls = 0
+		returned, err := client.PutBlock(block, ref)
+		if err == nil && returned != ref {
+			t.Fatal("client accepted an incorrect write reference")
+		}
+	})
+}
