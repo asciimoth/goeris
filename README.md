@@ -16,6 +16,28 @@ The `eris` package implements:
   interfaces; and
 - combined block storage with ordered fallback and optional error reporting.
 
+The `volume` package implements [local block volumes](specs/eris-volume.md). It
+stores each block at a fixed `AAA/BBB/CCC/<remaining hash>` path and also reads
+flat block files. It verifies block size and hash on reads, publishes writes
+through a temporary file and rename, and leaves unrelated files in place. Call
+`volume.Open(path)` with an existing root directory, then close the volume after
+use. Writers create only the nested directories. If the root path is a regular
+file, reads find blocks in its ERIS CBOR contents. Writes to file roots return
+`volume.ErrNotDirectory`. Each CBOR lookup validates the complete container
+before returning a block. It reads in small parts and retains only the matching
+block and the references needed to detect duplicate keys in the current map.
+
+`volume.OpenChain(pathList)` combines a semicolon-separated list of volume paths
+with `eris.CombinedBlockStore`. Reads and writes try entries from left to right
+and stop at the first success. Applications can use
+`volume.OpenChain(os.Getenv("ERIS_BLOCK_PATH"))`, for example with
+`/var/eris;/usr/backup.cbor;/home/user/.cache/eris`. Prefer adding new paths at
+the end to preserve the existing order. Close the chain after use. An empty
+string uses `/eris/block` followed by `$XDG_CACHE_HOME/eris/block` (or
+`$HOME/.cache/eris/block`) on Unix. Windows uses `%ProgramData%\eris\block`
+followed by `%LOCALAPPDATA%\eris\block`. Both roots must already exist.
+`volume.DefaultChainPaths()` returns these paths without opening them.
+
 The `cbor` package implements the
 [ERIS CBOR transport format](specs/eer/cbor/index.md):
 
@@ -168,8 +190,9 @@ The wrapper follows the base FS policy for symbolic links. Network timeouts and
 cancellation must be handled by the supplied block source.
 
 The core `eris` package provides storage interfaces, an in-memory block set, and
-a combined store. Applications supply persistent storage, file or stream I/O,
-networking, and random-secret generation. ERIS extensions use separate packages.
+a combined store. The `volume` package supplies local persistent storage.
+Applications supply other storage backends, file or stream I/O, networking, and
+random-secret generation. ERIS extensions use separate packages.
 
 ```go
 secret := eris.Secret{} // The null convergence secret.

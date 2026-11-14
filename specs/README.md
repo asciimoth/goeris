@@ -18,11 +18,12 @@ them when the upstream pages are unavailable.
 - [Canons](eer/canons/index.md)
 - [Cache vocabulary](eer/cache-vocabulary/index.md)
 
-This repository also defines original encoding policies under the repository's
-CC0 license:
+This repository also defines original storage and encoding policies under the
+repository's CC0 license:
 
 - [ERIS-FS automatic compression policy v1](eris-fs-auto-compression.md)
 - [ERIS-FS v2 encoding and reproducibility](eris-fs-encoding.md)
+- [ERIS file-system volume v1](eris-volume.md)
 
 The ERIS 1.0.0 HTML file comes from the
 [ERIS specification repository](https://codeberg.org/eris/spec) at commit
