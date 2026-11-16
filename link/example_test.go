@@ -24,7 +24,7 @@ func ExampleNewFS() {
 		panic(err)
 	}
 	base := fstest.MapFS{"hello.txt.eris": {Data: encoded}}
-	files, err := link.NewFS(base, blocks)
+	files, err := link.NewFS(base, blocks, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -46,7 +46,7 @@ func ExampleFS_Open() {
 	if err != nil {
 		panic(err)
 	}
-	files, err := link.NewFS(fstest.MapFS{"message": {Data: encoded}}, blocks)
+	files, err := link.NewFS(fstest.MapFS{"message": {Data: encoded}}, blocks, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}

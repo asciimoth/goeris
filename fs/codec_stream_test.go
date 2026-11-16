@@ -48,7 +48,7 @@ func TestEncodingStopsAtEOFWithData(t *testing.T) {
 				}
 				var capabilities [2]eris.Capability
 				for i, input := range []io.Reader{bytes.NewReader(content), &terminalEOFReader{data: content}} {
-					builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
+					builder := NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
 					add := builder.AddFile
 					switch mode {
 					case "compressed":
@@ -86,7 +86,7 @@ func TestBuilderPreservesEOFErrors(t *testing.T) {
 	for _, mode := range []string{"plain", "compressed", "auto"} {
 		for _, size := range []int{0, 1024, 16384, AutoCompressionSampleSize, AutoCompressionSampleSize + 1} {
 			t.Run(fmt.Sprintf("%s/%d", mode, size), func(t *testing.T) {
-				builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
+				builder := NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
 				cause := errors.Join(io.EOF, io.ErrUnexpectedEOF)
 				input := &finalErrorReader{data: make([]byte, size), err: cause}
 				add := builder.AddFile
@@ -122,7 +122,7 @@ func TestBuilderRejectsStalledInput(t *testing.T) {
 	for _, mode := range []string{"plain", "compressed", "auto"} {
 		for _, size := range []int{0, AutoCompressionSampleSize} {
 			t.Run(fmt.Sprintf("%s/%d", mode, size), func(t *testing.T) {
-				builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
+				builder := NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
 				input := io.MultiReader(bytes.NewReader(make([]byte, size)), &stalledReader{})
 				add := builder.AddFile
 				switch mode {
@@ -158,7 +158,7 @@ func TestBuilderReadErrors(t *testing.T) {
 	for _, size := range []int{0, 1, 1023, 1024, 1025, 16384, 32768} {
 		content := autoRandomBytes(size)
 		for _, cause := range []error{io.ErrUnexpectedEOF, errors.New("read error"), errors.Join(io.EOF, io.ErrUnexpectedEOF), fmt.Errorf("source failed: %w", io.EOF)} {
-			builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
+			builder := NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
 			source := &finalErrorReader{data: content, err: cause}
 			if err := builder.AddFile(context.Background(), "file", source, false); !errors.Is(err, cause) {
 				t.Fatalf("builder: %v", err)

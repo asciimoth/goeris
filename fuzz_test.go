@@ -25,7 +25,7 @@ func FuzzBlockSetPut(f *testing.F) {
 			copy(ref[:], reference)
 			expected = append(expected, ref)
 		}
-		got, err := store.PutBlock(context.Background(), block, 0, expected...)
+		got, err := store.PutBlock(context.Background(), block, 0, BlockOptions{}, expected...)
 		actual, sizeErr := ReferenceOf(block)
 		if sizeErr != nil {
 			if !errors.Is(err, ErrInvalidBlockSize) || len(store) != 0 {
@@ -39,7 +39,7 @@ func FuzzBlockSetPut(f *testing.F) {
 			}
 			return
 		}
-		stored, readErr := store.GetBlock(context.Background(), actual, 0)
+		stored, readErr, _ := store.GetBlock(context.Background(), actual, 0, BlockOptions{})
 		if err != nil || readErr != nil || got != actual || !bytes.Equal(stored, block) {
 			t.Fatalf("stored block mismatch: ref %v, write %v, read %v", got, err, readErr)
 		}
@@ -218,7 +218,7 @@ func FuzzEncodeDecode(f *testing.F) {
 		// input arrives in small chunks and the final read includes EOF.
 		input := smallChunkReader{Reader: &terminalEOFReader{data: content}, max: int(sizeCode) + 1}
 		streamed := make(BlockSet)
-		streamCap, err := EncodeContent(context.Background(), input, secret, size, streamed)
+		streamCap, err := EncodeContent(context.Background(), input, secret, size, streamed, BlockOptions{})
 		if err != nil || streamCap != capability || !maps.EqualFunc(streamed, blocks, bytes.Equal) {
 			t.Fatalf("streaming encoding differs: %v", err)
 		}
@@ -228,7 +228,7 @@ func FuzzEncodeDecode(f *testing.F) {
 		}
 		input.Reader = &terminalEOFReader{data: content}
 		streamed = make(BlockSet)
-		streamCap, err = EncodeContentRecommended(context.Background(), input, secret, streamed)
+		streamCap, err = EncodeContentRecommended(context.Background(), input, secret, streamed, BlockOptions{})
 		if err != nil || streamCap != capability || !maps.EqualFunc(streamed, blocks, bytes.Equal) {
 			t.Fatalf("recommended streaming encoding differs: %v", err)
 		}

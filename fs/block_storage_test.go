@@ -19,7 +19,7 @@ type opaqueBlocks struct {
 	writes int
 }
 
-func (store *opaqueBlocks) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (store *opaqueBlocks) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -32,13 +32,14 @@ func (store *opaqueBlocks) PutBlock(ctx context.Context, block []byte, ttl eris.
 	return ref, nil
 }
 
-func (store *opaqueBlocks) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (store *opaqueBlocks) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	store.reads++
 	block, ok := store.data[ref]
 	if !ok {
-		return nil, eris.ErrMissingBlock
+		return nil, eris.ErrMissingBlock, eris.BlockOptions{}
 	}
-	return bytes.Clone(block), nil
+	return bytes.Clone(block), nil, eris.BlockOptions{}
 }
 
 func TestImageThroughBlockStorage(t *testing.T) {
@@ -47,7 +48,7 @@ func TestImageThroughBlockStorage(t *testing.T) {
 
 	plain := bytes.Repeat([]byte("a block storage image "), 4000)
 	packed := strings.Repeat("compress this text ", 4000)
-	nested := erisfs.NewBuilder(store, eris.Secret{1})
+	nested := erisfs.NewBuilder(store, eris.Secret{1}, eris.BlockOptions{})
 	if err := nested.AddFile(context.Background(), "plain", bytes.NewReader(plain), false); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestImageThroughBlockStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder := erisfs.NewBuilder(store, eris.Secret{1})
+	builder := erisfs.NewBuilder(store, eris.Secret{1}, eris.BlockOptions{})
 	if err := builder.AddSubdirectory("nested", nestedCap); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +79,7 @@ func TestImageThroughBlockStorage(t *testing.T) {
 
 	// Read through a separate handle, as with an external block service.
 	reader := &opaqueBlocks{data: store.data}
-	image, err := erisfs.OpenFS(context.Background(), capability, reader)
+	image, err := erisfs.OpenFS(context.Background(), capability, reader, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

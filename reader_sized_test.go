@@ -25,7 +25,7 @@ func TestSizedReaderBoundaries(t *testing.T) {
 					t.Fatal(err)
 				}
 				source := &failAfterSource{BlockSource: blocks}
-				reader, err := NewReaderWithSize(context.Background(), cap, source, int64(size))
+				reader, err := NewReaderWithSize(context.Background(), cap, source, int64(size), BlockOptions{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -71,7 +71,7 @@ func TestSizedReaderRandomAccessCostAndCacheBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := &failAfterSource{BlockSource: blocks}
-	reader, err := NewReaderWithSize(context.Background(), cap, source, int64(len(content)))
+	reader, err := NewReaderWithSize(context.Background(), cap, source, int64(len(content)), BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
 		{Capability{}, blocks, 0, ErrInvalidCapability}, {cap, nil, 0, ErrInvalidCapability},
 		{cap, blocks, -1, ErrInvalidSize}, {cap, blocks, math.MaxInt64, ErrSizeMismatch},
 	} {
-		if _, err := NewReaderWithSize(context.Background(), test.cap, test.source, test.size); !errors.Is(err, test.want) {
+		if _, err := NewReaderWithSize(context.Background(), test.cap, test.source, test.size, BlockOptions{}); !errors.Is(err, test.want) {
 			t.Fatalf("constructor: %v", err)
 		}
 	}
@@ -142,7 +142,7 @@ func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
 			if declared == int64(actual) {
 				continue
 			}
-			reader, err := NewReaderWithSize(context.Background(), cap, blocks, declared)
+			reader, err := NewReaderWithSize(context.Background(), cap, blocks, declared, BlockOptions{})
 			if err == nil {
 				_, err = io.ReadAll(reader)
 				_ = reader.Close()
@@ -158,7 +158,7 @@ func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := NewReaderWithSize(context.Background(), Capability{BlockSize: BlockSize1KiB, Root: pair}, blocks, 1)
+	reader, err := NewReaderWithSize(context.Background(), Capability{BlockSize: BlockSize1KiB, Root: pair}, blocks, 1, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,23 +167,23 @@ func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
 	}
 	// Empty-file reads still check the sole padding block.
 	empty, emptyBlocks, _ := Encode(nil, Secret{}, BlockSize1KiB)
-	reader, _ = NewReaderWithSize(context.Background(), empty, make(BlockSet), 0)
+	reader, _ = NewReaderWithSize(context.Background(), empty, make(BlockSet), 0, BlockOptions{})
 	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, ErrMissingBlock) {
 		t.Fatal(err)
 	}
-	reader, _ = NewReaderWithSize(context.Background(), empty, emptyBlocks, 0)
+	reader, _ = NewReaderWithSize(context.Background(), empty, emptyBlocks, 0, BlockOptions{})
 	if n, err := reader.Read(make([]byte, 1)); n != 0 || err != io.EOF {
 		t.Fatalf("empty: %d, %v", n, err)
 	}
 	// End reads of block-aligned files must fetch and validate the padding leaf.
 	cap, blocks, _ = Encode(make([]byte, 1024), Secret{}, BlockSize1KiB)
 	source := &failAfterSource{BlockSource: blocks, failAt: 3, err: io.ErrUnexpectedEOF}
-	reader, _ = NewReaderWithSize(context.Background(), cap, source, 1024)
+	reader, _ = NewReaderWithSize(context.Background(), cap, source, 1024, BlockOptions{})
 	if n, err := reader.Read(make([]byte, 1024)); n != 1024 || !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("padding fetch: %d, %v", n, err)
 	}
 	// A missing root must fail when checking EOF as well as on a normal read.
-	reader, _ = NewReaderWithSize(context.Background(), cap, make(BlockSet), 1024)
+	reader, _ = NewReaderWithSize(context.Background(), cap, make(BlockSet), 1024, BlockOptions{})
 	if _, err := reader.ReadAt(make([]byte, 1), 1024); !errors.Is(err, ErrMissingBlock) {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestSizedReaderRejectsMalformedVisitedTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	cap := Capability{BlockSize: BlockSize1KiB, Level: 1, Root: root}
-	reader, _ := NewReaderWithSize(context.Background(), cap, blocks, 1024)
+	reader, _ := NewReaderWithSize(context.Background(), cap, blocks, 1024, BlockOptions{})
 	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, ErrSizeMismatch) {
 		t.Fatal(err)
 	}
@@ -217,12 +217,12 @@ func TestSizedReaderRejectsMalformedVisitedTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := blocks.PutBlock(context.Background(), encrypted, 0)
+	ref, err := blocks.PutBlock(context.Background(), encrypted, 0, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	cap.Root = Pair{Reference: ref, Key: key}
-	reader, _ = NewReaderWithSize(context.Background(), cap, blocks, 1024)
+	reader, _ = NewReaderWithSize(context.Background(), cap, blocks, 1024, BlockOptions{})
 	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, ErrInvalidRootKey) {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestReaderSizeOverflow(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: test.level, Root: pair}, blocks); !errors.Is(err, test.want) {
+		if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: test.level, Root: pair}, blocks, BlockOptions{}); !errors.Is(err, test.want) {
 			t.Fatalf("level %d: %v", test.level, err)
 		}
 	}
@@ -280,9 +280,9 @@ func BenchmarkReaderOpenAndRead(b *testing.B) {
 				var reader *Reader
 				var err error
 				if sized {
-					reader, err = NewReaderWithSize(context.Background(), cap, source, int64(len(content)))
+					reader, err = NewReaderWithSize(context.Background(), cap, source, int64(len(content)), BlockOptions{})
 				} else {
-					reader, err = NewReader(context.Background(), cap, source)
+					reader, err = NewReader(context.Background(), cap, source, BlockOptions{})
 				}
 				if err != nil {
 					b.Fatal(err)

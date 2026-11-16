@@ -42,7 +42,7 @@ type lzipFile struct {
 }
 
 func openLzipFile(ctx context.Context, item *node) (*lzipFile, error) {
-	raw, err := eris.NewReader(ctx, item.capability, item.source)
+	raw, err := eris.NewReader(ctx, item.capability, item.source, item.options)
 	if err != nil {
 		return nil, err
 	}

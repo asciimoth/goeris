@@ -12,8 +12,10 @@ import (
 
 type sourceFunc func(eris.Reference) ([]byte, error)
 
-func (function sourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return function(ref)
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (function sourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+	blockResult, blockErr := function(ref)
+	return blockResult, blockErr, eris.BlockOptions{}
 }
 
 type storeFunc struct {
@@ -23,7 +25,7 @@ type storeFunc struct {
 
 type wrongReferenceStore struct{ eris.BlockSet }
 
-func (wrongReferenceStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, _ ...eris.Reference) (eris.Reference, error) {
+func (wrongReferenceStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, _ ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -34,19 +36,22 @@ func (wrongReferenceStore) PutBlock(ctx context.Context, block []byte, ttl eris.
 
 type permissiveStore struct{ writes *int }
 
-func (permissiveStore) GetBlock(context.Context, eris.Reference, eris.TTL) ([]byte, error) {
-	return nil, eris.ErrMissingBlock
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (permissiveStore) GetBlock(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+	return nil, eris.ErrMissingBlock, eris.BlockOptions{}
 }
 
-func (store permissiveStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, _ ...eris.Reference) (eris.Reference, error) {
+func (store permissiveStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, _ ...eris.Reference) (eris.Reference, error) {
 	(*store.writes)++
 	return eris.ReferenceOf(block)
 }
 
-func (store storeFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return store.get(ref)
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (store storeFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+	blockResult, blockErr := store.get(ref)
+	return blockResult, blockErr, eris.BlockOptions{}
 }
-func (store storeFunc) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (store storeFunc) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -65,13 +70,14 @@ type contextStore struct {
 	put    bool
 }
 
-func (store *contextStore) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (store *contextStore) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	store.get = ctx.Value(store.key) == store.value
-	return store.blocks.GetBlock(ctx, ref, 0)
+	return store.blocks.GetBlock(ctx, ref, 0, eris.BlockOptions{})
 }
-func (store *contextStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (store *contextStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	store.put = ctx.Value(store.key) == store.value
-	return store.blocks.PutBlock(ctx, block, 0, expected...)
+	return store.blocks.PutBlock(ctx, block, 0, eris.BlockOptions{}, expected...)
 }
 
 func serve(t *testing.T, handler protocol.Handler, request *protocol.Message) *protocol.Message {
@@ -104,7 +110,7 @@ func TestHandlerGet(t *testing.T) {
 		t.Errorf("Max-Age = %d", age)
 	}
 	response.Payload[0]++
-	stored, _ := blocks.GetBlock(context.Background(), ref, 0)
+	stored, _, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
 	if !bytes.Equal(stored, block) {
 		t.Fatal("response aliases stored block")
 	}
@@ -162,12 +168,12 @@ func TestHandlerPut(t *testing.T) {
 	if response := serve(t, handler, request); response.Code != protocol.Created || !bytes.Equal(response.Payload, ref[:]) {
 		t.Fatalf("PUT response = %s, %x", response.Code, response.Payload)
 	}
-	stored, err := blocks.GetBlock(context.Background(), ref, 0)
+	stored, err, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
 	if err != nil || !bytes.Equal(stored, block) {
 		t.Fatalf("stored block = %x, %v", stored, err)
 	}
 	request.Payload[0]++
-	stored, _ = blocks.GetBlock(context.Background(), ref, 0)
+	stored, _, _ = blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
 	if !bytes.Equal(stored, block) {
 		t.Fatal("sink retained request payload")
 	}
@@ -202,10 +208,12 @@ func TestHandlerPut(t *testing.T) {
 			return clone
 		}(), protocol.BadRequest},
 		{"missing error", Handler{Blocks: storeFunc{get: func(ref eris.Reference) ([]byte, error) {
-			return blocks.GetBlock(context.Background(), ref, 0)
+			blockResult, blockErr, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+			return blockResult, blockErr
 		}, put: func(eris.Reference, []byte) error { return eris.ErrMissingBlock }}, AllowPut: true}, base, protocol.NotFound},
 		{"sink error", Handler{Blocks: storeFunc{get: func(ref eris.Reference) ([]byte, error) {
-			return blocks.GetBlock(context.Background(), ref, 0)
+			blockResult, blockErr, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+			return blockResult, blockErr
 		}, put: func(eris.Reference, []byte) error { return errors.New("store") }}, AllowPut: true}, base, protocol.InternalServerError},
 	}
 	for _, test := range tests {
@@ -346,10 +354,10 @@ func TestBlockWiseClientHandler(t *testing.T) {
 	}
 	for _, size := range []eris.BlockSize{eris.BlockSize1KiB, eris.BlockSize32KiB} {
 		block, ref := makeBlock(int(size), 11)
-		if _, err := client.PutBlock(context.Background(), block, 0, ref); err != nil {
+		if _, err := client.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, ref); err != nil {
 			t.Fatal(err)
 		}
-		got, err := client.GetBlock(context.Background(), ref, 0)
+		got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
 		if err != nil || !bytes.Equal(got, block) {
 			t.Fatalf("GetBlock() = %x, %v", got, err)
 		}

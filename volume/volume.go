@@ -96,25 +96,28 @@ func BlockPath(ref eris.Reference) string {
 // Missing blocks match eris.ErrMissingBlock. It ignores ttl.
 // It checks cancellation between file operations.
 // Cancellation cannot interrupt a file-system call that is already in progress.
-func (v *Volume) GetBlock(ctx context.Context, ref eris.Reference, _ eris.TTL) ([]byte, error) {
+//
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (v *Volume) GetBlock(ctx context.Context, ref eris.Reference, _ eris.TTL, _ eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	if err := v.check(ctx); err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
 	if v.archive != nil {
-		return v.readCBOR(ctx, ref)
+		blockResult, blockErr := v.readCBOR(ctx, ref)
+		return blockResult, blockErr, eris.BlockOptions{}
 	}
 	name := BlockPath(ref)
 	block, err := v.read(ctx, name, ref)
 	if errors.Is(err, fs.ErrNotExist) {
 		if err := v.checkAbsentParents(ctx, name); err != nil {
-			return nil, err
+			return nil, err, eris.BlockOptions{}
 		}
 		block, err = v.read(ctx, ref.String(), ref)
 	}
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, errors.Join(eris.ErrMissingBlock, err)
+		return nil, errors.Join(eris.ErrMissingBlock, err), eris.BlockOptions{}
 	}
-	return block, err
+	return block, err, eris.BlockOptions{}
 }
 
 // Windows can report a non-directory parent as fs.ErrNotExist. Check the
@@ -184,7 +187,7 @@ func (v *Volume) read(ctx context.Context, name string, ref eris.Reference) ([]b
 // It ignores ttl and checks cancellation between file operations.
 // Cancellation cannot interrupt a file-system call that is already in progress.
 // Once the final rename starts, the block can be stored despite cancellation.
-func (v *Volume) PutBlock(ctx context.Context, block []byte, _ eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (v *Volume) PutBlock(ctx context.Context, block []byte, _ eris.TTL, _ eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	if err := v.check(ctx); err != nil {
 		return eris.Reference{}, err
 	}

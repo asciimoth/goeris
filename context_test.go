@@ -16,15 +16,16 @@ type checkedContextStore struct {
 	cancel        context.CancelFunc
 }
 
-func (s *checkedContextStore) GetBlock(ctx context.Context, ref Reference, ttl TTL) ([]byte, error) {
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (s *checkedContextStore) GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
 	s.t.Helper()
 	if ctx != s.want {
 		s.t.Fatal("read context changed")
 	}
 	s.reads++
-	return s.BlockSet.GetBlock(ctx, ref, ttl)
+	return s.BlockSet.GetBlock(ctx, ref, ttl, BlockOptions{})
 }
-func (s *checkedContextStore) PutBlock(ctx context.Context, block []byte, ttl TTL, refs ...Reference) (Reference, error) {
+func (s *checkedContextStore) PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, refs ...Reference) (Reference, error) {
 	s.t.Helper()
 	if ctx != s.want {
 		s.t.Fatal("write context changed")
@@ -33,7 +34,7 @@ func (s *checkedContextStore) PutBlock(ctx context.Context, block []byte, ttl TT
 	if s.cancel != nil {
 		s.cancel()
 	}
-	return s.BlockSet.PutBlock(ctx, block, ttl, refs...)
+	return s.BlockSet.PutBlock(ctx, block, ttl, BlockOptions{}, refs...)
 }
 
 func TestStreamingContext(t *testing.T) {
@@ -41,14 +42,14 @@ func TestStreamingContext(t *testing.T) {
 	defer cancel()
 	data := bytes.Repeat([]byte("context"), 6000)
 	store := &checkedContextStore{BlockSet: BlockSet{}, t: t, want: ctx}
-	cap, err := EncodeContent(ctx, bytes.NewReader(data), Secret{}, BlockSize1KiB, store)
+	cap, err := EncodeContent(ctx, bytes.NewReader(data), Secret{}, BlockSize1KiB, store, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if store.writes < 40 {
 		t.Fatal("test did not write internal and leaf blocks")
 	}
-	reader, err := NewReader(ctx, cap, store)
+	reader, err := NewReader(ctx, cap, store, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestStreamingContext(t *testing.T) {
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("read: %v", err)
 	}
-	sized, err := NewReaderWithSize(ctx, cap, store, int64(len(data)))
+	sized, err := NewReaderWithSize(ctx, cap, store, int64(len(data)), BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,11 +83,11 @@ func TestEncodeStopsAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	store := &checkedContextStore{BlockSet: BlockSet{}, t: t, want: ctx, cancel: cancel}
-	_, err := EncodeContent(ctx, bytes.NewReader(make([]byte, 3000)), Secret{}, BlockSize1KiB, store)
+	_, err := EncodeContent(ctx, bytes.NewReader(make([]byte, 3000)), Secret{}, BlockSize1KiB, store, BlockOptions{})
 	if !errors.Is(err, context.Canceled) || store.writes != 1 {
 		t.Fatalf("error %v, writes %d", err, store.writes)
 	}
-	_, err = EncodeContentRecommended(ctx, bytes.NewReader([]byte("data")), Secret{}, store)
+	_, err = EncodeContentRecommended(ctx, bytes.NewReader([]byte("data")), Secret{}, store, BlockOptions{})
 	if !errors.Is(err, context.Canceled) || store.writes != 1 {
 		t.Fatalf("error %v, writes %d", err, store.writes)
 	}
@@ -110,10 +111,10 @@ func (input *cancelingInput) Read(p []byte) (int, error) {
 func TestEncodeCancellationDuringInput(t *testing.T) {
 	for name, encode := range map[string]func(context.Context, io.Reader, BlockSink) (Capability, error){
 		"explicit size": func(ctx context.Context, input io.Reader, sink BlockSink) (Capability, error) {
-			return EncodeContent(ctx, input, Secret{}, BlockSize1KiB, sink)
+			return EncodeContent(ctx, input, Secret{}, BlockSize1KiB, sink, BlockOptions{})
 		},
 		"size sample": func(ctx context.Context, input io.Reader, sink BlockSink) (Capability, error) {
-			return EncodeContentRecommended(ctx, input, Secret{}, sink)
+			return EncodeContentRecommended(ctx, input, Secret{}, sink, BlockOptions{})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

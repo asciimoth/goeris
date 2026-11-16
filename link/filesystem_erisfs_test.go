@@ -31,7 +31,7 @@ func TestFSWithERISFSBase(t *testing.T) {
 			if shared {
 				baseBlocks = targets
 			}
-			builder := erisfs.NewBuilder(baseBlocks, eris.Secret{})
+			builder := erisfs.NewBuilder(baseBlocks, eris.Secret{}, eris.BlockOptions{})
 			ordinary := []byte("ordinary content in an ERIS-FS image")
 			for _, entry := range []struct {
 				name                   string
@@ -52,7 +52,7 @@ func TestFSWithERISFSBase(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			nested := erisfs.NewBuilder(baseBlocks, eris.Secret{})
+			nested := erisfs.NewBuilder(baseBlocks, eris.Secret{}, eris.BlockOptions{})
 			if err := nested.AddFile(context.Background(), "inner", bytes.NewReader(encoded), false); err != nil {
 				t.Fatal(err)
 			}
@@ -72,7 +72,7 @@ func TestFSWithERISFSBase(t *testing.T) {
 			}
 			baseSource := &countingSource{BlockSource: baseBlocks}
 			targetSource := &countingSource{BlockSource: targets}
-			base, err := erisfs.OpenFS(context.Background(), root, baseSource)
+			base, err := erisfs.OpenFS(context.Background(), root, baseSource, eris.BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -199,7 +199,7 @@ func TestFSWithERISFSBaseErrors(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			baseBlocks := make(eris.BlockSet)
-			builder := erisfs.NewBuilder(baseBlocks, eris.Secret{})
+			builder := erisfs.NewBuilder(baseBlocks, eris.Secret{}, eris.BlockOptions{})
 			if err := builder.AddFile(context.Background(), "file", bytes.NewReader(encoded), false); err != nil {
 				t.Fatal(err)
 			}
@@ -208,7 +208,7 @@ func TestFSWithERISFSBaseErrors(t *testing.T) {
 				t.Fatal(err)
 			}
 			baseSource := &countingSource{BlockSource: baseBlocks}
-			base, err := erisfs.OpenFS(context.Background(), root, baseSource)
+			base, err := erisfs.OpenFS(context.Background(), root, baseSource, eris.BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}

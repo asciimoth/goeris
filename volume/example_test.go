@@ -24,11 +24,11 @@ func Example() {
 	}
 	defer func() { _ = store.Close() }()
 
-	capability, err := eris.EncodeContentRecommended(context.Background(), strings.NewReader("Hello, ERIS!"), eris.Secret{}, store)
+	capability, err := eris.EncodeContentRecommended(context.Background(), strings.NewReader("Hello, ERIS!"), eris.Secret{}, store, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
-	reader, err := eris.NewReader(context.Background(), capability, store)
+	reader, err := eris.NewReader(context.Background(), capability, store, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}

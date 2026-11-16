@@ -193,7 +193,7 @@ func TestAutoProbeReference(t *testing.T) {
 func buildAutoImage(t testing.TB, input io.Reader, executable, reverse bool) (eris.Capability, eris.BlockSet, Entry) {
 	t.Helper()
 	blocks := make(eris.BlockSet)
-	builder := NewBuilder(blocks, eris.Secret{1, 2, 3})
+	builder := NewBuilder(blocks, eris.Secret{1, 2, 3}, eris.BlockOptions{})
 	if reverse {
 		if err := builder.AddSymlink("link", "file"); err != nil {
 			t.Fatal(err)
@@ -242,7 +242,7 @@ func TestAutoFileRoundTripAndDeterminism(t *testing.T) {
 			if cap != cap2 || !reflect.DeepEqual(blocks, blocks2) || !reflect.DeepEqual(entry, entry2) {
 				t.Fatal("chunk size or insertion order changed image")
 			}
-			image, err := OpenFS(context.Background(), cap, blocks)
+			image, err := OpenFS(context.Background(), cap, blocks, eris.BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -269,7 +269,7 @@ func TestAutoFileRoundTripAndDeterminism(t *testing.T) {
 			// Exact block-set equality also detects stored trial blocks and verifies
 			// that replay neither omits nor duplicates the sampled prefix.
 			forcedBlocks := make(eris.BlockSet)
-			forced := NewBuilder(forcedBlocks, eris.Secret{1, 2, 3})
+			forced := NewBuilder(forcedBlocks, eris.Secret{1, 2, 3}, eris.BlockOptions{})
 			if test.want == Lzip {
 				err = forced.AddCompressedFile(context.Background(), "file", bytes.NewReader(test.content), true)
 			} else {
@@ -292,12 +292,12 @@ func TestAutoFileRoundTripAndDeterminism(t *testing.T) {
 func TestAutoFileErrors(t *testing.T) {
 	sentinel := errors.New("source failure")
 	var absent *Builder
-	for _, builder := range []*Builder{absent, NewBuilder(nil, eris.Secret{})} {
+	for _, builder := range []*Builder{absent, NewBuilder(nil, eris.Secret{}, eris.BlockOptions{})} {
 		if err := builder.AddAutoFile(context.Background(), "file", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidEntry) {
 			t.Fatal(err)
 		}
 	}
-	builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
+	builder := NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddAutoFile(context.Background(), "file", nil, false); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestAutoFileErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, prefix := range [][]byte{nil, make([]byte, 100), make([]byte, AutoCompressionSampleSize), autoRandomBytes(AutoCompressionSampleSize)} {
-		builder = NewBuilder(make(eris.BlockSet), eris.Secret{})
+		builder = NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
 		input := io.MultiReader(bytes.NewReader(prefix), errorReader{sentinel})
 		if err := builder.AddAutoFile(context.Background(), "file", input, false); !errors.Is(err, sentinel) {
 			t.Fatalf("failure after %d bytes: %v", len(prefix), err)
@@ -321,7 +321,7 @@ func TestAutoFileErrors(t *testing.T) {
 		}
 	}
 	for _, data := range [][]byte{make([]byte, 1024), autoRandomBytes(32769)} {
-		builder = NewBuilder(errorSink{sentinel}, eris.Secret{})
+		builder = NewBuilder(errorSink{sentinel}, eris.Secret{}, eris.BlockOptions{})
 		if err := builder.AddAutoFile(context.Background(), "file", bytes.NewReader(data), false); !errors.Is(err, sentinel) {
 			t.Fatal(err)
 		}
@@ -373,7 +373,7 @@ func TestAutoFilePreservesReadErrors(t *testing.T) {
 	sentinel := errors.New("read failed with data")
 	for _, size := range []int{100, AutoCompressionSampleSize, AutoCompressionSampleSize + 1} {
 		for _, cause := range []error{sentinel, io.ErrUnexpectedEOF} {
-			builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
+			builder := NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
 			input := &finalErrorReader{data: make([]byte, size), err: cause}
 			if err := builder.AddAutoFile(context.Background(), "file", input, false); !errors.Is(err, cause) {
 				t.Fatalf("%d bytes with %v: %v", size, cause, err)
@@ -383,7 +383,7 @@ func TestAutoFilePreservesReadErrors(t *testing.T) {
 			}
 		}
 	}
-	builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
+	builder := NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddAutoFile(context.Background(), "file", noProgressReader{}, false); !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("empty reads: %v", err)
 	}

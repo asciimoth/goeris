@@ -15,8 +15,10 @@ import (
 
 type sourceFunc func(eris.Reference) ([]byte, error)
 
-func (function sourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return function(ref)
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (function sourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+	blockResult, blockErr := function(ref)
+	return blockResult, blockErr, eris.BlockOptions{}
 }
 
 type storeFunc struct {
@@ -26,7 +28,7 @@ type storeFunc struct {
 
 type wrongReferenceStore struct{ eris.BlockSet }
 
-func (wrongReferenceStore) PutBlock(ctx context.Context, _ []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (wrongReferenceStore) PutBlock(ctx context.Context, _ []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	ref := expected[0]
 	ref[0] ^= 1
 	return ref, nil
@@ -39,15 +41,16 @@ type contextStore struct {
 	writes int
 }
 
-func (store *contextStore) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (store *contextStore) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	if ctx == nil || ref != store.ref {
-		return nil, errors.New("incorrect context read")
+		return nil, errors.New("incorrect context read"), eris.BlockOptions{}
 	}
 	store.reads++
-	return append([]byte(nil), store.block...), nil
+	return append([]byte(nil), store.block...), nil, eris.BlockOptions{}
 }
 
-func (store *contextStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (store *contextStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	if ctx == nil || len(expected) != 1 || expected[0] != store.ref {
 		return eris.Reference{}, errors.New("incorrect context write")
 	}
@@ -56,10 +59,12 @@ func (store *contextStore) PutBlock(ctx context.Context, block []byte, ttl eris.
 	return store.ref, nil
 }
 
-func (store storeFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return store.get(ref)
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (store storeFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+	blockResult, blockErr := store.get(ref)
+	return blockResult, blockErr, eris.BlockOptions{}
 }
-func (store storeFunc) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (store storeFunc) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -268,7 +273,7 @@ func TestHandlerDefaultRejectsPutBeforeAuthentication(t *testing.T) {
 	if recorder.Code != http.StatusMethodNotAllowed || recorder.Header().Get("Allow") != "GET, HEAD" || authCalled {
 		t.Fatalf("default PUT = status %d, Allow %q, auth called %t", recorder.Code, recorder.Header().Get("Allow"), authCalled)
 	}
-	if _, err := blocks.GetBlock(context.Background(), ref, 0); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{}); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("default PUT stored block: %v", err)
 	}
 }
@@ -323,7 +328,7 @@ func TestHandlerAuthenticatedWrite(t *testing.T) {
 	if recorder.Code != 200 || !authorized {
 		t.Fatalf("response = %d, authorized %t: %s", recorder.Code, authorized, recorder.Body.String())
 	}
-	stored, err := blocks.GetBlock(context.Background(), ref, 0)
+	stored, err, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
 	if err != nil || !bytes.Equal(stored, block) {
 		t.Fatalf("stored block = %x, %v", stored, err)
 	}

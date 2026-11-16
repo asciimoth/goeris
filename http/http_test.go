@@ -23,8 +23,10 @@ func (function clientFunc) Do(request *nethttp.Request) (*nethttp.Response, erro
 
 type sourceFunc func(eris.Reference) ([]byte, error)
 
-func (function sourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return function(ref)
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (function sourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+	blockResult, blockErr := function(ref)
+	return blockResult, blockErr, eris.BlockOptions{}
 }
 
 type errorReader struct{ err error }
@@ -79,12 +81,13 @@ type contextSource struct {
 
 type requestContextKey struct{}
 
-func (source *contextSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (source *contextSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	source.calls++
 	if ctx != source.wantContext {
-		return nil, errors.New("incorrect request context")
+		return nil, errors.New("incorrect request context"), eris.BlockOptions{}
 	}
-	return source.blocks.GetBlock(ctx, ref, 0)
+	return source.blocks.GetBlock(ctx, ref, 0, eris.BlockOptions{})
 }
 
 func TestResourceURL(t *testing.T) {
@@ -279,7 +282,7 @@ func TestClientGetBlock(t *testing.T) {
 	})}
 	base, _ := url.Parse("http://in-memory.invalid")
 	client, _ := NewClient(httpClient, base)
-	got, err := client.GetBlock(context.Background(), ref, 0)
+	got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
 	if err != nil || !bytes.Equal(got, blocks[ref]) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
@@ -299,7 +302,7 @@ func TestClientBlockSizeBoundaryAndClose(t *testing.T) {
 		response.Body = body
 		return response, nil
 	}), base)
-	got, err := client.GetBlock(context.Background(), ref, 0)
+	got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
 	if err != nil || !bytes.Equal(got, blocks[ref]) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
@@ -369,7 +372,7 @@ func TestClientGetBlockErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client, _ := NewClient(test.do, base)
-			got, err := client.GetBlock(context.Background(), ref, 0)
+			got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
 			if got != nil {
 				t.Fatalf("block = %x", got)
 			}

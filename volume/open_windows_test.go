@@ -24,7 +24,7 @@ func TestDriveRelativeRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := openVolume(t, drive)
-	got, err := v.GetBlock(context.Background(), ref, eris.NoTTL)
+	got, err, _ := v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{})
 	if err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("drive-relative root did not select the current directory: %v", err)
 	}

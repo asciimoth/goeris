@@ -38,7 +38,7 @@ func ExampleClient() {
 	if err != nil {
 		panic(err)
 	}
-	block, err := client.GetBlock(context.Background(), capability.Root.Reference, 0)
+	block, err, _ := client.GetBlock(context.Background(), capability.Root.Reference, 0, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}

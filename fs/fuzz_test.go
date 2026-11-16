@@ -203,7 +203,7 @@ func FuzzAutoFile(f *testing.F) {
 		if entry.Size != int64(len(content)) || entry.Compression != ChooseCompression(content) {
 			t.Fatal("incorrect auto metadata")
 		}
-		image, err := OpenFS(context.Background(), cap, blocks)
+		image, err := OpenFS(context.Background(), cap, blocks, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

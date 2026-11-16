@@ -31,7 +31,7 @@ func TestChainCloseOwnsAllHandles(t *testing.T) {
 		t.Fatalf("close error not retained: %v", err)
 	}
 	for index, v := range chain.volumes {
-		if _, err := v.GetBlock(context.Background(), eris.Reference{}, eris.NoTTL); !errors.Is(err, fs.ErrClosed) {
+		if _, err, _ := v.GetBlock(context.Background(), eris.Reference{}, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, fs.ErrClosed) {
 			t.Fatalf("volume %d left open: %v", index, err)
 		}
 	}

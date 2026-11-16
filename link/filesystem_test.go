@@ -22,15 +22,16 @@ type countingSource struct {
 	err   error
 }
 
-func (source *countingSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (source *countingSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	source.calls.Add(1)
 	if ttl != eris.NoTTL {
-		return nil, errors.New("unexpected TTL")
+		return nil, errors.New("unexpected TTL"), eris.BlockOptions{}
 	}
 	if source.err != nil {
-		return nil, source.err
+		return nil, source.err, eris.BlockOptions{}
 	}
-	return source.BlockSource.GetBlock(ctx, ref, ttl)
+	return source.BlockSource.GetBlock(ctx, ref, ttl, eris.BlockOptions{})
 }
 
 func encodeFSLink(t *testing.T, payload []byte) ([]byte, eris.BlockSet) {
@@ -48,7 +49,7 @@ func encodeFSLink(t *testing.T, payload []byte) ([]byte, eris.BlockSet) {
 
 func newLinkFS(t *testing.T, base fs.FS, source eris.BlockSource) *link.FS {
 	t.Helper()
-	wrapped, err := link.NewFS(base, source)
+	wrapped, err := link.NewFS(base, source, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +236,7 @@ func TestFSLinkLimit(t *testing.T) {
 	encoded, blocks := encodeFSLink(t, []byte("hello"))
 	base := fstest.MapFS{"link": {Data: encoded}, "plain": {Data: bytes.Repeat([]byte("x"), 1000)}}
 	for _, limit := range []int64{1, int64(len(encoded) - 1), int64(len(encoded)), math.MaxInt64} {
-		wrapped, err := link.NewFSWithLimit(base, blocks, limit)
+		wrapped, err := link.NewFSWithLimit(base, blocks, limit, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -327,14 +328,14 @@ func TestFSNonSeekingBase(t *testing.T) {
 func TestFSInvalidArguments(t *testing.T) {
 	base := fstest.MapFS{}
 	blocks := eris.BlockSet{}
-	if _, err := link.NewFS(nil, blocks); !errors.Is(err, fs.ErrInvalid) {
+	if _, err := link.NewFS(nil, blocks, eris.BlockOptions{}); !errors.Is(err, fs.ErrInvalid) {
 		t.Fatal(err)
 	}
-	if _, err := link.NewFS(base, nil); !errors.Is(err, fs.ErrInvalid) {
+	if _, err := link.NewFS(base, nil, eris.BlockOptions{}); !errors.Is(err, fs.ErrInvalid) {
 		t.Fatal(err)
 	}
 	for _, limit := range []int64{0, -1} {
-		if _, err := link.NewFSWithLimit(base, blocks, limit); !errors.Is(err, fs.ErrInvalid) {
+		if _, err := link.NewFSWithLimit(base, blocks, limit, eris.BlockOptions{}); !errors.Is(err, fs.ErrInvalid) {
 			t.Fatal(err)
 		}
 	}

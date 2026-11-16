@@ -45,7 +45,7 @@ func lzipMember(t testing.TB, content []byte) []byte {
 func compressedImage(t testing.TB, data []byte, size int64) *FS {
 	t.Helper()
 	blocks := make(eris.BlockSet)
-	builder := NewBuilder(blocks, eris.Secret{})
+	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddLzipFile(context.Background(), "file", bytes.NewReader(data), size, true); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func compressedImage(t testing.TB, data []byte, size int64) *FS {
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(context.Background(), cap, blocks)
+	image, err := OpenFS(context.Background(), cap, blocks, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestLzipStorageErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocks := make(eris.BlockSet)
-	builder := NewBuilder(blocks, eris.Secret{})
+	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddLzipFile(context.Background(), "file", strings.NewReader(""), -1, false); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatal(err)
 	}

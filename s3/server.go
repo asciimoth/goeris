@@ -203,14 +203,15 @@ func (handler Handler) getBlock(ctx context.Context, ref eris.Reference, ttl eri
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return handler.Blocks.GetBlock(ctx, ref, ttl)
+	blockResult, blockErr, _ := handler.Blocks.GetBlock(ctx, ref, ttl, eris.BlockOptions{})
+	return blockResult, blockErr
 }
 
 func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte, ttl eris.TTL) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	stored, err := handler.Blocks.(eris.BlockSink).PutBlock(ctx, block, ttl, ref)
+	stored, err := handler.Blocks.(eris.BlockSink).PutBlock(ctx, block, ttl, eris.BlockOptions{}, ref)
 	if err != nil {
 		return err
 	}

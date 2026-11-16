@@ -47,47 +47,49 @@ func NewClient(requester protocol.Requester, store StoreURL, config ClientConfig
 }
 
 // GetBlock retrieves and verifies one encrypted block.
-func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+//
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, _ eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	if client == nil || client.requester == nil {
-		return nil, ErrNilRequester
+		return nil, ErrNilRequester, eris.BlockOptions{}
 	}
 	config, err := client.requestConfig(ttl)
 	if err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
 	request, err := NewGetRequest(client.store, ref, config)
 	if err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
 	response, err := protocol.RequestBody(ctx, &limitedRequester{
 		requester: client.requester, remaining: int(eris.BlockSize32KiB), remainingOptions: MaxTransferResponseOptionSize,
 	}, request, client.config.Transfer)
 	if err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
 	if response.Code == protocol.NotFound {
-		return nil, eris.ErrMissingBlock
+		return nil, eris.ErrMissingBlock, eris.BlockOptions{}
 	}
 	if response.Code != protocol.Content {
-		return nil, &ResponseError{Code: response.Code}
+		return nil, &ResponseError{Code: response.Code}, eris.BlockOptions{}
 	}
 	if err := validateContentFormat(response, ContentFormatOctetStream); err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
 	if len(response.Payload) > int(eris.BlockSize32KiB) {
-		return nil, ErrResponseTooLarge
+		return nil, ErrResponseTooLarge, eris.BlockOptions{}
 	}
 	block := append([]byte(nil), response.Payload...)
 	if err := eris.VerifyBlock(block, ref); err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
-	return block, nil
+	return block, nil, eris.BlockOptions{}
 }
 
 // PutBlock stores one encrypted block and returns its reference. If an
 // older server returns no reference, it computes the reference locally when
 // no expected reference was supplied.
-func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, _ eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	if client == nil || client.requester == nil {
 		return eris.Reference{}, ErrNilRequester
 	}

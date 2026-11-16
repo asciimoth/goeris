@@ -45,7 +45,7 @@ func FuzzFSOpen(f *testing.F) {
 			observed, base = observedBase(t, nil)
 			observed.reader = &chunkReader{reader: bytes.NewReader(data), size: int(chunk) + 1}
 		}
-		files, err := link.NewFSWithLimit(base, source, limit)
+		files, err := link.NewFSWithLimit(base, source, limit, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

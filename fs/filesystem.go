@@ -17,12 +17,14 @@ const directoryType EntryType = 255
 
 // FS provides context-aware access to an ERIS-FS image. Use NewIOFS to
 // use the standard library file-system interfaces. Nested ERIS-FS indexes are
-// loaded when a caller enters them.
+// loaded when a caller enters them. Each block read receives a copy of the
+// options supplied at construction, including reads through Sub.
 // Its methods are safe for concurrent use when the block source supports
 // concurrent calls. Each Open call returns a separate file position. Calls on
 // the same open directory must be serialized by the caller.
 type FS struct {
 	source     eris.BlockSource
+	options    eris.BlockOptions
 	root       *node
 	prefix     string
 	indexLimit int64
@@ -31,6 +33,7 @@ type FS struct {
 type node struct {
 	mu          sync.Mutex
 	source      eris.BlockSource
+	options     eris.BlockOptions
 	name        string
 	kind        EntryType
 	capability  eris.Capability
@@ -47,25 +50,26 @@ type node struct {
 // OpenFS decodes the top-level index and returns a read-only virtual file
 // system. It uses ctx only for this initial read and does not retain it.
 // Later operations use their own contexts. It does not read regular files.
-func OpenFS(ctx context.Context, capability eris.Capability, source eris.BlockSource) (*FS, error) {
-	return OpenFSWithLimit(ctx, capability, source, DefaultMaxIndexSize)
+func OpenFS(ctx context.Context, capability eris.Capability, source eris.BlockSource, options eris.BlockOptions) (*FS, error) {
+	return OpenFSWithLimit(ctx, capability, source, DefaultMaxIndexSize, options)
 }
 
 // OpenFSWithLimit opens an image whose top-level and nested decoded indexes
 // are each at most limit bytes. A non-positive limit is invalid.
-func OpenFSWithLimit(ctx context.Context, capability eris.Capability, source eris.BlockSource, limit int64) (*FS, error) {
-	index, err := DecodeIndexWithLimit(ctx, capability, source, limit)
+// It keeps a copy of options for all later block reads.
+func OpenFSWithLimit(ctx context.Context, capability eris.Capability, source eris.BlockSource, limit int64, options eris.BlockOptions) (*FS, error) {
+	index, err := DecodeIndexWithLimit(ctx, capability, source, limit, options)
 	if err != nil {
 		return nil, err
 	}
-	root := buildTree(index, source, ".", limit)
-	return &FS{source: source, root: root, prefix: ".", indexLimit: limit}, nil
+	root := buildTree(index, source, ".", limit, options)
+	return &FS{source: source, options: options, root: root, prefix: ".", indexLimit: limit}, nil
 }
 
 // buildTree consumes an index that DecodeIndexWithLimit has already validated.
-func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit int64) *node {
+func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit int64, options eris.BlockOptions) *node {
 	root := &node{
-		name: rootName, kind: directoryType, source: source, children: make(map[string]*node),
+		name: rootName, kind: directoryType, source: source, options: options, children: make(map[string]*node),
 		loaded: true, indexLimit: indexLimit,
 	}
 	for _, entry := range index.Entries {
@@ -74,7 +78,7 @@ func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit
 			child := parent.children[component]
 			if child == nil {
 				child = &node{
-					name: component, kind: directoryType, source: source, children: make(map[string]*node),
+					name: component, kind: directoryType, source: source, options: options, children: make(map[string]*node),
 					loaded: true, indexLimit: indexLimit,
 				}
 				parent.children[component] = child
@@ -83,7 +87,7 @@ func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit
 		}
 		name := entry.Path[len(entry.Path)-1]
 		child := &node{
-			name: name, kind: entry.Type, source: source, capability: entry.Capability,
+			name: name, kind: entry.Type, source: source, options: options, capability: entry.Capability,
 			target: entry.Target, loaded: entry.Type != Subdirectory, indexLimit: indexLimit,
 			size: entry.Size, sizeKnown: entry.Size >= 0, compression: entry.Compression,
 		}
@@ -129,11 +133,11 @@ func (item *node) load(ctx context.Context) error {
 		item.loading = nil
 		item.mu.Unlock()
 	}()
-	index, err := DecodeIndexWithLimit(ctx, item.capability, item.source, item.indexLimit)
+	index, err := DecodeIndexWithLimit(ctx, item.capability, item.source, item.indexLimit, item.options)
 	if err != nil {
 		return err
 	}
-	root := buildTree(index, item.source, item.name, item.indexLimit)
+	root := buildTree(index, item.source, item.name, item.indexLimit, item.options)
 	item.mu.Lock()
 	item.children = root.children
 	item.loaded = true
@@ -263,9 +267,9 @@ func (fileSystem *FS) openRegular(ctx context.Context, item *node, path string) 
 	size, known := item.size, item.sizeKnown
 	item.mu.Unlock()
 	if known {
-		reader, err = eris.NewReaderWithSize(ctx, item.capability, fileSystem.source, size)
+		reader, err = eris.NewReaderWithSize(ctx, item.capability, fileSystem.source, size, item.options)
 	} else {
-		reader, err = eris.NewReader(ctx, item.capability, fileSystem.source)
+		reader, err = eris.NewReader(ctx, item.capability, fileSystem.source, item.options)
 	}
 	if err != nil {
 		return nil, pathError("open", path, err)
@@ -364,7 +368,7 @@ func (fileSystem *FS) Sub(ctx context.Context, name string) (*FS, error) {
 		prefix = path.Join(fileSystem.prefix, name)
 	}
 	return &FS{
-		source: fileSystem.source, root: fileSystem.root, prefix: prefix,
+		source: fileSystem.source, options: fileSystem.options, root: fileSystem.root, prefix: prefix,
 		indexLimit: fileSystem.indexLimit,
 	}, nil
 }
@@ -405,7 +409,7 @@ func (node *node) contentSize(ctx context.Context) (int64, error) {
 		return size, nil
 	}
 	node.mu.Unlock()
-	reader, err := eris.NewReader(ctx, node.capability, node.source)
+	reader, err := eris.NewReader(ctx, node.capability, node.source, node.options)
 	if err != nil {
 		return 0, err
 	}

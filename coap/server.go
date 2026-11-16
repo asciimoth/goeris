@@ -197,7 +197,8 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 }
 
 func (handler Handler) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return handler.Blocks.GetBlock(ctx, ref, ttl)
+	blockResult, blockErr, _ := handler.Blocks.GetBlock(ctx, ref, ttl, eris.BlockOptions{})
+	return blockResult, blockErr
 }
 
 func (handler Handler) writable() bool {
@@ -206,7 +207,7 @@ func (handler Handler) writable() bool {
 }
 
 func (handler Handler) putBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
-	return handler.Blocks.(eris.BlockSink).PutBlock(ctx, append([]byte(nil), block...), ttl, expected...)
+	return handler.Blocks.(eris.BlockSink).PutBlock(ctx, append([]byte(nil), block...), ttl, eris.BlockOptions{}, expected...)
 }
 
 var _ protocol.Handler = Handler{}

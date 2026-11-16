@@ -20,12 +20,13 @@ type exactContextSource struct {
 	reads int
 }
 
-func (s *exactContextSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (s *exactContextSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	if ctx != s.want {
 		s.t.Fatal("link read context changed")
 	}
 	s.reads++
-	return s.BlockSource.GetBlock(ctx, ref, ttl)
+	return s.BlockSource.GetBlock(ctx, ref, ttl, eris.BlockOptions{})
 }
 
 func TestFSContextAndWrapper(t *testing.T) {

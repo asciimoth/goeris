@@ -275,12 +275,12 @@ func FuzzClientResponse(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := client.GetBlock(context.Background(), ref, 0)
+		got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
 		if err == nil && !bytes.Equal(got, block) {
 			t.Fatal("client accepted an incorrect block")
 		}
 		calls = 0
-		returned, err := client.PutBlock(context.Background(), block, 0, ref)
+		returned, err := client.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, ref)
 		if err == nil && returned != ref {
 			t.Fatal("client accepted an incorrect write reference")
 		}

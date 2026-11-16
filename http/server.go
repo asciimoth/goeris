@@ -73,7 +73,7 @@ func (handler Handler) serveBlock(writer nethttp.ResponseWriter, request *nethtt
 		writeSourceError(writer, err)
 		return
 	}
-	block, err := handler.Blocks.GetBlock(request.Context(), ref, ttl)
+	block, err, _ := handler.Blocks.GetBlock(request.Context(), ref, ttl, eris.BlockOptions{})
 	if err != nil {
 		writeSourceError(writer, err)
 		return
@@ -96,7 +96,7 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 	if limit == 0 {
 		limit = -1
 	}
-	reader, err := eris.NewReaderWithLimit(request.Context(), capability, handler.Blocks, limit, ttl)
+	reader, err := eris.NewReaderWithLimit(request.Context(), capability, handler.Blocks, limit, ttl, eris.BlockOptions{})
 	if err != nil {
 		if errors.Is(err, eris.ErrDecodedTooLarge) {
 			writer.WriteHeader(nethttp.StatusRequestEntityTooLarge)

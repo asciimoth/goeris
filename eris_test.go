@@ -41,40 +41,43 @@ func TestBlockSetStorage(t *testing.T) {
 	node := make([]byte, BlockSize1KiB)
 	block, pair, _ := EncryptNode(node, Secret{}, 0)
 	blocks := make(BlockSet)
-	if ref, err := blocks.PutBlock(context.Background(), block, 0); err != nil || ref != pair.Reference {
+	if ref, err := blocks.PutBlock(context.Background(), block, 0, BlockOptions{}); err != nil || ref != pair.Reference {
 		t.Fatalf("PutBlock() = %v, %v", ref, err)
 	}
 	block[0] ^= 1
-	got, err := blocks.GetBlock(context.Background(), pair.Reference, 0)
+	got, err, options := blocks.GetBlock(context.Background(), pair.Reference, 0, BlockOptions{})
 	if err != nil || got[0] == block[0] {
 		t.Fatal("block set did not copy input")
 	}
 	got[0] ^= 1
-	again, _ := blocks.GetBlock(context.Background(), pair.Reference, 0)
+	if options != (BlockOptions{}) {
+		t.Fatalf("read options = %#v", options)
+	}
+	again, _, _ := blocks.GetBlock(context.Background(), pair.Reference, 0, BlockOptions{})
 	if got[0] == again[0] {
 		t.Fatal("block set did not copy output")
 	}
-	if _, err = blocks.GetBlock(context.Background(), Reference{1}, 0); !errors.Is(err, ErrMissingBlock) {
+	if _, err, options = blocks.GetBlock(context.Background(), Reference{1}, 0, BlockOptions{}); !errors.Is(err, ErrMissingBlock) || options != (BlockOptions{}) {
 		t.Fatalf("missing error = %v", err)
 	}
-	if _, err = (BlockSet(nil)).PutBlock(context.Background(), again, 0, pair.Reference); !errors.Is(err, ErrMissingBlock) {
+	if _, err = (BlockSet(nil)).PutBlock(context.Background(), again, 0, BlockOptions{}, pair.Reference); !errors.Is(err, ErrMissingBlock) {
 		t.Fatalf("nil set error = %v", err)
 	}
 	again[0] ^= 1
-	if _, err = blocks.PutBlock(context.Background(), again, 0, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
+	if _, err = blocks.PutBlock(context.Background(), again, 0, BlockOptions{}, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("invalid block error = %v", err)
 	}
-	if _, err = blocks.PutBlock(context.Background(), block, 0, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
+	if _, err = blocks.PutBlock(context.Background(), block, 0, BlockOptions{}, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("mismatched reference error = %v", err)
 	}
-	if _, err = blocks.PutBlock(context.Background(), nil, 0); !errors.Is(err, ErrInvalidBlockSize) {
+	if _, err = blocks.PutBlock(context.Background(), nil, 0, BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Fatalf("invalid size error = %v", err)
 	}
-	if _, err = blocks.PutBlock(context.Background(), again, 0, pair.Reference, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
+	if _, err = blocks.PutBlock(context.Background(), again, 0, BlockOptions{}, pair.Reference, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("multiple references error = %v", err)
 	}
 	blocks[pair.Reference][0] ^= 1
-	if _, err = blocks.GetBlock(context.Background(), pair.Reference, 0); !errors.Is(err, ErrInvalidBlock) {
+	if _, err, _ = blocks.GetBlock(context.Background(), pair.Reference, 0, BlockOptions{}); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("corrupt stored block error = %v", err)
 	}
 }

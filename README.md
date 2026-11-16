@@ -170,12 +170,12 @@ The `link` and `magnet` packages implement the
 [ERIS link file](specs/eer/linkfile/index.md) and
 [ERIS Magnet URI](specs/eer/magnet-uri/index.md) recommendations.
 
-`link.NewFS(base, source)` wraps any `io/fs.FS` and an `eris.BlockSource`. It
-exposes the content of ERIS link files through context-aware methods. Use
-`link.NewIOFS(ctx, image)` with `fs.ReadFile` and other `io/fs` functions. It
-detects links by their magic bytes and keeps the original paths, including any
-`.eris` extension. Ordinary files remain readable. Resolved files support
-`io.Seeker` and `io.ReaderAt`.
+`link.NewFS(base, source, options)` wraps any `io/fs.FS` and an
+`eris.BlockSource`. It exposes the content of ERIS link files through
+context-aware methods. Use `link.NewIOFS(ctx, image)` with `fs.ReadFile` and
+other `io/fs` functions. It detects links by their magic bytes and keeps the
+original paths, including any `.eris` extension. Ordinary files remain readable.
+Resolved files support `io.Seeker` and `io.ReaderAt`.
 
 `Stat` and directory entry `Info` report the declared content size and preserve
 the other base file metadata. Detection requires read access to regular files.
@@ -203,13 +203,13 @@ lookahead, writes the complete encrypted tree to an `eris.BlockSink`, and
 returns the read capability. This operation creates no file system index.
 
 ```go
-capability, err := eris.EncodeContentRecommended(ctx, input, secret, store)
+capability, err := eris.EncodeContentRecommended(ctx, input, secret, store, eris.BlockOptions{})
 if err != nil {
 	return err
 }
 fmt.Println(capability.String()) // urn:eris:...
 
-reader, err := eris.NewReader(ctx, capability, store)
+reader, err := eris.NewReader(ctx, capability, store, eris.BlockOptions{})
 if err != nil {
 	return err
 }
@@ -217,15 +217,16 @@ defer reader.Close()
 _, err = io.Copy(output, reader)
 ```
 
-Use `EncodeContent(ctx, input, secret, blockSize, sink)` to select the block
-size explicitly. Both encoders write with `eris.NoTTL`. A read or write error
-can leave blocks in the sink; save the capability only after a successful
+Use `EncodeContent(ctx, input, secret, blockSize, sink, options)` to select the
+block size explicitly. Both encoders write with `eris.NoTTL`. A read or write
+error can leave blocks in the sink; save the capability only after a successful
 return.
 
 `NewReader` scans internal nodes and the final leaf to determine the decoded
-size. `NewReaderWithLimit(ctx, capability, source, maxBytes, ttl)` applies a
-size limit and passes `ttl` to every block read. A negative limit disables the
-limit. Use `NewReaderWithSize(ctx, capability, source, size)` when the decoded
+size. `NewReaderWithLimit(ctx, capability, source, maxBytes, ttl, options)`
+applies a size limit and passes `ttl` to every block read. A negative limit
+disables the limit. Use
+`NewReaderWithSize(ctx, capability, source, size, options)` when the decoded
 size is known; it opens without block I/O and checks tree shape and padding as
 content is read. Readers support `Read`, `ReadAt`, `Seek`, and `Close`. Closing
 a reader does not close its block source.
@@ -251,19 +252,29 @@ decoded, err := eris.Decode(capability, blocks)
 source, use `DecodeWithLimit(capability, blocks, maxBytes)` to reject a tree
 whose decoded content exceeds the selected size limit before expansion.
 
-`BlockSink.PutBlock(ctx, block, ttl)` returns the reference computed by storage.
-`BlockSink.PutBlock(ctx, block, ttl, expected)` rejects a block that does not
-match the expected reference. `BlockSource.GetBlock(ctx, ref, ttl)` returns only
-a matching block; the source verifies stored or received data if it can be
-incorrect.
+`BlockSink.PutBlock(ctx, block, ttl, options)` returns the reference computed by
+storage. `BlockSink.PutBlock(ctx, block, ttl, options, expected)` rejects a
+block that does not match the expected reference.
+`BlockSource.GetBlock(ctx, ref, ttl, options)` returns only a matching block;
+the source verifies stored or received data if it can be incorrect.
 
-All block storage methods require context and `eris.TTL`. This is a breaking Go
-API change. The separate context interfaces and methods have been removed:
+All block storage methods require context, `eris.TTL`, and `eris.BlockOptions`.
+`BlockOptions` is an empty struct, passed and returned by value. This is a
+breaking Go API change:
 
 ```go
-GetBlock(ctx context.Context, ref Reference, ttl TTL) ([]byte, error)
-PutBlock(ctx context.Context, block []byte, ttl TTL, expected ...Reference) (Reference, error)
+GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions)
+PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expected ...Reference) (Reference, error)
 ```
+
+Current storage implementations ignore options and return `BlockOptions{}` as
+the third `GetBlock` value on success and failure. HTTP, S3, and CoAP servers
+use default options for storage calls.
+
+Content encoders, readers, and index codecs accept options by value. ERIS-FS
+builders and filesystems, including the link filesystem, receive options once at
+construction. They pass a copy to every block operation, including nested
+indexes, compressed files, and reads through `Sub`.
 
 Middleware passes context unchanged. `BlockSet` ignores cancellation because its
 operations complete in memory. `Volume` checks cancellation between file
@@ -308,7 +319,7 @@ store := eris.NewCombinedBlockStore(readOnlySource, primaryStore, fallbackStore)
 store.OnError = func(index int, err error) {
 	log.Printf("block storage %d failed: %v", index, err)
 }
-block, err := store.GetBlock(ctx, reference, eris.NoTTL)
+block, err, _ := store.GetBlock(ctx, reference, eris.NoTTL, eris.BlockOptions{})
 ```
 
 Each operation stops at the first success. Writes skip entries without a sink
@@ -343,7 +354,7 @@ Build and open an ERIS-FS image without host file-system access:
 
 ```go
 blocks := make(eris.BlockSet)
-builder := erisfs.NewBuilder(blocks, eris.Secret{})
+builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 if err := builder.AddFile(ctx, "docs/readme", strings.NewReader("hello"), false); err != nil {
 	return err
 }
@@ -352,7 +363,7 @@ capability, err := builder.Finish(ctx)
 if err != nil {
 	return err
 }
-image, err := erisfs.OpenFS(ctx, capability, blocks)
+image, err := erisfs.OpenFS(ctx, capability, blocks, eris.BlockOptions{})
 if err != nil {
 	return err
 }

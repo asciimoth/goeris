@@ -53,22 +53,25 @@ var (
 type FS struct {
 	base        fs.FS
 	source      eris.BlockSource
+	options     eris.BlockOptions
 	maxLinkSize int64
 }
 
 // NewFS wraps base with the default encoded link size limit.
-func NewFS(base fs.FS, source eris.BlockSource) (*FS, error) {
-	return NewFSWithLimit(base, source, DefaultMaxLinkSize)
+// It keeps a copy of options for all block reads.
+func NewFS(base fs.FS, source eris.BlockSource, options eris.BlockOptions) (*FS, error) {
+	return NewFSWithLimit(base, source, DefaultMaxLinkSize, options)
 }
 
 // NewFSWithLimit wraps base with a positive encoded link size limit in bytes.
 // It performs no I/O. A nil base, nil source, or non-positive limit is invalid.
 // The limit applies to link metadata, not to decoded content or ordinary files.
-func NewFSWithLimit(base fs.FS, source eris.BlockSource, limit int64) (*FS, error) {
+// It keeps a copy of options for all block reads.
+func NewFSWithLimit(base fs.FS, source eris.BlockSource, limit int64, options eris.BlockOptions) (*FS, error) {
 	if base == nil || source == nil || limit <= 0 {
 		return nil, fs.ErrInvalid
 	}
-	return &FS{base: base, source: source, maxLinkSize: limit}, nil
+	return &FS{base: base, source: source, options: options, maxLinkSize: limit}, nil
 }
 
 // Open opens a base file or the content referenced by an ERIS link file.
@@ -172,7 +175,7 @@ func (fileSystem *FS) open(ctx context.Context, file fs.File, name string) (fs.F
 	if link.size > math.MaxInt64 {
 		return nil, ErrInvalidLink
 	}
-	reader, err := eris.NewReaderWithSize(ctx, link.capability, fileSystem.source, int64(link.size))
+	reader, err := eris.NewReaderWithSize(ctx, link.capability, fileSystem.source, int64(link.size), fileSystem.options)
 	if err != nil {
 		return nil, err
 	}

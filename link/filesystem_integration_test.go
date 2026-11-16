@@ -162,7 +162,7 @@ func FuzzFS(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		const limit = 4096
 		base := plainFS{fstest.MapFS{"file": {Data: data}}}
-		wrapped, err := link.NewFSWithLimit(base, blocks, limit)
+		wrapped, err := link.NewFSWithLimit(base, blocks, limit, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

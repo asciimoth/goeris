@@ -127,37 +127,39 @@ func (client *Client) Resolve(ctx context.Context, urn string, ttl eris.TTL) (*n
 // GetBlock retrieves and verifies one encrypted ERIS block.
 // It requires a 200 OK response with the application/octet-stream media type.
 // Request and body read errors omit transport text but retain their causes.
-func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+//
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, _ eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	response, err := client.Resolve(ctx, ref.URN(), ttl)
 	if err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == nethttp.StatusNotFound {
-		return nil, eris.ErrMissingBlock
+		return nil, eris.ErrMissingBlock, eris.BlockOptions{}
 	}
 	if response.StatusCode != nethttp.StatusOK {
-		return nil, &ResponseError{StatusCode: response.StatusCode, Status: response.Status}
+		return nil, &ResponseError{StatusCode: response.StatusCode, Status: response.Status}, eris.BlockOptions{}
 	}
 	mediaType, _, parseErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if parseErr != nil || mediaType != ContentType {
-		return nil, ErrUnexpectedContentType
+		return nil, ErrUnexpectedContentType, eris.BlockOptions{}
 	}
 	if response.ContentLength > int64(eris.BlockSize32KiB) {
-		return nil, ErrResponseTooLarge
+		return nil, ErrResponseTooLarge, eris.BlockOptions{}
 	}
 	limit := int64(eris.BlockSize32KiB) + 1
 	block, err := io.ReadAll(io.LimitReader(response.Body, limit))
 	if err != nil {
-		return nil, &requestError{cause: err}
+		return nil, &requestError{cause: err}, eris.BlockOptions{}
 	}
 	if int64(len(block)) == limit {
-		return nil, ErrResponseTooLarge
+		return nil, ErrResponseTooLarge, eris.BlockOptions{}
 	}
 	if err := eris.VerifyBlock(block, ref); err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
-	return block, nil
+	return block, nil, eris.BlockOptions{}
 }
 
 // OpenContent retrieves remotely decoded ERIS content. The caller must close

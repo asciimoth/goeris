@@ -133,20 +133,22 @@ type BlockSet map[Reference][]byte
 
 // GetBlock verifies and returns a copy of the encrypted block for ref. The map
 // can be changed directly, so each read checks the reference.
-func (s BlockSet) GetBlock(_ context.Context, ref Reference, _ TTL) ([]byte, error) {
+//
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (s BlockSet) GetBlock(_ context.Context, ref Reference, _ TTL, _ BlockOptions) ([]byte, error, BlockOptions) {
 	block, ok := s[ref]
 	if !ok {
-		return nil, ErrMissingBlock
+		return nil, ErrMissingBlock, BlockOptions{}
 	}
 	if err := VerifyBlock(block, ref); err != nil {
-		return nil, err
+		return nil, err, BlockOptions{}
 	}
-	return append([]byte(nil), block...), nil
+	return append([]byte(nil), block...), nil, BlockOptions{}
 }
 
 // PutBlock stores a copy of an encrypted block and returns its reference. It
 // rejects a block that does not match an optional expected reference.
-func (s BlockSet) PutBlock(_ context.Context, block []byte, _ TTL, expected ...Reference) (Reference, error) {
+func (s BlockSet) PutBlock(_ context.Context, block []byte, _ TTL, _ BlockOptions, expected ...Reference) (Reference, error) {
 	if s == nil {
 		return Reference{}, ErrMissingBlock
 	}

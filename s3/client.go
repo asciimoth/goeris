@@ -104,38 +104,40 @@ func (client *Client) newRequest(ctx context.Context, method string, ref eris.Re
 }
 
 // GetBlock retrieves and verifies one block.
-func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+//
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, _ eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	request, err := client.newRequest(ctx, http.MethodGet, ref, nil, ttl, true)
 	if err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusNotFound {
-		return nil, eris.ErrMissingBlock
+		return nil, eris.ErrMissingBlock, eris.BlockOptions{}
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, responseError(response)
+		return nil, responseError(response), eris.BlockOptions{}
 	}
 	limit := int64(eris.BlockSize32KiB) + 1
 	block, err := io.ReadAll(io.LimitReader(response.Body, limit))
 	if err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
 	if int64(len(block)) == limit {
-		return nil, ErrResponseTooLarge
+		return nil, ErrResponseTooLarge, eris.BlockOptions{}
 	}
 	if err := eris.VerifyBlock(block, ref); err != nil {
-		return nil, err
+		return nil, err, eris.BlockOptions{}
 	}
-	return block, nil
+	return block, nil, eris.BlockOptions{}
 }
 
 // PutBlock stores one block and returns its reference.
-func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, _ eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	if client == nil || client.httpClient == nil {
 		return eris.Reference{}, ErrNilHTTPClient
 	}

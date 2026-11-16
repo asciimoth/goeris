@@ -18,6 +18,7 @@ import (
 // stop a blocked input Read.
 type Builder struct {
 	sink    eris.BlockSink
+	options eris.BlockOptions
 	secret  eris.Secret
 	entries []Entry
 	paths   builderPath
@@ -31,8 +32,9 @@ type builderPath struct {
 }
 
 // NewBuilder returns a builder that writes all file and index blocks to sink.
-func NewBuilder(sink eris.BlockSink, secret eris.Secret) *Builder {
-	return &Builder{sink: sink, secret: secret}
+// It keeps a copy of options and passes it to every block write.
+func NewBuilder(sink eris.BlockSink, secret eris.Secret, options eris.BlockOptions) *Builder {
+	return &Builder{sink: sink, secret: secret, options: options}
 }
 
 // AddFile reads and encodes one regular file with the recommended block size.
@@ -51,7 +53,7 @@ func (builder *Builder) AddFile(ctx context.Context, path string, content io.Rea
 		return err
 	}
 	counted := &countReader{reader: content}
-	capability, err := eris.EncodeContentRecommended(ctx, counted, builder.secret, builder.sink)
+	capability, err := eris.EncodeContentRecommended(ctx, counted, builder.secret, builder.sink, builder.options)
 	if err != nil {
 		return err
 	}
@@ -170,7 +172,7 @@ func (builder *Builder) Finish(ctx context.Context) (eris.Capability, error) {
 	if builder == nil || builder.sink == nil {
 		return eris.Capability{}, ErrInvalidEntry
 	}
-	return EncodeIndex(ctx, builder.Index(), builder.secret, builder.sink)
+	return EncodeIndex(ctx, builder.Index(), builder.secret, builder.sink, builder.options)
 }
 
 func (builder *Builder) add(entry Entry) error {

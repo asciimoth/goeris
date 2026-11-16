@@ -13,19 +13,20 @@ type ttlProbe struct {
 	fail bool
 }
 
-func (p *ttlProbe) GetBlock(ctx context.Context, ref Reference, ttl TTL) ([]byte, error) {
+//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
+func (p *ttlProbe) GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
 	p.seen = append(p.seen, ttl)
 	if p.fail {
-		return nil, ErrMissingBlock
+		return nil, ErrMissingBlock, BlockOptions{}
 	}
-	return p.BlockSet.GetBlock(ctx, ref, ttl)
+	return p.BlockSet.GetBlock(ctx, ref, ttl, BlockOptions{})
 }
-func (p *ttlProbe) PutBlock(ctx context.Context, block []byte, ttl TTL, expected ...Reference) (Reference, error) {
+func (p *ttlProbe) PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expected ...Reference) (Reference, error) {
 	p.seen = append(p.seen, ttl)
 	if p.fail {
 		return Reference{}, ErrMissingBlock
 	}
-	return p.BlockSet.PutBlock(ctx, block, ttl, expected...)
+	return p.BlockSet.PutBlock(ctx, block, ttl, BlockOptions{}, expected...)
 }
 
 func TestCombinedPreservesTTL(t *testing.T) {
@@ -41,10 +42,10 @@ func TestCombinedPreservesTTL(t *testing.T) {
 			} else {
 				store = NewCombinedBlockStore(first, last)
 			}
-			if _, err := store.GetBlock(context.Background(), ref, ttl); err != nil {
+			if _, err, _ := store.GetBlock(context.Background(), ref, ttl, BlockOptions{}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := store.PutBlock(context.Background(), block, ttl, ref); err != nil {
+			if _, err := store.PutBlock(context.Background(), block, ttl, BlockOptions{}, ref); err != nil {
 				t.Fatal(err)
 			}
 			want := []TTL{ttl, ttl}

@@ -13,7 +13,7 @@ import (
 func TestSubSymlinkRoot(t *testing.T) {
 	t.Parallel()
 	blocks := make(eris.BlockSet)
-	builder := NewBuilder(blocks, eris.Secret{})
+	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddFile(context.Background(), "dir/file", strings.NewReader("content"), false); err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestSubSymlinkRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(context.Background(), capability, blocks)
+	image, err := OpenFS(context.Background(), capability, blocks, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

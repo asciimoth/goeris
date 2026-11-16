@@ -13,13 +13,13 @@ import (
 // tree pairs per level. The result matches Encode for the same bytes, secret,
 // and block size. Each write uses NoTTL and passes ctx unchanged. Cancellation
 // is checked between input reads and block writes; it cannot stop a blocked
-// input Read.
+// input Read. Each block write receives a copy of options.
 //
 // Encoding stops at the first io.EOF, including EOF returned with data. Other
 // read errors are preserved. After 100 consecutive empty reads it returns
 // io.ErrNoProgress. A nil reader or sink returns ErrInvalidInput. A failed call
 // can leave blocks in the sink and returns no usable capability.
-func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockSize BlockSize, sink BlockSink) (Capability, error) {
+func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockSize BlockSize, sink BlockSink, options BlockOptions) (Capability, error) {
 	if !blockSize.Valid() {
 		return Capability{}, ErrInvalidBlockSize
 	}
@@ -29,7 +29,7 @@ func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockS
 	if err := ctx.Err(); err != nil {
 		return Capability{}, err
 	}
-	encoder := treeEncoder{ctx: ctx, secret: secret, blockSize: blockSize, sink: sink}
+	encoder := treeEncoder{ctx: ctx, secret: secret, blockSize: blockSize, sink: sink, options: options}
 	ended := false
 	for {
 		if err := ctx.Err(); err != nil {
@@ -48,7 +48,7 @@ func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockS
 		if n < len(node) {
 			node[n] = 0x80
 		}
-		pair, err := putNode(ctx, node, secret, 0, sink)
+		pair, err := putNode(ctx, node, secret, 0, sink, options)
 		if err != nil {
 			return Capability{}, err
 		}
@@ -68,7 +68,7 @@ func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockS
 // shorter content or 32 KiB blocks otherwise. The input is read once and need
 // not support seeking. The result matches EncodeRecommended for the same bytes
 // and secret. Writes and errors follow EncodeContent.
-func EncodeContentRecommended(ctx context.Context, content io.Reader, secret Secret, sink BlockSink) (Capability, error) {
+func EncodeContentRecommended(ctx context.Context, content io.Reader, secret Secret, sink BlockSink, options BlockOptions) (Capability, error) {
 	if content == nil || sink == nil {
 		return Capability{}, ErrInvalidInput
 	}
@@ -85,10 +85,10 @@ func EncodeContentRecommended(ctx context.Context, content io.Reader, secret Sec
 	default:
 		return Capability{}, err
 	}
-	return EncodeContent(ctx, input, secret, ChooseBlockSize(n), sink)
+	return EncodeContent(ctx, input, secret, ChooseBlockSize(n), sink, options)
 }
 
-func putNode(ctx context.Context, node []byte, secret Secret, level Level, sink BlockSink) (Pair, error) {
+func putNode(ctx context.Context, node []byte, secret Secret, level Level, sink BlockSink, options BlockOptions) (Pair, error) {
 	if err := ctx.Err(); err != nil {
 		return Pair{}, err
 	}
@@ -96,7 +96,7 @@ func putNode(ctx context.Context, node []byte, secret Secret, level Level, sink 
 	if err != nil {
 		return Pair{}, err
 	}
-	ref, err := sink.PutBlock(ctx, block, NoTTL)
+	ref, err := sink.PutBlock(ctx, block, NoTTL, options)
 	if err != nil {
 		return Pair{}, err
 	}
@@ -108,6 +108,7 @@ type treeEncoder struct {
 	secret    Secret
 	blockSize BlockSize
 	sink      BlockSink
+	options   BlockOptions
 	levels    [][]Pair
 }
 
@@ -141,7 +142,7 @@ func (encoder *treeEncoder) parent(level int) (Pair, error) {
 		copy(node[offset+32:offset+PairSize], pair.Key[:])
 	}
 	encoder.levels[level] = encoder.levels[level][:0]
-	return putNode(encoder.ctx, node, encoder.secret, Level(level+1), encoder.sink)
+	return putNode(encoder.ctx, node, encoder.secret, Level(level+1), encoder.sink, encoder.options)
 }
 
 func (encoder *treeEncoder) finish() (Capability, error) {

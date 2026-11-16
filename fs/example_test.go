@@ -13,7 +13,7 @@ import (
 
 func ExampleBuilder() {
 	blocks := make(eris.BlockSet)
-	builder := erisfs.NewBuilder(blocks, eris.Secret{})
+	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddFile(context.Background(), "docs/readme", strings.NewReader("hello"), false); err != nil {
 		panic(err)
 	}
@@ -21,7 +21,7 @@ func ExampleBuilder() {
 	if err != nil {
 		panic(err)
 	}
-	image, err := erisfs.OpenFS(context.Background(), capability, blocks) // Also accepts v1 images.
+	image, err := erisfs.OpenFS(context.Background(), capability, blocks, eris.BlockOptions{}) // Also accepts v1 images.
 	if err != nil {
 		panic(err)
 	}
@@ -44,7 +44,7 @@ func ExampleBuilder() {
 
 func ExampleFS_OpenFile() {
 	blocks := make(eris.BlockSet)
-	builder := erisfs.NewBuilder(blocks, eris.Secret{})
+	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddFile(context.Background(), "file", strings.NewReader("known length"), false); err != nil {
 		panic(err)
 	}
@@ -52,7 +52,7 @@ func ExampleFS_OpenFile() {
 	if err != nil {
 		panic(err)
 	}
-	image, err := erisfs.OpenFS(context.Background(), capability, blocks)
+	image, err := erisfs.OpenFS(context.Background(), capability, blocks, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -75,7 +75,7 @@ func ExampleFS_OpenFile() {
 
 func ExampleBuilder_AddAutoFile() {
 	blocks := make(eris.BlockSet)
-	builder := erisfs.NewBuilder(blocks, eris.Secret{})
+	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	content := strings.Repeat("hello\n", 1024)
 	if err := builder.AddAutoFile(context.Background(), "notes", strings.NewReader(content), false); err != nil {
 		panic(err)
@@ -88,7 +88,7 @@ func ExampleBuilder_AddAutoFile() {
 func ExampleNewIOFS() {
 	ctx := context.Background()
 	blocks := make(eris.BlockSet)
-	builder := erisfs.NewBuilder(blocks, eris.Secret{})
+	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddFile(ctx, "hello", strings.NewReader("hello"), false); err != nil {
 		panic(err)
 	}
@@ -96,7 +96,7 @@ func ExampleNewIOFS() {
 	if err != nil {
 		panic(err)
 	}
-	image, err := erisfs.OpenFS(ctx, capability, blocks)
+	image, err := erisfs.OpenFS(ctx, capability, blocks, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}

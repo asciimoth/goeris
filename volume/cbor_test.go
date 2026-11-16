@@ -64,17 +64,17 @@ func TestCBORRootFormats(t *testing.T) {
 			v := openVolume(t, name)
 			for ref, want := range blocks {
 				for range 2 {
-					got, err := v.GetBlock(context.Background(), ref, 1)
+					got, err, _ := v.GetBlock(context.Background(), ref, 1, eris.BlockOptions{})
 					if err != nil || !bytes.Equal(got, want) {
 						t.Fatalf("GetBlock: length %d, %v", len(got), err)
 					}
 					got[0]++ // A returned block must not affect later reads.
 				}
-				if _, err := v.PutBlock(context.Background(), want, eris.NoTTL, ref); !errors.Is(err, volume.ErrNotDirectory) {
+				if _, err := v.PutBlock(context.Background(), want, eris.NoTTL, eris.BlockOptions{}, ref); !errors.Is(err, volume.ErrNotDirectory) {
 					t.Fatalf("write to CBOR root: %v", err)
 				}
 			}
-			if _, err := v.GetBlock(context.Background(), eris.Reference{}, eris.NoTTL); !errors.Is(err, eris.ErrMissingBlock) || !errors.Is(err, fs.ErrNotExist) {
+			if _, err, _ := v.GetBlock(context.Background(), eris.Reference{}, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, eris.ErrMissingBlock) || !errors.Is(err, fs.ErrNotExist) {
 				t.Fatalf("missing block: %v", err)
 			}
 			assertFile(t, name, data)
@@ -101,10 +101,10 @@ func TestCBORRootInvalidData(t *testing.T) {
 		name := filepath.Join(t.TempDir(), "blocks.cbor")
 		writeFile(t, name, invalid)
 		v := openVolume(t, name)
-		if got, err := v.GetBlock(context.Background(), ref, eris.NoTTL); !errors.Is(err, cbor.ErrInvalidEncoding) || got != nil {
+		if got, err, _ := v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, cbor.ErrInvalidEncoding) || got != nil {
 			t.Fatalf("invalid CBOR root: length %d, %v", len(got), err)
 		}
-		if _, err := v.PutBlock(context.Background(), blocks[ref], eris.NoTTL); !errors.Is(err, volume.ErrNotDirectory) {
+		if _, err := v.PutBlock(context.Background(), blocks[ref], eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, volume.ErrNotDirectory) {
 			t.Fatalf("write to invalid CBOR root: %v", err)
 		}
 		assertFile(t, name, invalid)
@@ -122,7 +122,7 @@ func TestCBORRootReferencesAreNotBlocks(t *testing.T) {
 		name := filepath.Join(t.TempDir(), "metadata.cbor")
 		writeFile(t, name, data)
 		v := openVolume(t, name)
-		if _, err := v.GetBlock(context.Background(), ref, eris.NoTTL); !errors.Is(err, eris.ErrMissingBlock) {
+		if _, err, _ := v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, eris.ErrMissingBlock) {
 			t.Fatalf("metadata or empty container: %v", err)
 		}
 	}
@@ -142,7 +142,7 @@ func TestCBORRootConcurrentReads(t *testing.T) {
 		group.Go(func() {
 			for range 10 {
 				for ref, want := range blocks {
-					got, err := v.GetBlock(context.Background(), ref, eris.NoTTL)
+					got, err, _ := v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{})
 					if err != nil || !bytes.Equal(got, want) {
 						t.Errorf("concurrent CBOR read: length %d, %v", len(got), err)
 						return
@@ -161,19 +161,19 @@ func TestCBORRootCancellationAndClose(t *testing.T) {
 	block, ref := testBlock(t, eris.BlockSize1KiB, 12)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := v.GetBlock(ctx, ref, eris.NoTTL); !errors.Is(err, context.Canceled) {
+	if _, err, _ := v.GetBlock(ctx, ref, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled read: %v", err)
 	}
-	if _, err := v.PutBlock(ctx, block, eris.NoTTL); !errors.Is(err, context.Canceled) {
+	if _, err := v.PutBlock(ctx, block, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled write: %v", err)
 	}
 	if err := v.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v.GetBlock(context.Background(), ref, eris.NoTTL); !errors.Is(err, fs.ErrClosed) {
+	if _, err, _ := v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, fs.ErrClosed) {
 		t.Fatalf("closed read: %v", err)
 	}
-	if _, err := v.PutBlock(context.Background(), block, eris.NoTTL); !errors.Is(err, fs.ErrClosed) {
+	if _, err := v.PutBlock(context.Background(), block, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, fs.ErrClosed) {
 		t.Fatalf("closed write: %v", err)
 	}
 }
@@ -188,7 +188,7 @@ func TestDirectoryDoesNotScanCBORFiles(t *testing.T) {
 	writeFile(t, filepath.Join(root, "blocks.cbor"), data)
 	v := openVolume(t, root)
 	ref, _ := elements[0].Reference()
-	if _, err := v.GetBlock(context.Background(), ref, eris.NoTTL); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err, _ := v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("read an unrelated CBOR file inside a directory: %v", err)
 	}
 	assertFile(t, filepath.Join(root, "blocks.cbor"), data)
