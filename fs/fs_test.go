@@ -640,6 +640,10 @@ func (sink errorSink) PutBlock(context.Context, []byte, eris.TTL, eris.BlockOpti
 	return eris.Reference{}, sink.err
 }
 
+func (sink errorSink) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+	return false, nil
+}
+
 func TestCodecErrors(t *testing.T) {
 	t.Parallel()
 	sentinel := errors.New("sentinel")

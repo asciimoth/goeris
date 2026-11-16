@@ -148,6 +148,10 @@ func (sink *countingSink) PutBlock(ctx context.Context, block []byte, ttl TTL, o
 	return ReferenceOf(block)
 }
 
+func (sink *countingSink) UpdateBlockOptions(context.Context, Reference, TTL, BlockOptions) (bool, error) {
+	return false, nil
+}
+
 type errorReader struct{ err error }
 
 func (reader errorReader) Read([]byte) (int, error) { return 0, reader.err }
@@ -156,4 +160,8 @@ type errorSink struct{ err error }
 
 func (sink errorSink) PutBlock(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error) {
 	return Reference{}, sink.err
+}
+
+func (sink errorSink) UpdateBlockOptions(context.Context, Reference, TTL, BlockOptions) (bool, error) {
+	return false, nil
 }

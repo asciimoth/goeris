@@ -235,6 +235,12 @@ func (v *Volume) PutBlock(ctx context.Context, block []byte, _ eris.TTL, _ eris.
 	return ref, nil
 }
 
+// UpdateBlockOptions does nothing because block options are not supported.
+// It always returns false, nil, without checking context or TTL.
+func (v *Volume) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+	return false, nil
+}
+
 func write(ctx context.Context, dir *os.Root, name string, block []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err

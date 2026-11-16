@@ -12,6 +12,7 @@ var ErrNoBlockStorage = errors.New("eris: no compatible block storage")
 // CombinedBlockStore reads and writes blocks through an ordered list of stores.
 // Each operation tries compatible entries in order until one succeeds. A write
 // stops at the first success; it does not copy the block to later stores.
+// An options update continues until a sink returns true, nil.
 // Use NewCombinedBlockStore to resolve the methods for each operation once.
 //
 // If all compatible entries fail, the operation returns the last error unchanged
@@ -34,8 +35,9 @@ var ErrNoBlockStorage = errors.New("eris: no compatible block storage")
 // Concurrent calls are safe if the wrapped stores and OnError support concurrent
 // calls and no caller changes OnError during use.
 type CombinedBlockStore struct {
-	get []combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions)]
-	put []combinedBlockMethod[func(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error)]
+	update []combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) (bool, error)]
+	get    []combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions)]
+	put    []combinedBlockMethod[func(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error)]
 
 	// OnError receives errors that an operation discards. The index is the
 	// zero-based position in the constructor's input, including skipped entries.
@@ -71,6 +73,7 @@ func NewCombinedBlockStore(stores ...any) *CombinedBlockStore {
 			combined.get = append(combined.get, combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions)]{index, source.GetBlock})
 		}
 		if sink, ok := entry.(BlockSink); ok {
+			combined.update = append(combined.update, combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) (bool, error)]{index, sink.UpdateBlockOptions})
 			combined.put = append(combined.put, combinedBlockMethod[func(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error)]{index, sink.PutBlock})
 		}
 	}
@@ -93,6 +96,35 @@ func (store *CombinedBlockStore) PutBlock(ctx context.Context, block []byte, ttl
 	return tryBlockStores(ctx, store.put, store.OnError, func(put func(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error)) (Reference, error) {
 		return put(ctx, block, ttl, options, expected...)
 	})
+}
+
+// UpdateBlockOptions tries each sink until a call returns true, nil.
+// A false, nil result continues to the next sink. If no update succeeds,
+// it returns the final attempt's error, or nil if that attempt had no error.
+// With no compatible sinks, it returns ErrNoBlockStorage.
+func (store *CombinedBlockStore) UpdateBlockOptions(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if len(store.update) == 0 {
+		return false, ErrNoBlockStorage
+	}
+	var lastErr error
+	var lastIndex int
+	for _, method := range store.update {
+		if lastErr != nil && store.OnError != nil {
+			store.OnError(lastIndex, lastErr)
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		updated, err := method.call(ctx, ref, ttl, options)
+		if updated && err == nil {
+			return true, nil
+		}
+		lastErr, lastIndex = err, method.index
+	}
+	return false, lastErr
 }
 
 // tryBlockStores calls resolved methods in their original order. Keep one

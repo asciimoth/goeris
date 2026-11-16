@@ -32,6 +32,10 @@ func (store *opaqueBlocks) PutBlock(ctx context.Context, block []byte, ttl eris.
 	return ref, nil
 }
 
+func (store *opaqueBlocks) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+	return false, nil
+}
+
 //nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
 func (store *opaqueBlocks) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	store.reads++

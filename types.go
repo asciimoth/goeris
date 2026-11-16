@@ -163,6 +163,12 @@ func (s BlockSet) PutBlock(_ context.Context, block []byte, _ TTL, _ BlockOption
 	return ref, nil
 }
 
+// UpdateBlockOptions does nothing because block options are not supported.
+// It always returns false, nil, without checking context or TTL.
+func (s BlockSet) UpdateBlockOptions(context.Context, Reference, TTL, BlockOptions) (bool, error) {
+	return false, nil
+}
+
 var _ BlockStore = BlockSet(nil)
 
 var base32Encoding = base32.StdEncoding.WithPadding(base32.NoPadding)

@@ -46,6 +46,10 @@ func (store permissiveStore) PutBlock(ctx context.Context, block []byte, ttl eri
 	return eris.ReferenceOf(block)
 }
 
+func (store permissiveStore) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+	return false, nil
+}
+
 //nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
 func (store storeFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	blockResult, blockErr := store.get(ref)
@@ -60,6 +64,10 @@ func (store storeFunc) PutBlock(ctx context.Context, block []byte, ttl eris.TTL,
 		return eris.Reference{}, eris.ErrInvalidBlock
 	}
 	return ref, store.put(ref, block)
+}
+
+func (store storeFunc) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+	return false, nil
 }
 
 type contextStore struct {
@@ -78,6 +86,10 @@ func (store *contextStore) GetBlock(ctx context.Context, ref eris.Reference, ttl
 func (store *contextStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	store.put = ctx.Value(store.key) == store.value
 	return store.blocks.PutBlock(ctx, block, 0, eris.BlockOptions{}, expected...)
+}
+
+func (store *contextStore) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+	return false, nil
 }
 
 func serve(t *testing.T, handler protocol.Handler, request *protocol.Message) *protocol.Message {

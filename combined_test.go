@@ -30,6 +30,10 @@ func (probe *combinedProbe) PutBlock(ctx context.Context, block []byte, ttl TTL,
 	return probe.ref, probe.call("PutBlock", ctx, Reference{}, block, expected)
 }
 
+func (probe *combinedProbe) UpdateBlockOptions(context.Context, Reference, TTL, BlockOptions) (bool, error) {
+	return false, nil
+}
+
 type combinedOperation struct {
 	name  string
 	write bool

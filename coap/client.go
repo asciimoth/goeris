@@ -148,6 +148,12 @@ func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, 
 	return ref, nil
 }
 
+// UpdateBlockOptions does nothing because block options are not supported.
+// It always returns false, nil, without checking context or TTL.
+func (client *Client) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+	return false, nil
+}
+
 // requestConfig copies configuration so concurrent calls cannot change each
 // other's hop limit. An explicit operation TTL always takes precedence.
 func (client *Client) requestConfig(ttl eris.TTL) (RequestConfig, error) {

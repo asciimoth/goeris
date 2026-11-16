@@ -59,6 +59,10 @@ func (store *contextStore) PutBlock(ctx context.Context, block []byte, ttl eris.
 	return store.ref, nil
 }
 
+func (store *contextStore) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+	return false, nil
+}
+
 //nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
 func (store storeFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	blockResult, blockErr := store.get(ref)
@@ -73,6 +77,10 @@ func (store storeFunc) PutBlock(ctx context.Context, block []byte, ttl eris.TTL,
 		return eris.Reference{}, eris.ErrInvalidBlock
 	}
 	return ref, store.put(ref, block)
+}
+
+func (store storeFunc) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+	return false, nil
 }
 
 func TestHandlerReads(t *testing.T) {

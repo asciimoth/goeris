@@ -174,6 +174,12 @@ func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, 
 	return ref, nil
 }
 
+// UpdateBlockOptions does nothing because block options are not supported.
+// It always returns false, nil, without checking context or TTL.
+func (client *Client) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+	return false, nil
+}
+
 func responseError(response *http.Response) error {
 	return &ResponseError{StatusCode: response.StatusCode, Status: response.Status}
 }

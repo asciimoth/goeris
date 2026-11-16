@@ -21,7 +21,7 @@ type BlockSource interface {
 	GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions)
 }
 
-// BlockSink stores encrypted blocks and returns their computed reference.
+// BlockSink stores encrypted blocks and updates their storage options.
 // Sinks must honor cancellation where possible and document any limits.
 // Callers must supply a non-nil context. Middleware must pass it unchanged.
 // At most one expected reference can be supplied. If it does not match the
@@ -33,6 +33,14 @@ type BlockSource interface {
 // Options are passed by value. Sinks currently ignore them.
 type BlockSink interface {
 	PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expected ...Reference) (Reference, error)
+
+	// UpdateBlockOptions updates options for the block identified by ref.
+	// It returns true only when the options were updated.
+	// It returns false, nil if the block is absent or options are unsupported.
+	// Middleware passes context and TTL unchanged, as with PutBlock.
+	// Current terminal stores and network clients do nothing and return
+	// false, nil, without checking context or TTL.
+	UpdateBlockOptions(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) (bool, error)
 }
 
 // BlockStore can retrieve and store encrypted blocks.

@@ -16,6 +16,8 @@ var ErrInvalidChain = errors.New("eris-volume: invalid chain path list")
 // Chain reads and writes through an ordered list of volumes. Block operations
 // and OnError use the embedded eris.CombinedBlockStore. Each operation stops at
 // the first success; writes do not copy blocks to the remaining volumes.
+// Options updates continue after false, nil until a sink returns true, nil
+// or the list ends.
 // A file root rejects writes, so the combined store proceeds to the next entry.
 //
 // OpenChain owns the volume handles. Close the chain after all operations have

@@ -265,7 +265,14 @@ breaking Go API change:
 ```go
 GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions)
 PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expected ...Reference) (Reference, error)
+UpdateBlockOptions(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) (bool, error)
 ```
+
+`UpdateBlockOptions` returns whether the options were updated. An absent block
+or unsupported options return `false, nil`. Current terminal stores and network
+clients do nothing and return `false, nil`. Middleware handles updates like
+puts, but a combined store continues after `false, nil` until an update succeeds
+or the list ends.
 
 Current storage implementations ignore options and return `BlockOptions{}` as
 the third `GetBlock` value on success and failure. HTTP, S3, and CoAP servers
