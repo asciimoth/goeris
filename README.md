@@ -280,12 +280,12 @@ would start a new budget.
 HTTP and S3 use the optional `Eris-TTL` request header with a decimal value from
 `1` through `255`. S3 signs this header; it is not object metadata. CoAP uses
 standard Hop-Limit option 16 from
-[RFC 8768](https://www.rfc-editor.org/rfc/rfc8768.html), compatible with Kapla's
-GET forwarding. The same limit applies to CoAP PUT. Servers pass the received
-value unchanged to storage. An absent header or option means `1` (local access
-only), so old clients can still use terminal stores. Invalid wire values are
-rejected. Peers that ignore these extensions can still serve blocks, but do not
-enforce forwarding limits.
+[RFC 8768](https://www.rfc-editor.org/rfc/rfc8768.html), compatible with
+[Kapla](https://codeberg.org/eris/kapla)'s GET forwarding. The same limit
+applies to CoAP PUT. Servers pass the received value unchanged to storage. An
+absent header or option means `1` (local access only), so old clients can still
+use terminal stores. Invalid wire values are rejected. Peers that ignore these
+extensions can still serve blocks, but do not enforce forwarding limits.
 
 HTTP and S3 report an exhausted downstream limit with HTTP 508; CoAP uses 5.08.
 Client errors for those responses match `eris.ErrTTLExpired` through
