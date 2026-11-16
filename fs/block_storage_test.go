@@ -14,9 +14,11 @@ import (
 // opaqueBlocks has no file system methods and does not use eris.BlockSet.
 // Separate handles show that the writer and reader need only block methods.
 type opaqueBlocks struct {
-	data   map[eris.Reference][]byte
-	reads  int
-	writes int
+	data         map[eris.Reference][]byte
+	reads        int
+	writes       int
+	wantOptions  eris.BlockOptions
+	wrongOptions bool
 }
 
 func (store *opaqueBlocks) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
@@ -29,6 +31,7 @@ func (store *opaqueBlocks) PutBlock(ctx context.Context, block []byte, ttl eris.
 	}
 	store.data[ref] = bytes.Clone(block)
 	store.writes++
+	store.wrongOptions = store.wrongOptions || options != store.wantOptions
 	return ref, nil
 }
 
@@ -39,6 +42,7 @@ func (store *opaqueBlocks) UpdateBlockOptions(context.Context, eris.Reference, e
 //nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
 func (store *opaqueBlocks) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	store.reads++
+	store.wrongOptions = store.wrongOptions || options != store.wantOptions
 	block, ok := store.data[ref]
 	if !ok {
 		return nil, eris.ErrMissingBlock, eris.BlockOptions{}
@@ -47,12 +51,13 @@ func (store *opaqueBlocks) GetBlock(ctx context.Context, ref eris.Reference, ttl
 }
 
 func TestImageThroughBlockStorage(t *testing.T) {
-	store := &opaqueBlocks{data: make(map[eris.Reference][]byte)}
+	options := eris.BlockOptions{HighPriority: true}
+	store := &opaqueBlocks{data: make(map[eris.Reference][]byte), wantOptions: options}
 	var _ eris.BlockStore = store
 
 	plain := bytes.Repeat([]byte("a block storage image "), 4000)
 	packed := strings.Repeat("compress this text ", 4000)
-	nested := erisfs.NewBuilder(store, eris.Secret{1}, eris.BlockOptions{})
+	nested := erisfs.NewBuilder(store, eris.Secret{1}, options)
 	if err := nested.AddFile(context.Background(), "plain", bytes.NewReader(plain), false); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +65,7 @@ func TestImageThroughBlockStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder := erisfs.NewBuilder(store, eris.Secret{1}, eris.BlockOptions{})
+	builder := erisfs.NewBuilder(store, eris.Secret{1}, options)
 	if err := builder.AddSubdirectory("nested", nestedCap); err != nil {
 		t.Fatal(err)
 	}
@@ -82,8 +87,8 @@ func TestImageThroughBlockStorage(t *testing.T) {
 	}
 
 	// Read through a separate handle, as with an external block service.
-	reader := &opaqueBlocks{data: store.data}
-	image, err := erisfs.OpenFS(context.Background(), capability, reader, eris.BlockOptions{})
+	reader := &opaqueBlocks{data: store.data, wantOptions: options}
+	image, err := erisfs.OpenFS(context.Background(), capability, reader, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,5 +133,22 @@ func TestImageThroughBlockStorage(t *testing.T) {
 	}
 	if reader.reads == 0 {
 		t.Fatal("file reads did not use GetBlock")
+	}
+	sub, err := image.Sub(context.Background(), "nested")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subFile, err := sub.Open(context.Background(), "plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(subFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := subFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if reader.wrongOptions || store.wrongOptions {
+		t.Fatal("file system did not forward construction options")
 	}
 }

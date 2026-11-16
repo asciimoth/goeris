@@ -9,6 +9,7 @@ import (
 	"net/url"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/httppriority"
 	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
@@ -35,6 +36,10 @@ func (err *ResponseError) Is(target error) bool {
 // TTLHeader carries the optional request hop limit as a decimal integer from
 // 1 through 255. A missing header permits local storage access only.
 const TTLHeader = httpttl.Header
+
+// HighPriorityHeader carries the optional true priority flag. A missing field
+// means false. It is sent on requests and read from block responses.
+const HighPriorityHeader = httppriority.Header
 
 // Error implements error.
 func (err *ResponseError) Error() string {
@@ -129,10 +134,15 @@ func (client *Client) Resolve(ctx context.Context, urn string, ttl eris.TTL) (*n
 // Request and body read errors omit transport text but retain their causes.
 //
 //nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, _ eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
-	response, err := client.Resolve(ctx, ref.URN(), ttl)
+func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+	request, err := client.NewRequest(ctx, ref.URN(), ttl)
 	if err != nil {
 		return nil, err, eris.BlockOptions{}
+	}
+	httppriority.Set(request.Header, HighPriorityHeader, options)
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return nil, &requestError{cause: err}, eris.BlockOptions{}
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == nethttp.StatusNotFound {
@@ -159,7 +169,7 @@ func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris
 	if err := eris.VerifyBlock(block, ref); err != nil {
 		return nil, err, eris.BlockOptions{}
 	}
-	return block, nil, eris.BlockOptions{}
+	return block, nil, httppriority.Parse(response.Header, HighPriorityHeader)
 }
 
 // OpenContent retrieves remotely decoded ERIS content. The caller must close

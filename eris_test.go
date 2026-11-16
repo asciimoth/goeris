@@ -76,7 +76,7 @@ func TestBlockSetStorage(t *testing.T) {
 	if _, err = blocks.PutBlock(context.Background(), again, 0, BlockOptions{}, pair.Reference, pair.Reference); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("multiple references error = %v", err)
 	}
-	blocks[pair.Reference][0] ^= 1
+	blocks[pair.Reference].Data[0] ^= 1
 	if _, err, _ = blocks.GetBlock(context.Background(), pair.Reference, 0, BlockOptions{}); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("corrupt stored block error = %v", err)
 	}
@@ -424,13 +424,13 @@ func TestDecodeRejectsInvalidData(t *testing.T) {
 	}
 
 	badSize := cloneBlocks(blocks)
-	badSize[capability.Root.Reference] = nil
+	badSize[capability.Root.Reference] = Block{Data: nil}
 	if _, err := Decode(capability, badSize); !errors.Is(err, ErrInvalidBlock) || !errors.Is(err, ErrInvalidBlockSize) {
 		t.Errorf("Decode(bad block size) error = %v", err)
 	}
 
 	corrupt := cloneBlocks(blocks)
-	corrupt[capability.Root.Reference][0] ^= 1
+	corrupt[capability.Root.Reference].Data[0] ^= 1
 	if _, err := Decode(capability, corrupt); !errors.Is(err, ErrInvalidBlock) {
 		t.Errorf("Decode(corrupt block) error = %v", err)
 	}
@@ -446,7 +446,7 @@ func TestDecodeRejectsInvalidData(t *testing.T) {
 	leafBlock, leafPair, _ := EncryptNode(leafNode, Secret{}, 0)
 	if _, err := Decode(
 		Capability{BlockSize: BlockSize1KiB, Root: leafPair},
-		BlockSet{leafPair.Reference: leafBlock},
+		BlockSet{leafPair.Reference: {Data: leafBlock}},
 	); !errors.Is(err, ErrInvalidPadding) {
 		t.Errorf("Decode(bad padding) error = %v", err)
 	}
@@ -461,7 +461,7 @@ func TestDecodeWithLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocks[leafPair.Reference] = leafBlock
+	blocks[leafPair.Reference] = Block{Data: leafBlock}
 	internal := make([]byte, BlockSize1KiB)
 	for i := range 16 {
 		copy(internal[i*PairSize:i*PairSize+32], leafPair.Reference[:])
@@ -471,7 +471,7 @@ func TestDecodeWithLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocks[pair.Reference] = block
+	blocks[pair.Reference] = Block{Data: block}
 	rootNode := make([]byte, BlockSize1KiB)
 	for i := range 2 {
 		copy(rootNode[i*PairSize:i*PairSize+32], pair.Reference[:])
@@ -481,7 +481,7 @@ func TestDecodeWithLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocks[root.Reference] = block
+	blocks[root.Reference] = Block{Data: block}
 	capability := Capability{BlockSize: BlockSize1KiB, Level: 2, Root: root}
 	const contentSize = 32*1024 - 1
 	if _, err := DecodeWithLimit(capability, blocks, contentSize-1); !errors.Is(err, ErrDecodedTooLarge) {
@@ -505,7 +505,7 @@ func TestDecodeWithLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 		if encryptErr != nil {
 			t.Fatal(encryptErr)
 		}
-		blocks[next.Reference] = block
+		blocks[next.Reference] = Block{Data: block}
 		pair = next
 	}
 	large := Capability{BlockSize: BlockSize1KiB, Level: 8, Root: pair}
@@ -522,7 +522,7 @@ func TestDecodeWithLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocks[root.Reference] = block
+	blocks[root.Reference] = Block{Data: block}
 	partial := Capability{BlockSize: BlockSize1KiB, Level: 2, Root: root}
 	if _, err := DecodeWithLimit(partial, blocks, 1024); !errors.Is(err, ErrDecodedTooLarge) {
 		t.Fatalf("early limit error = %v", err)
@@ -552,7 +552,7 @@ func TestInvalidInternalNodes(t *testing.T) {
 		}
 		_, err = Decode(
 			Capability{BlockSize: BlockSize1KiB, Level: 1, Root: pair},
-			BlockSet{pair.Reference: block},
+			BlockSet{pair.Reference: {Data: block}},
 		)
 		if !errors.Is(err, ErrInvalidNode) {
 			t.Errorf("Decode(invalid internal node) error = %v", err)
@@ -568,7 +568,7 @@ func TestInvalidInternalNodes(t *testing.T) {
 	block, root, _ := EncryptNode(node, Secret{}, 1)
 	_, err := Decode(
 		Capability{BlockSize: BlockSize1KiB, Level: 1, Root: root},
-		BlockSet{root.Reference: block},
+		BlockSet{root.Reference: {Data: block}},
 	)
 	if !errors.Is(err, ErrMissingBlock) {
 		t.Errorf("Decode(missing child) error = %v", err)
@@ -581,13 +581,13 @@ func TestDecodeRejectsNoncanonicalTreeShape(t *testing.T) {
 	leaf := make([]byte, BlockSize1KiB)
 	leaf[0] = 0x80
 	leafBlock, leafPair, _ := EncryptNode(leaf, Secret{}, 0)
-	blocks[leafPair.Reference] = leafBlock
+	blocks[leafPair.Reference] = Block{Data: leafBlock}
 
 	internal := make([]byte, BlockSize1KiB)
 	copy(internal[:32], leafPair.Reference[:])
 	copy(internal[32:PairSize], leafPair.Key[:])
 	oneBlock, onePair, _ := EncryptNode(internal, Secret{}, 1)
-	blocks[onePair.Reference] = oneBlock
+	blocks[onePair.Reference] = Block{Data: oneBlock}
 	if _, err := Decode(Capability{BlockSize: BlockSize1KiB, Level: 1, Root: onePair}, blocks); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("one-child root error = %v", err)
 	}
@@ -597,7 +597,7 @@ func TestDecodeRejectsNoncanonicalTreeShape(t *testing.T) {
 	copy(internal[PairSize:PairSize+32], onePair.Reference[:])
 	copy(internal[PairSize+32:2*PairSize], onePair.Key[:])
 	twoBlock, twoPair, _ := EncryptNode(internal, Secret{}, 2)
-	blocks[twoPair.Reference] = twoBlock
+	blocks[twoPair.Reference] = Block{Data: twoBlock}
 	if _, err := Decode(Capability{BlockSize: BlockSize1KiB, Level: 2, Root: twoPair}, blocks); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("short non-final subtree error = %v", err)
 	}
@@ -606,7 +606,7 @@ func TestDecodeRejectsNoncanonicalTreeShape(t *testing.T) {
 func cloneBlocks(source BlockSet) BlockSet {
 	clone := make(BlockSet, len(source))
 	for ref, block := range source {
-		clone[ref] = bytes.Clone(block)
+		clone[ref] = Block{Data: bytes.Clone(block.Data), Options: block.Options}
 	}
 	return clone
 }

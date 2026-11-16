@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/httppriority"
 	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
@@ -106,7 +107,7 @@ func (handler Handler) get(writer http.ResponseWriter, request *http.Request, re
 			return
 		}
 	}
-	block, err := handler.getBlock(request.Context(), ref, ttl)
+	block, options, err := handler.getBlock(request.Context(), ref, ttl, httppriority.Parse(request.Header, HighPriorityHeader))
 	if err != nil {
 		if errors.Is(err, eris.ErrTTLExpired) {
 			writeS3Error(writer, http.StatusLoopDetected, "LoopDetected", "The request TTL is exhausted.")
@@ -121,6 +122,7 @@ func (handler Handler) get(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store returned an invalid block.")
 		return
 	}
+	httppriority.Set(writer.Header(), HighPriorityHeader, options)
 	writer.Header().Set("Content-Type", ContentType)
 	writer.Header().Set("Cache-Control", "max-age=31536000, immutable")
 	http.ServeContent(writer, request, ref.String(), time.Time{}, bytes.NewReader(block))
@@ -172,7 +174,7 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store is not writable.")
 		return
 	}
-	if err := handler.putBlock(request.Context(), ref, block, ttl); err != nil {
+	if err := handler.putBlock(request.Context(), ref, block, ttl, httppriority.Parse(request.Header, HighPriorityHeader)); err != nil {
 		if errors.Is(err, eris.ErrTTLExpired) {
 			writeS3Error(writer, http.StatusLoopDetected, "LoopDetected", "The request TTL is exhausted.")
 		} else if errors.Is(err, eris.ErrInvalidBlock) {
@@ -199,19 +201,19 @@ func publicReadACL(headers http.Header) bool {
 	return found
 }
 
-func (handler Handler) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (handler Handler) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, eris.BlockOptions, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, eris.BlockOptions{}, err
 	}
-	blockResult, blockErr, _ := handler.Blocks.GetBlock(ctx, ref, ttl, eris.BlockOptions{})
-	return blockResult, blockErr
+	block, err, stored := handler.Blocks.GetBlock(ctx, ref, ttl, options)
+	return block, stored, err
 }
 
-func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte, ttl eris.TTL) error {
+func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte, ttl eris.TTL, options eris.BlockOptions) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	stored, err := handler.Blocks.(eris.BlockSink).PutBlock(ctx, block, ttl, eris.BlockOptions{}, ref)
+	stored, err := handler.Blocks.(eris.BlockSink).PutBlock(ctx, block, ttl, options, ref)
 	if err != nil {
 		return err
 	}

@@ -19,6 +19,9 @@ import (
 // the handler fields while ServeCOAP is active.
 // Unsupported critical options are rejected before storage is called.
 type Handler struct {
+	// ExperimentalHighPriority enables the experimental priority option.
+	// It must be enabled at both endpoints, only for non-operational experiments.
+	ExperimentalHighPriority bool
 	// Path contains the store path before its final blocks segment.
 	Path []string
 	// Blocks supplies reads and, when it also implements eris.BlockSink, writes.
@@ -120,7 +123,7 @@ func (handler Handler) get(ctx context.Context, request *protocol.Message) *prot
 	if size, present, sizeErr := oneUintOption(request, protocol.OptionSize1); sizeErr != nil || present && !eris.BlockSize(size).Valid() {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
-	block, err := handler.getBlock(ctx, ref, requestTTL(request))
+	block, err, options := handler.Blocks.GetBlock(ctx, ref, requestTTL(request), priorityOptions(request, handler.ExperimentalHighPriority))
 	if err != nil {
 		if errors.Is(err, eris.ErrTTLExpired) {
 			return &protocol.Message{Code: protocol.HopLimitReached}
@@ -133,7 +136,7 @@ func (handler Handler) get(ctx context.Context, request *protocol.Message) *prot
 	if err := eris.VerifyBlock(block, ref); err != nil {
 		return &protocol.Message{Code: protocol.InternalServerError}
 	}
-	return &protocol.Message{
+	response := &protocol.Message{
 		Code: protocol.Content,
 		Options: []protocol.Option{
 			protocol.UintOption(protocol.OptionContentFormat, ContentFormatOctetStream),
@@ -141,6 +144,8 @@ func (handler Handler) get(ctx context.Context, request *protocol.Message) *prot
 		},
 		Payload: append([]byte(nil), block...),
 	}
+	setPriority(response, options, handler.ExperimentalHighPriority)
+	return response
 }
 
 func (handler Handler) put(ctx context.Context, request *protocol.Message) *protocol.Message {
@@ -177,7 +182,7 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 	if err != nil || len(expected) == 1 && expected[0] != actual {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
-	ref, err := handler.putBlock(ctx, request.Payload, requestTTL(request), expected...)
+	ref, err := handler.putBlock(ctx, request.Payload, requestTTL(request), priorityOptions(request, handler.ExperimentalHighPriority), expected...)
 	if err != nil {
 		if errors.Is(err, eris.ErrTTLExpired) {
 			return &protocol.Message{Code: protocol.HopLimitReached}
@@ -196,18 +201,13 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 	return &protocol.Message{Code: protocol.Created, Payload: ref[:]}
 }
 
-func (handler Handler) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	blockResult, blockErr, _ := handler.Blocks.GetBlock(ctx, ref, ttl, eris.BlockOptions{})
-	return blockResult, blockErr
-}
-
 func (handler Handler) writable() bool {
 	_, sink := handler.Blocks.(eris.BlockSink)
 	return sink
 }
 
-func (handler Handler) putBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
-	return handler.Blocks.(eris.BlockSink).PutBlock(ctx, append([]byte(nil), block...), ttl, eris.BlockOptions{}, expected...)
+func (handler Handler) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
+	return handler.Blocks.(eris.BlockSink).PutBlock(ctx, append([]byte(nil), block...), ttl, options, expected...)
 }
 
 var _ protocol.Handler = Handler{}

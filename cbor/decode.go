@@ -131,7 +131,7 @@ func (decoder *decoder) blockMap() (Element, error) {
 		if verifyErr := eris.VerifyBlock(block, reference); verifyErr != nil {
 			return Element{}, ErrInvalidElement
 		}
-		blocks[reference] = cloneBytes(block)
+		blocks[reference] = eris.Block{Data: cloneBytes(block)}
 	}
 	return Element{kind: BlockMapKind, blockMap: blocks}, nil
 }

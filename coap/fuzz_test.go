@@ -180,7 +180,7 @@ func FuzzBlockWiseHandler(f *testing.F) {
 		}
 		blocks := make(eris.BlockSet)
 		download, reference := makeBlock(int(eris.BlockSize32KiB), 7)
-		blocks[reference] = download
+		blocks[reference] = eris.Block{Data: download}
 		handler, err := (Handler{Blocks: blocks, AllowPut: true, MaxTransfers: 2}).BlockWise(protocol.BlockWiseConfig{})
 		if err != nil {
 			t.Fatal(err)
@@ -234,7 +234,7 @@ func FuzzBlockWiseHandler(f *testing.F) {
 			}
 		}
 		for ref, block := range blocks {
-			if err := eris.VerifyBlock(block, ref); err != nil {
+			if err := eris.VerifyBlock(block.Data, ref); err != nil {
 				t.Fatalf("invalid stored block: %v", err)
 			}
 		}

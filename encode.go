@@ -12,7 +12,7 @@ func Encode(content []byte, secret Secret, blockSize BlockSize) (Capability, Blo
 	pairs := make([]Pair, 0, len(padded)/int(blockSize))
 	for offset := 0; offset < len(padded); offset += int(blockSize) {
 		block, pair, _ := EncryptNode(padded[offset:offset+int(blockSize)], secret, 0)
-		blocks[pair.Reference] = block
+		blocks[pair.Reference] = Block{Data: block}
 		pairs = append(pairs, pair)
 	}
 
@@ -42,7 +42,7 @@ func encodeLevel(pairs []Pair, secret Secret, blockSize BlockSize, level Level, 
 			copy(node[pairOffset+32:pairOffset+PairSize], pair.Key[:])
 		}
 		block, pair, _ := EncryptNode(node, secret, level)
-		blocks[pair.Reference] = block
+		blocks[pair.Reference] = Block{Data: block}
 		parents = append(parents, pair)
 	}
 	return parents

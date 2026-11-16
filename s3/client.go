@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/httppriority"
 	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
@@ -23,6 +24,10 @@ type HTTPClient interface {
 // 1 through 255. It is signed with the request and is not object metadata.
 // A missing header permits local storage access only.
 const TTLHeader = httpttl.Header
+
+// HighPriorityHeader carries the optional true priority flag. A missing field
+// means false. It is sent on requests and read from block responses.
+const HighPriorityHeader = httppriority.S3Header
 
 // Client reads and writes ERIS blocks in one S3 bucket.
 type Client struct {
@@ -58,10 +63,10 @@ func NewClient(httpClient HTTPClient, store StoreURL, signer Signer) (*Client, e
 // signer. It does not execute the request. Only GET, HEAD, and PUT are allowed.
 // It sets TTLHeader to ttl.Forward() before signing, or returns eris.ErrTTLExpired.
 func (client *Client) NewRequest(ctx context.Context, method string, ref eris.Reference, block []byte, ttl eris.TTL) (*http.Request, error) {
-	return client.newRequest(ctx, method, ref, block, ttl, true)
+	return client.newRequest(ctx, method, ref, block, ttl, true, eris.BlockOptions{})
 }
 
-func (client *Client) newRequest(ctx context.Context, method string, ref eris.Reference, block []byte, ttl eris.TTL, check bool) (*http.Request, error) {
+func (client *Client) newRequest(ctx context.Context, method string, ref eris.Reference, block []byte, ttl eris.TTL, check bool, options eris.BlockOptions) (*http.Request, error) {
 	if client == nil || client.httpClient == nil {
 		return nil, ErrNilHTTPClient
 	}
@@ -95,6 +100,7 @@ func (client *Client) newRequest(ctx context.Context, method string, ref eris.Re
 	if err := httpttl.Set(request.Header, ttl); err != nil {
 		return nil, err
 	}
+	httppriority.Set(request.Header, HighPriorityHeader, options)
 	if client.signer != nil {
 		if err := client.signer.Sign(request, block); err != nil {
 			return nil, err
@@ -106,8 +112,8 @@ func (client *Client) newRequest(ctx context.Context, method string, ref eris.Re
 // GetBlock retrieves and verifies one block.
 //
 //nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, _ eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
-	request, err := client.newRequest(ctx, http.MethodGet, ref, nil, ttl, true)
+func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+	request, err := client.newRequest(ctx, http.MethodGet, ref, nil, ttl, true, options)
 	if err != nil {
 		return nil, err, eris.BlockOptions{}
 	}
@@ -133,11 +139,11 @@ func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris
 	if err := eris.VerifyBlock(block, ref); err != nil {
 		return nil, err, eris.BlockOptions{}
 	}
-	return block, nil, eris.BlockOptions{}
+	return block, nil, httppriority.Parse(response.Header, HighPriorityHeader)
 }
 
 // PutBlock stores one block and returns its reference.
-func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, _ eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
+func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	if client == nil || client.httpClient == nil {
 		return eris.Reference{}, ErrNilHTTPClient
 	}
@@ -151,7 +157,7 @@ func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, 
 	if len(expected) > 1 || len(expected) == 1 && expected[0] != ref {
 		return eris.Reference{}, eris.ErrInvalidBlock
 	}
-	request, err := client.newRequest(ctx, http.MethodPut, ref, block, ttl, false)
+	request, err := client.newRequest(ctx, http.MethodPut, ref, block, ttl, false, options)
 	if err != nil {
 		return eris.Reference{}, err
 	}
@@ -174,7 +180,8 @@ func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, 
 	return ref, nil
 }
 
-// UpdateBlockOptions does nothing because block options are not supported.
+// UpdateBlockOptions does nothing because this transport has no explicit
+// options-update operation. PutBlock can send options with a block.
 // It always returns false, nil, without checking context or TTL.
 func (client *Client) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
 	return false, nil

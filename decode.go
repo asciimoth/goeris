@@ -75,10 +75,10 @@ func (inspector *decodeInspector) node(pair Pair, level Level) ([]byte, error) {
 	if !ok {
 		return nil, ErrMissingBlock
 	}
-	if len(block) != int(inspector.blockSize) {
+	if len(block.Data) != int(inspector.blockSize) {
 		return nil, errors.Join(ErrInvalidBlock, ErrInvalidBlockSize)
 	}
-	return DecryptNode(block, pair, level)
+	return DecryptNode(block.Data, pair, level)
 }
 
 func (inspector *decodeInspector) pairs(pair Pair, level Level, root bool) ([]Pair, error) {
@@ -160,10 +160,10 @@ func decodeNode(pair Pair, level Level, blockSize BlockSize, blocks BlockSet, ro
 	if !ok {
 		return nil, 0, ErrMissingBlock
 	}
-	if len(block) != int(blockSize) {
+	if len(block.Data) != int(blockSize) {
 		return nil, 0, errors.Join(ErrInvalidBlock, ErrInvalidBlockSize)
 	}
-	node, err := DecryptNode(block, pair, level)
+	node, err := DecryptNode(block.Data, pair, level)
 	if err != nil {
 		return nil, 0, err
 	}

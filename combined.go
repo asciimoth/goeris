@@ -29,8 +29,8 @@ var ErrNoBlockStorage = errors.New("eris: no compatible block storage")
 // store passes arguments through and does not verify blocks again.
 // Every attempt receives the original TTL unchanged, including NoTTL and
 // LocalTTL. Only a downstream network client consumes a forward.
-// Each attempt receives a copy of options. Reads currently discard the returned
-// options and return BlockOptions{}.
+// Each attempt receives the original options. Reads return the options from
+// the successful source, or zero options if all attempts fail.
 //
 // Concurrent calls are safe if the wrapped stores and OnError support concurrent
 // calls and no caller changes OnError during use.
@@ -84,11 +84,15 @@ func NewCombinedBlockStore(stores ...any) *CombinedBlockStore {
 //
 //nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
 func (store *CombinedBlockStore) GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
-	block, err := tryBlockStores(ctx, store.get, store.OnError, func(get func(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions)) ([]byte, error) {
-		block, err, _ := get(ctx, ref, ttl, options)
-		return block, err
+	type result struct {
+		block   []byte
+		options BlockOptions
+	}
+	got, err := tryBlockStores(ctx, store.get, store.OnError, func(get func(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions)) (result, error) {
+		block, err, stored := get(ctx, ref, ttl, options)
+		return result{block, stored}, err
 	})
-	return block, err, BlockOptions{}
+	return got.block, err, got.options
 }
 
 // PutBlock tries each sink until a write succeeds. It passes ctx unchanged.

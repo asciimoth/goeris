@@ -86,7 +86,7 @@ func (store storeFunc) UpdateBlockOptions(context.Context, eris.Reference, eris.
 func TestHandlerReads(t *testing.T) {
 	t.Parallel()
 	ref, block := testBlock(t)
-	blocks := eris.BlockSet{ref: block}
+	blocks := eris.BlockSet{ref: {Data: block}}
 	handler := Handler{Blocks: blocks, Bucket: "blocks"}
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		request := httptest.NewRequest(method, "https://s3.example/blocks/"+ref.String(), nil)
@@ -176,7 +176,7 @@ func TestHandlerRoutingAndReadErrors(t *testing.T) {
 		{"missing", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 404},
 		{"source error", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, sentinel }), Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 500},
 		{"corrupt", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrInvalidBlock }), Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 500},
-		{"method", Handler{Blocks: eris.BlockSet{ref: block}, Bucket: "blocks"}, http.MethodDelete, "/blocks/" + ref.String(), 405},
+		{"method", Handler{Blocks: eris.BlockSet{ref: {Data: block}}, Bucket: "blocks"}, http.MethodDelete, "/blocks/" + ref.String(), 405},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -298,7 +298,7 @@ func TestHandlerAllowHeader(t *testing.T) {
 		{"writable", true, "GET, HEAD, PUT"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			handler := Handler{Blocks: eris.BlockSet{ref: block}, Bucket: "blocks", AllowPut: test.allowPut}
+			handler := Handler{Blocks: eris.BlockSet{ref: {Data: block}}, Bucket: "blocks", AllowPut: test.allowPut}
 			request := httptest.NewRequest(http.MethodDelete, "https://example/blocks/"+ref.String(), nil)
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
@@ -395,7 +395,7 @@ func FuzzHandlerPath(f *testing.F) {
 	f.Add(http.MethodGet, "/blocks/"+ref.String())
 	f.Add(http.MethodPut, "/blocks/bad")
 	f.Fuzz(func(t *testing.T, method, path string) {
-		handler := Handler{Blocks: eris.BlockSet{ref: block}, Bucket: "blocks"}
+		handler := Handler{Blocks: eris.BlockSet{ref: {Data: block}}, Bucket: "blocks"}
 		request := httptest.NewRequest(http.MethodGet, "https://example/", nil)
 		request.Method = method
 		request.URL.Path = path

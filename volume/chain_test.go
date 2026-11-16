@@ -53,7 +53,7 @@ func TestChainReads(t *testing.T) {
 	ref, _ := elements[0].Reference()
 	writeFile(t, filepath.Join("first", volume.BlockPath(ref)), []byte("corrupt"))
 	got, err, _ := chain.GetBlock(context.Background(), ref, 1, eris.BlockOptions{})
-	if err != nil || !bytes.Equal(got, blocks[ref]) {
+	if err != nil || !bytes.Equal(got, blocks[ref].Data) {
 		t.Fatalf("CBOR fallback: length %d, %v", len(got), err)
 	}
 	if !reflect.DeepEqual(indexes, []int{0}) || !errors.Is(failures[0], eris.ErrInvalidBlock) {

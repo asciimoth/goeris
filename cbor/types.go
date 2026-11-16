@@ -69,14 +69,15 @@ func NewReference(reference eris.Reference) Element {
 }
 
 // NewBlockMap creates a block-map element. It verifies that each reference
-// identifies its block.
+// identifies its block. Storage options are omitted: the ERIS CBOR format
+// has no field for them.
 func NewBlockMap(blocks eris.BlockSet) (Element, error) {
 	cloned := make(eris.BlockSet, len(blocks))
 	for reference, block := range blocks {
-		if err := eris.VerifyBlock(block, reference); err != nil {
+		if err := eris.VerifyBlock(block.Data, reference); err != nil {
 			return Element{}, fmt.Errorf("%w: %w", ErrInvalidElement, err)
 		}
-		cloned[reference] = cloneBytes(block)
+		cloned[reference] = eris.Block{Data: cloneBytes(block.Data)}
 	}
 	return Element{kind: BlockMapKind, blockMap: cloned}, nil
 }
@@ -114,7 +115,7 @@ func (element Element) BlockMap() (eris.BlockSet, bool) {
 	}
 	cloned := make(eris.BlockSet, len(element.blockMap))
 	for reference, block := range element.blockMap {
-		cloned[reference] = cloneBytes(block)
+		cloned[reference] = eris.Block{Data: cloneBytes(block.Data)}
 	}
 	return cloned, true
 }
@@ -133,7 +134,7 @@ func (element Element) validate() error {
 		return nil
 	case BlockMapKind:
 		for reference, block := range element.blockMap {
-			if err := eris.VerifyBlock(block, reference); err != nil {
+			if err := eris.VerifyBlock(block.Data, reference); err != nil {
 				return err
 			}
 		}

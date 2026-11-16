@@ -13,6 +13,10 @@ import (
 // sends 1 KiB blocks in one message, and uses block-wise transfer for 32 KiB
 // blocks.
 type ClientConfig struct {
+	// ExperimentalHighPriority enables option 65020 on block requests and
+	// responses. It is disabled by default. Use only in coordinated experiments;
+	// RFC 7252 does not permit operational use of experimental option numbers.
+	ExperimentalHighPriority bool
 	// Request controls URI-query, size-hint, and proxy options.
 	Request RequestConfig
 	// Transfer controls single-message and RFC 7959 block-wise transfers.
@@ -49,7 +53,7 @@ func NewClient(requester protocol.Requester, store StoreURL, config ClientConfig
 // GetBlock retrieves and verifies one encrypted block.
 //
 //nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, _ eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	if client == nil || client.requester == nil {
 		return nil, ErrNilRequester, eris.BlockOptions{}
 	}
@@ -61,6 +65,7 @@ func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris
 	if err != nil {
 		return nil, err, eris.BlockOptions{}
 	}
+	setPriority(request, options, client.config.ExperimentalHighPriority)
 	response, err := protocol.RequestBody(ctx, &limitedRequester{
 		requester: client.requester, remaining: int(eris.BlockSize32KiB), remainingOptions: MaxTransferResponseOptionSize,
 	}, request, client.config.Transfer)
@@ -83,13 +88,13 @@ func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris
 	if err := eris.VerifyBlock(block, ref); err != nil {
 		return nil, err, eris.BlockOptions{}
 	}
-	return block, nil, eris.BlockOptions{}
+	return block, nil, priorityOptions(response, client.config.ExperimentalHighPriority)
 }
 
 // PutBlock stores one encrypted block and returns its reference. If an
 // older server returns no reference, it computes the reference locally when
 // no expected reference was supplied.
-func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, _ eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
+func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	if client == nil || client.requester == nil {
 		return eris.Reference{}, ErrNilRequester
 	}
@@ -119,6 +124,7 @@ func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, 
 		request.Options = append(request.Options, protocol.NewOption(292, tag[:]))
 		sortOptions(request.Options)
 	}
+	setPriority(request, options, client.config.ExperimentalHighPriority)
 	response, err := protocol.RequestBody(ctx, &limitedRequester{
 		requester: client.requester, remaining: int(eris.BlockSize32KiB), remainingOptions: MaxTransferResponseOptionSize,
 	}, request, client.config.Transfer)
@@ -148,7 +154,8 @@ func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, 
 	return ref, nil
 }
 
-// UpdateBlockOptions does nothing because block options are not supported.
+// UpdateBlockOptions does nothing because ERIS over CoAP has no explicit
+// options-update operation. PutBlock can send experimental priority hints.
 // It always returns false, nil, without checking context or TTL.
 func (client *Client) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
 	return false, nil

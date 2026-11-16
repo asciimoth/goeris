@@ -28,7 +28,7 @@ func TestHandlerHugeContentRanges(t *testing.T) {
 			t.Fatal(err)
 		}
 		pair = next
-		blocks[pair.Reference] = block
+		blocks[pair.Reference] = eris.Block{Data: block}
 		for offset := 0; offset < len(node); offset += eris.PairSize {
 			copy(node[offset:], pair.Reference[:])
 			copy(node[offset+32:], pair.Key[:])
@@ -199,7 +199,7 @@ func TestHandlerContentLimitAllowsEmptyContentAndBlockReads(t *testing.T) {
 		Handler{Blocks: blocks, MaxContentSize: 1}.ServeHTTP(response, request)
 		want := []byte(nil)
 		if urn == capability.Root.Reference.URN() {
-			want = blocks[capability.Root.Reference]
+			want = blocks[capability.Root.Reference].Data
 		}
 		if response.Code != nethttp.StatusOK || !bytes.Equal(response.Body.Bytes(), want) {
 			t.Fatalf("%s: status %d, body %d bytes", urn, response.Code, response.Body.Len())
@@ -217,7 +217,7 @@ func TestHandlerLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocks[pair.Reference] = block
+	blocks[pair.Reference] = eris.Block{Data: block}
 	for level := eris.Level(1); level <= 8; level++ {
 		for offset := 0; offset < len(node); offset += eris.PairSize {
 			copy(node[offset:], pair.Reference[:])
@@ -227,7 +227,7 @@ func TestHandlerLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		blocks[pair.Reference] = block
+		blocks[pair.Reference] = eris.Block{Data: block}
 	}
 	capability := eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 8, Root: pair}
 	calls := 0

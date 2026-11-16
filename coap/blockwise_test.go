@@ -269,7 +269,7 @@ func TestBlockWiseActiveRequestIsNotExpired(t *testing.T) {
 func TestBlockWiseDownloadLimit(t *testing.T) {
 	t.Parallel()
 	block, ref := makeBlock(int(eris.BlockSize32KiB), 5)
-	handler, err := (Handler{Blocks: eris.BlockSet{ref: block}, MaxTransfers: 1}).BlockWise(protocol.BlockWiseConfig{})
+	handler, err := (Handler{Blocks: eris.BlockSet{ref: {Data: block}}, MaxTransfers: 1}).BlockWise(protocol.BlockWiseConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestBlockWiseDownloadLimit(t *testing.T) {
 
 func TestBlockWiseExplicitFirstBlock(t *testing.T) {
 	block, ref := makeBlock(int(eris.BlockSize32KiB), 27)
-	handler, err := (Handler{Blocks: eris.BlockSet{ref: block}}).BlockWise(protocol.BlockWiseConfig{})
+	handler, err := (Handler{Blocks: eris.BlockSet{ref: {Data: block}}}).BlockWise(protocol.BlockWiseConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +464,7 @@ func TestBlockWiseRejectsMetadataBeforeKeepingState(t *testing.T) {
 
 func TestBlockWiseValidatesCachedDownloadRequests(t *testing.T) {
 	block, ref := makeBlock(int(eris.BlockSize32KiB), 5)
-	handler, err := (Handler{Blocks: eris.BlockSet{ref: block}}).BlockWise(protocol.BlockWiseConfig{})
+	handler, err := (Handler{Blocks: eris.BlockSet{ref: {Data: block}}}).BlockWise(protocol.BlockWiseConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

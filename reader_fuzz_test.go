@@ -68,7 +68,7 @@ func FuzzTreeShape(f *testing.F) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			blocks[pair.Reference] = block
+			blocks[pair.Reference] = Block{Data: block}
 			return pair
 		}
 		putPair := func(node []byte, index int, pair Pair) {

@@ -93,7 +93,8 @@ func BlockPath(ref eris.Reference) string {
 
 // GetBlock reads and verifies a block. It tries the flat path only when the
 // canonical path is absent. For a file root, it searches the ERIS CBOR contents.
-// Missing blocks match eris.ErrMissingBlock. It ignores ttl.
+// Missing blocks match eris.ErrMissingBlock. It ignores ttl and HighPriority.
+// Returned block options are always zero.
 // It checks cancellation between file operations.
 // Cancellation cannot interrupt a file-system call that is already in progress.
 //
@@ -184,7 +185,8 @@ func (v *Volume) read(ctx context.Context, name string, ref eris.Reference) ([]b
 // A regular file root returns ErrNotDirectory and is never changed.
 // It syncs the block before rename and the directories afterward where supported.
 // A directory-sync error can be returned after the complete block is visible.
-// It ignores ttl and checks cancellation between file operations.
+// It ignores ttl and block options, including HighPriority, and checks
+// cancellation between file operations.
 // Cancellation cannot interrupt a file-system call that is already in progress.
 // Once the final rename starts, the block can be stored despite cancellation.
 func (v *Volume) PutBlock(ctx context.Context, block []byte, _ eris.TTL, _ eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {

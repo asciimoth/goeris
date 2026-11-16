@@ -35,7 +35,7 @@ func TestCombinedPreservesTTL(t *testing.T) {
 	for _, ttl := range []TTL{NoTTL, LocalTTL, 2, 16, 255} {
 		for _, wrapped := range []bool{false, true} {
 			first := &ttlProbe{fail: true}
-			last := &ttlProbe{BlockSet: BlockSet{ref: block}}
+			last := &ttlProbe{BlockSet: BlockSet{ref: {Data: block}}}
 			var store *CombinedBlockStore
 			if wrapped {
 				store = NewCombinedBlockStore(struct{ BlockStore }{first}, struct{ BlockStore }{last})

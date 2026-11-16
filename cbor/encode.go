@@ -107,7 +107,7 @@ func appendBlockMap(dst []byte, blocks eris.BlockSet) []byte {
 	dst = cborwire.AppendHead(dst, 5, uint64(len(references)))
 	for _, reference := range references {
 		dst = appendByteString(dst, reference[:])
-		dst = appendByteString(dst, blocks[reference])
+		dst = appendByteString(dst, blocks[reference].Data)
 	}
 	return dst
 }

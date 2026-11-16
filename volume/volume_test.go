@@ -363,13 +363,14 @@ func TestEncodedContentRoundTrip(t *testing.T) {
 	}
 	v := openVolume(t, t.TempDir())
 	for ref, block := range blocks {
-		if _, err := v.PutBlock(context.Background(), block, eris.NoTTL, eris.BlockOptions{}, ref); err != nil {
+		if _, err := v.PutBlock(context.Background(), block.Data, eris.NoTTL, eris.BlockOptions{}, ref); err != nil {
 			t.Fatal(err)
 		}
 	}
 	stored := make(eris.BlockSet)
 	for ref := range blocks {
-		stored[ref], err, _ = v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{})
+		block, err, options := v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{})
+		stored[ref] = eris.Block{Data: block, Options: options}
 		if err != nil {
 			t.Fatal(err)
 		}

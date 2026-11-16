@@ -128,11 +128,22 @@ type Pair struct {
 // Encode owns the slices in the set. Decode does not modify them. Concurrent
 // reads are safe only while no caller changes the map or its blocks.
 // BlockSet is a terminal store and ignores TTL and context cancellation for
-// reads and writes. Its operations complete in memory.
-type BlockSet map[Reference][]byte
+// reads and writes. Its operations complete in memory. Puts keep the highest
+// HighPriority value; explicit option updates can raise or lower it.
+type BlockSet map[Reference]Block
+
+// Block holds encrypted block data and its storage options. Direct map writes
+// replace the data and options together; omitted options are zero.
+// Use BlockSet.PutBlock to copy and verify the data and to preserve the highest
+// priority on repeated writes.
+type Block struct {
+	Data    []byte
+	Options BlockOptions
+}
 
 // GetBlock verifies and returns a copy of the encrypted block for ref. The map
-// can be changed directly, so each read checks the reference.
+// can be changed directly, so each read checks the reference. It returns stored
+// options and ignores request options.
 //
 //nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
 func (s BlockSet) GetBlock(_ context.Context, ref Reference, _ TTL, _ BlockOptions) ([]byte, error, BlockOptions) {
@@ -140,15 +151,16 @@ func (s BlockSet) GetBlock(_ context.Context, ref Reference, _ TTL, _ BlockOptio
 	if !ok {
 		return nil, ErrMissingBlock, BlockOptions{}
 	}
-	if err := VerifyBlock(block, ref); err != nil {
+	if err := VerifyBlock(block.Data, ref); err != nil {
 		return nil, err, BlockOptions{}
 	}
-	return append([]byte(nil), block...), nil, BlockOptions{}
+	return append([]byte(nil), block.Data...), nil, block.Options
 }
 
 // PutBlock stores a copy of an encrypted block and returns its reference. It
-// rejects a block that does not match an optional expected reference.
-func (s BlockSet) PutBlock(_ context.Context, block []byte, _ TTL, _ BlockOptions, expected ...Reference) (Reference, error) {
+// rejects a block that does not match an optional expected reference. Repeated
+// puts keep HighPriority true if either the stored or supplied value is true.
+func (s BlockSet) PutBlock(_ context.Context, block []byte, _ TTL, options BlockOptions, expected ...Reference) (Reference, error) {
 	if s == nil {
 		return Reference{}, ErrMissingBlock
 	}
@@ -159,14 +171,22 @@ func (s BlockSet) PutBlock(_ context.Context, block []byte, _ TTL, _ BlockOption
 	if len(expected) > 1 || len(expected) == 1 && expected[0] != ref {
 		return Reference{}, ErrInvalidBlock
 	}
-	s[ref] = append([]byte(nil), block...)
+	options.HighPriority = options.HighPriority || s[ref].Options.HighPriority
+	s[ref] = Block{Data: append([]byte(nil), block...), Options: options}
 	return ref, nil
 }
 
-// UpdateBlockOptions does nothing because block options are not supported.
-// It always returns false, nil, without checking context or TTL.
-func (s BlockSet) UpdateBlockOptions(context.Context, Reference, TTL, BlockOptions) (bool, error) {
-	return false, nil
+// UpdateBlockOptions replaces the options of an existing block. It can raise
+// or lower priority. It returns false if the block is absent or unchanged.
+// Like GetBlock and PutBlock, it ignores context cancellation and TTL.
+func (s BlockSet) UpdateBlockOptions(_ context.Context, ref Reference, _ TTL, options BlockOptions) (bool, error) {
+	block, ok := s[ref]
+	if !ok || block.Options == options {
+		return false, nil
+	}
+	block.Options = options
+	s[ref] = block
+	return true, nil
 }
 
 var _ BlockStore = BlockSet(nil)

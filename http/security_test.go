@@ -31,7 +31,7 @@ func TestClientCancelsPartialResponse(t *testing.T) {
 				defer close(stopped)
 				w.Header().Set("Content-Type", ContentType)
 				// Send only part of a block, then stall until cancellation.
-				_, _ = w.Write(blocks[capability.Root.Reference][:16])
+				_, _ = w.Write(blocks[capability.Root.Reference].Data[:16])
 				w.(nethttp.Flusher).Flush()
 				close(started)
 				select {
@@ -89,7 +89,7 @@ func TestClientCancelsPartialResponse(t *testing.T) {
 
 func TestHandlerAbortsFailedStream(t *testing.T) {
 	capability, blocks, _ := testData(t)
-	root, err := eris.DecryptNode(blocks[capability.Root.Reference], capability.Root, capability.Level)
+	root, err := eris.DecryptNode(blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestHandlerRejectsQuerySuffixesWithoutSourceAccess(t *testing.T) {
 
 func TestHandlerStreamFailureClosesResponse(t *testing.T) {
 	capability, blocks, _ := testData(t)
-	root, err := eris.DecryptNode(blocks[capability.Root.Reference], capability.Root, capability.Level)
+	root, err := eris.DecryptNode(blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func TestClientRejectsUnexpectedSuccessStatus(t *testing.T) {
 	ref := capability.Root.Reference
 	base, _ := url.Parse("http://example.test")
 	for _, status := range []int{201, 202, 204, 206, 299} {
-		body := &trackingBody{Reader: bytes.NewReader(blocks[ref])}
+		body := &trackingBody{Reader: bytes.NewReader(blocks[ref].Data)}
 		client, err := NewClient(clientFunc(func(*nethttp.Request) (*nethttp.Response, error) {
 			res := response(status, ContentType, nil)
 			res.Body = body
@@ -504,7 +504,7 @@ func (writer failedStreamWriter) Write([]byte) (int, error) {
 
 func TestHandlerReturnsAfterMultipartWriteFailure(t *testing.T) {
 	capability, blocks, _ := testData(t)
-	root, err := eris.DecryptNode(blocks[capability.Root.Reference], capability.Root, capability.Level)
+	root, err := eris.DecryptNode(blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +584,7 @@ func (writer multipartFailureWriter) Write(p []byte) (int, error) {
 
 func TestServerCancelsPendingMultipartRead(t *testing.T) {
 	capability, blocks, _ := testData(t)
-	root, err := eris.DecryptNode(blocks[capability.Root.Reference], capability.Root, capability.Level)
+	root, err := eris.DecryptNode(blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
 	if err != nil {
 		t.Fatal(err)
 	}

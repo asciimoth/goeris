@@ -107,7 +107,7 @@ func serve(t *testing.T, handler protocol.Handler, request *protocol.Message) *p
 func TestHandlerGet(t *testing.T) {
 	t.Parallel()
 	block, ref := makeBlock(int(eris.BlockSize1KiB), 7)
-	blocks := eris.BlockSet{ref: append([]byte(nil), block...)}
+	blocks := eris.BlockSet{ref: {Data: append([]byte(nil), block...)}}
 	handler := Handler{Path: []string{"store"}, Blocks: blocks}
 	store := mustStore(t, "coap://example/store")
 	request, _ := NewGetRequest(store, ref, RequestConfig{SizeHint: eris.BlockSize1KiB})
@@ -317,7 +317,7 @@ func TestHandlerContextNextAndValidation(t *testing.T) {
 	block, ref := makeBlock(int(eris.BlockSize1KiB), 9)
 	type contextKey struct{}
 	key := contextKey{}
-	storage := &contextStore{blocks: eris.BlockSet{ref: block}, key: key, value: "value"}
+	storage := &contextStore{blocks: eris.BlockSet{ref: {Data: block}}, key: key, value: "value"}
 	handler := Handler{Blocks: storage, AllowPut: true}
 	store := mustStore(t, "coap://example/")
 	get, _ := NewGetRequest(store, ref, RequestConfig{})

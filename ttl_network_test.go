@@ -136,7 +136,7 @@ func TestNetworkTTLRoundTrip(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/%d/wrapped=%v", name, ttl, wrapped), func(t *testing.T) {
 					block := make([]byte, eris.BlockSize1KiB)
 					ref, _ := eris.ReferenceOf(block)
-					terminal := &ttlStore{BlockSet: eris.BlockSet{ref: block}}
+					terminal := &ttlStore{BlockSet: eris.BlockSet{ref: {Data: block}}}
 					var target eris.BlockSource = terminal
 					if wrapped {
 						target = struct{ eris.BlockStore }{terminal}
@@ -321,7 +321,7 @@ func TestHTTPServersOptionalTTL(t *testing.T) {
 				{[]string{"2", "3"}, 0, 400}, {[]string{"2, 3"}, 0, 400},
 			} {
 				t.Run(fmt.Sprintf("%s/%s/%v", name, method, test.values), func(t *testing.T) {
-					terminal := &ttlStore{BlockSet: eris.BlockSet{ref: block}}
+					terminal := &ttlStore{BlockSet: eris.BlockSet{ref: {Data: block}}}
 					var handler http.Handler = erishttp.Handler{Blocks: terminal}
 					path := erishttp.N2RPath + "?" + ref.URN()
 					if name == "s3" {
@@ -354,7 +354,7 @@ func TestHTTPServersOptionalTTL(t *testing.T) {
 func TestCoAPServerMissingHopLimitIsLocal(t *testing.T) {
 	block := make([]byte, eris.BlockSize1KiB)
 	ref, _ := eris.ReferenceOf(block)
-	terminal := &ttlStore{BlockSet: eris.BlockSet{ref: block}}
+	terminal := &ttlStore{BlockSet: eris.BlockSet{ref: {Data: block}}}
 	handler := eriscoap.Handler{Blocks: terminal, AllowPut: true}
 	store, err := eriscoap.ParseStoreURL("coap://example/")
 	if err != nil {
@@ -414,7 +414,7 @@ func TestLocalTTLAllowsFallbackAfterNetworkStore(t *testing.T) {
 	}
 	for _, name := range []string{"http", "s3", "coap"} {
 		t.Run(name, func(t *testing.T) {
-			local := &ttlStore{BlockSet: eris.BlockSet{ref: block}}
+			local := &ttlStore{BlockSet: eris.BlockSet{ref: {Data: block}}}
 			var wire []eris.TTL
 			network := ttlNetwork(t, name, local, &wire)
 			combined := eris.NewCombinedBlockStore(network, local)

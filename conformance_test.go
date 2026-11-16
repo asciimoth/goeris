@@ -67,7 +67,7 @@ func TestERISOfficialVectors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			blocks[reference] = decode(data)
+			blocks[reference] = Block{Data: decode(data)}
 		}
 		capability, err := ParseURN(vector.URN)
 		if err != nil {

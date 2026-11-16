@@ -630,9 +630,9 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 		corrupt[0] ^= 1
 		var indexes []int
 		store := NewCombinedBlockStore(
-			BlockSet{pair.Reference: corrupt},
+			BlockSet{pair.Reference: {Data: corrupt}},
 			make(BlockSet),
-			BlockSet{pair.Reference: block},
+			BlockSet{pair.Reference: {Data: block}},
 		)
 		store.OnError = func(index int, err error) {
 			indexes = append(indexes, index)
@@ -663,7 +663,7 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 			t.Fatalf("write = (%v, %v), callback indexes = %v", ref, err, indexes)
 		}
 		input[0] ^= 1
-		if len(readOnly) != 0 || len(later) != 0 || !bytes.Equal(writable[ref], block) {
+		if len(readOnly) != 0 || len(later) != 0 || !bytes.Equal(writable[ref].Data, block) {
 			t.Fatal("write reached another store or retained the caller's buffer")
 		}
 	})

@@ -3,9 +3,16 @@ package eris
 import "context"
 
 // BlockOptions holds options for block storage operations.
-// It currently has no fields. Pass and return it by value.
+// Pass and return it by value. Middleware must pass options unchanged by default.
 // The zero value selects the default options.
-type BlockOptions struct{}
+type BlockOptions struct {
+	// HighPriority is an advisory flag. False is the default. Terminal stores
+	// define its meaning: for example, cache eviction, read/write scheduling,
+	// or no special action. It does not promise retention or faster service.
+	// Repeated puts should keep the highest priority (true wins). Use
+	// UpdateBlockOptions to explicitly change an existing block's priority.
+	HighPriority bool
+}
 
 // BlockSource retrieves complete encrypted blocks by reference. It must return
 // only blocks that match the requested reference. A source that can read
@@ -15,8 +22,9 @@ type BlockOptions struct{}
 // Sources used by concurrent consumers must support concurrent calls.
 // The ttl argument follows TTL: terminal stores may ignore it, middleware
 // must preserve it, and network clients must consume one forward.
-// Options are passed by value. Sources currently ignore options and return
-// BlockOptions{} as the third value, including when an error occurs.
+// Sources return the stored options as the third value. Unsupported options
+// and options returned with an error have their zero values. Read request
+// options do not change stored options. Middleware preserves returned options.
 type BlockSource interface {
 	GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions)
 }
@@ -30,16 +38,16 @@ type BlockSource interface {
 // concurrent consumers must support concurrent calls.
 // The ttl argument follows the same rules as in BlockSource, including for
 // writes copied to other nodes. Use NoTTL when no limit is specified.
-// Options are passed by value. Sinks currently ignore them.
+// Terminal sinks may ignore options. Middleware passes them unchanged by default.
 type BlockSink interface {
 	PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expected ...Reference) (Reference, error)
 
 	// UpdateBlockOptions updates options for the block identified by ref.
 	// It returns true only when the options were updated.
 	// It returns false, nil if the block is absent or options are unsupported.
-	// Middleware passes context and TTL unchanged, as with PutBlock.
-	// Current terminal stores and network clients do nothing and return
-	// false, nil, without checking context or TTL.
+	// Unlike PutBlock, this operation can lower an existing priority.
+	// It returns false, nil when the options already match.
+	// Middleware passes context, TTL, and options unchanged, as with PutBlock.
 	UpdateBlockOptions(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) (bool, error)
 }
 

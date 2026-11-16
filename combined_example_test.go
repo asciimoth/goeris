@@ -22,7 +22,7 @@ func ExampleNewCombinedBlockStore() {
 		panic(err)
 	}
 	ref := capability.Root.Reference
-	stored, err := store.PutBlock(context.Background(), blocks[ref], 0, eris.BlockOptions{}, ref)
+	stored, err := store.PutBlock(context.Background(), blocks[ref].Data, 0, eris.BlockOptions{}, ref)
 	if err != nil {
 		panic(err)
 	}

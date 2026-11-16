@@ -62,7 +62,7 @@ func TestHandlerCombinedPlainBlockSets(t *testing.T) {
 		name string
 		want []byte
 	}{
-		{capability.Root.Reference.URN(), blocks[capability.Root.Reference]},
+		{capability.Root.Reference.URN(), blocks[capability.Root.Reference].Data},
 		{capability.String(), content},
 	} {
 		recorder := httptest.NewRecorder()
@@ -176,10 +176,10 @@ func TestHandlerBlocksAndChaining(t *testing.T) {
 		result := recorder.Result()
 		if result.StatusCode != nethttp.StatusOK || result.Header.Get("Content-Type") != ContentType ||
 			result.Header.Get("Cache-Control") != "max-age=31536000, immutable" ||
-			result.ContentLength != int64(len(blocks[ref])) {
+			result.ContentLength != int64(len(blocks[ref].Data)) {
 			t.Errorf("%s block response = status %d, headers %#v", method, result.StatusCode, result.Header)
 		}
-		if method == nethttp.MethodGet && !bytes.Equal(recorder.Body.Bytes(), blocks[ref]) {
+		if method == nethttp.MethodGet && !bytes.Equal(recorder.Body.Bytes(), blocks[ref].Data) {
 			t.Error("GET returned an incorrect block")
 		}
 		if method == nethttp.MethodHead && recorder.Body.Len() != 0 {
@@ -191,7 +191,7 @@ func TestHandlerBlocksAndChaining(t *testing.T) {
 	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+ref.URN(), nil)
 	request.Header.Set("Range", "bytes=1-3")
 	handler.ServeHTTP(recorder, request)
-	if recorder.Code != nethttp.StatusPartialContent || !bytes.Equal(recorder.Body.Bytes(), blocks[ref][1:4]) {
+	if recorder.Code != nethttp.StatusPartialContent || !bytes.Equal(recorder.Body.Bytes(), blocks[ref].Data[1:4]) {
 		t.Fatalf("range response = %d %x", recorder.Code, recorder.Body.Bytes())
 	}
 }
@@ -283,7 +283,7 @@ func TestClientGetBlock(t *testing.T) {
 	base, _ := url.Parse("http://in-memory.invalid")
 	client, _ := NewClient(httpClient, base)
 	got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
-	if err != nil || !bytes.Equal(got, blocks[ref]) {
+	if err != nil || !bytes.Equal(got, blocks[ref].Data) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
 }
@@ -295,7 +295,7 @@ func TestClientBlockSizeBoundaryAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := capability.Root.Reference
-	body := &trackingBody{Reader: bytes.NewReader(blocks[ref])}
+	body := &trackingBody{Reader: bytes.NewReader(blocks[ref].Data)}
 	base, _ := url.Parse("http://example.test")
 	client, _ := NewClient(clientFunc(func(*nethttp.Request) (*nethttp.Response, error) {
 		response := response(nethttp.StatusOK, ContentType, strings.NewReader(""))
@@ -303,7 +303,7 @@ func TestClientBlockSizeBoundaryAndClose(t *testing.T) {
 		return response, nil
 	}), base)
 	got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
-	if err != nil || !bytes.Equal(got, blocks[ref]) {
+	if err != nil || !bytes.Equal(got, blocks[ref].Data) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
 	if !body.closed {
@@ -350,13 +350,13 @@ func TestClientGetBlockErrors(t *testing.T) {
 			return response(503, "", strings.NewReader("")), nil
 		}, &ResponseError{}},
 		{"no media type", func(*nethttp.Request) (*nethttp.Response, error) {
-			return response(200, "", bytes.NewReader(valid)), nil
+			return response(200, "", bytes.NewReader(valid.Data)), nil
 		}, ErrUnexpectedContentType},
 		{"bad media type", func(*nethttp.Request) (*nethttp.Response, error) {
-			return response(200, "text/plain", bytes.NewReader(valid)), nil
+			return response(200, "text/plain", bytes.NewReader(valid.Data)), nil
 		}, ErrUnexpectedContentType},
 		{"malformed media type", func(*nethttp.Request) (*nethttp.Response, error) {
-			return response(200, `application/octet-stream; bad`, bytes.NewReader(valid)), nil
+			return response(200, `application/octet-stream; bad`, bytes.NewReader(valid.Data)), nil
 		}, ErrUnexpectedContentType},
 		{"read", func(*nethttp.Request) (*nethttp.Response, error) {
 			return response(200, ContentType, errorReader{readErr}), nil

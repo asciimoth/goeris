@@ -25,7 +25,7 @@ func TestUpdateBlockOptionsNoop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	ref := eris.Reference{1}
-	blocks := eris.BlockSet{ref: {2}}
+	blocks := eris.BlockSet{ref: {Data: []byte{2}}}
 	for name, sink := range map[string]eris.BlockSink{
 		"blocks":     blocks,
 		"nil blocks": eris.BlockSet(nil),
@@ -44,7 +44,7 @@ func TestUpdateBlockOptionsNoop(t *testing.T) {
 			}
 		})
 	}
-	if len(blocks) != 1 || len(blocks[ref]) != 1 || blocks[ref][0] != 2 {
+	if len(blocks) != 1 || len(blocks[ref].Data) != 1 || blocks[ref].Data[0] != 2 {
 		t.Fatal("block data changed")
 	}
 }

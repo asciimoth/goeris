@@ -259,8 +259,8 @@ block that does not match the expected reference.
 the source verifies stored or received data if it can be incorrect.
 
 All block storage methods require context, `eris.TTL`, and `eris.BlockOptions`.
-`BlockOptions` is an empty struct, passed and returned by value. This is a
-breaking Go API change:
+`BlockOptions` is passed and returned by value. Its `HighPriority` flag defaults
+to `false`. The methods are:
 
 ```go
 GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions)
@@ -268,15 +268,33 @@ PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expec
 UpdateBlockOptions(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) (bool, error)
 ```
 
-`UpdateBlockOptions` returns whether the options were updated. An absent block
-or unsupported options return `false, nil`. Current terminal stores and network
-clients do nothing and return `false, nil`. Middleware handles updates like
-puts, but a combined store continues after `false, nil` until an update succeeds
-or the list ends.
+`HighPriority` is an advisory hint. Terminal stores can use it for cache
+eviction, operation scheduling, or another policy, or ignore it. Middleware
+passes options unchanged by default and returns the options from a successful
+read.
 
-Current storage implementations ignore options and return `BlockOptions{}` as
-the third `GetBlock` value on success and failure. HTTP, S3, and CoAP servers
-use default options for storage calls.
+`BlockSet` stores the highest priority from repeated puts and returns it on get.
+`UpdateBlockOptions` can raise or lower that priority. It returns `true` only if
+the stored options changed; an absent block, unchanged options, or unsupported
+updates return `false, nil`. A combined store continues after `false, nil` until
+an update succeeds or the list ends. Volumes ignore priority and return `false`.
+Network clients do not support explicit option updates.
+
+`BlockSet` now maps references to `eris.Block` values with `Data` and `Options`
+fields. This is a breaking change for direct map access: use `blocks[ref].Data`
+to read bytes, or `eris.Block{Data: data, Options: options}` for a map entry.
+Use `PutBlock` to verify and copy bytes and preserve priority across repeated
+puts.
+
+HTTP carries true priority in `Eris-High-Priority: true`. S3 uses
+`x-amz-meta-eris-high-priority: true`, set before request signing. Both omit the
+field for false priority. CoAP supports experimental option 65020 when
+`ExperimentalHighPriority` is true on both `coap.ClientConfig` and
+`coap.Handler`. It is disabled by default and is only for coordinated,
+non-operational experiments. The existing ERIS CBOR grammar has no metadata
+field, so CBOR omits priority and reads it as false. See the
+[priority specification](spec/priority.md) for wire rules and compatibility
+limits.
 
 Content encoders, readers, and index codecs accept options by value. ERIS-FS
 builders and filesystems, including the link filesystem, receive options once at

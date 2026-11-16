@@ -110,7 +110,7 @@ func FuzzClientGetBlock(f *testing.F) {
 		f.Fatal(err)
 	}
 	valid := blocks[capability.Root.Reference]
-	f.Add(ContentType, valid)
+	f.Add(ContentType, valid.Data)
 	f.Add("text/plain", []byte("bad"))
 	f.Fuzz(func(t *testing.T, contentType string, body []byte) {
 		base, _ := url.Parse("http://example.test")
@@ -119,7 +119,7 @@ func FuzzClientGetBlock(f *testing.F) {
 		}), base)
 		block, err, _ := client.GetBlock(context.Background(), capability.Root.Reference, 0, eris.BlockOptions{})
 		if err == nil {
-			if !bytes.Equal(block, valid) {
+			if !bytes.Equal(block, valid.Data) {
 				t.Fatal("GetBlock accepted an incorrect block")
 			}
 			if _, readErr := io.ReadAll(bytes.NewReader(block)); readErr != nil {
