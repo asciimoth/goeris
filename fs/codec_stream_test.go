@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -55,11 +56,11 @@ func TestEncodingStopsAtEOFWithData(t *testing.T) {
 					case "auto", "auto-compressed":
 						add = builder.AddAutoFile
 					}
-					if err := add("file", input, false); err != nil {
+					if err := add(context.Background(), "file", input, false); err != nil {
 						t.Fatal(err)
 					}
 					var err error
-					capabilities[i], err = builder.Finish()
+					capabilities[i], err = builder.Finish(context.Background())
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -95,7 +96,7 @@ func TestBuilderPreservesEOFErrors(t *testing.T) {
 				case "auto":
 					add = builder.AddAutoFile
 				}
-				if err := add("file", input, false); !errors.Is(err, io.ErrUnexpectedEOF) {
+				if err := add(context.Background(), "file", input, false); !errors.Is(err, io.ErrUnexpectedEOF) {
 					t.Fatalf("source failure became normal EOF: %v", err)
 				}
 				if len(builder.Index().Entries) != 0 {
@@ -130,7 +131,7 @@ func TestBuilderRejectsStalledInput(t *testing.T) {
 				case "auto":
 					add = builder.AddAutoFile
 				}
-				if err := add("file", input, false); !errors.Is(err, io.ErrNoProgress) {
+				if err := add(context.Background(), "file", input, false); !errors.Is(err, io.ErrNoProgress) {
 					t.Fatalf("stalled input: %v", err)
 				}
 				if len(builder.Index().Entries) != 0 {
@@ -144,11 +145,11 @@ func TestBuilderRejectsStalledInput(t *testing.T) {
 func TestCompressionToleratesTemporaryEmptyReads(t *testing.T) {
 	content := []byte("temporary empty reads")
 	var want, got bytes.Buffer
-	if _, err := writeLzip(&want, bytes.NewReader(content)); err != nil {
+	if _, err := writeLzip(context.Background(), &want, bytes.NewReader(content)); err != nil {
 		t.Fatal(err)
 	}
 	input := &intermittentReader{reader: bytes.NewReader(content), empty: 99}
-	if _, err := writeLzip(&got, input); err != nil || !bytes.Equal(got.Bytes(), want.Bytes()) {
+	if _, err := writeLzip(context.Background(), &got, input); err != nil || !bytes.Equal(got.Bytes(), want.Bytes()) {
 		t.Fatalf("temporary empty reads changed compression: %v", err)
 	}
 }
@@ -159,7 +160,7 @@ func TestBuilderReadErrors(t *testing.T) {
 		for _, cause := range []error{io.ErrUnexpectedEOF, errors.New("read error"), errors.Join(io.EOF, io.ErrUnexpectedEOF), fmt.Errorf("source failed: %w", io.EOF)} {
 			builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
 			source := &finalErrorReader{data: content, err: cause}
-			if err := builder.AddFile("file", source, false); !errors.Is(err, cause) {
+			if err := builder.AddFile(context.Background(), "file", source, false); !errors.Is(err, cause) {
 				t.Fatalf("builder: %v", err)
 			}
 			if len(builder.Index().Entries) != 0 {

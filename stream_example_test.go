@@ -1,6 +1,7 @@
 package eris_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -10,11 +11,11 @@ import (
 
 func ExampleEncodeContentRecommended() {
 	store := make(eris.BlockSet) // Any BlockSink can receive the encoded tree.
-	capability, err := eris.EncodeContentRecommended(strings.NewReader("Hello, ERIS!"), eris.Secret{}, store)
+	capability, err := eris.EncodeContentRecommended(context.Background(), strings.NewReader("Hello, ERIS!"), eris.Secret{}, store)
 	if err != nil {
 		panic(err)
 	}
-	reader, err := eris.NewReader(capability, store)
+	reader, err := eris.NewReader(context.Background(), capability, store)
 	if err != nil {
 		panic(err)
 	}

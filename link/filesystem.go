@@ -2,6 +2,7 @@ package link
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -32,7 +33,8 @@ var (
 // Sizes are unverified until content is read. Reads check each visited tree
 // path and the declared size at the file end. Unvisited blocks are not checked.
 // Block reads use eris.NoTTL and require the BlockSource integrity
-// contract. There is no context or cancellation parameter in io/fs.FS.
+// contract. Open binds ctx to later reads on resolved files. Use NewIOFS for
+// io/fs compatibility. Context cannot stop reads made through the base fs.FS.
 // Open and ReadFile return io.ErrNoProgress after 100 consecutive empty reads
 // without an error. A blocked read still requires a timeout in the base FS.
 // These methods reject invalid byte counts from base reads with fs.ErrInvalid.
@@ -74,7 +76,7 @@ func NewFSWithLimit(base fs.FS, source eris.BlockSource, limit int64) (*FS, erro
 // their optional interfaces if they support seeking; otherwise only fs.File
 // is guaranteed. A complete magic prefix followed by an invalid link is an
 // error. Short prefixes are ordinary data. Link sizes above MaxInt64 are invalid.
-func (fileSystem *FS) Open(name string) (fs.File, error) {
+func (fileSystem *FS) Open(ctx context.Context, name string) (fs.File, error) {
 	if err := fileSystem.checkPath(name); err != nil {
 		return nil, linkPathError("open", name, err)
 	}
@@ -85,7 +87,7 @@ func (fileSystem *FS) Open(name string) (fs.File, error) {
 	if file == nil {
 		return nil, linkPathError("open", name, fs.ErrInvalid)
 	}
-	result, err := fileSystem.open(file, name)
+	result, err := fileSystem.open(ctx, file, name)
 	if err != nil {
 		_ = file.Close()
 		return nil, linkPathError("open", name, err)
@@ -99,7 +101,7 @@ func (fileSystem *FS) Open(name string) (fs.File, error) {
 	return result, nil
 }
 
-func (fileSystem *FS) open(file fs.File, name string) (fs.File, error) {
+func (fileSystem *FS) open(ctx context.Context, file fs.File, name string) (fs.File, error) {
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
@@ -109,7 +111,7 @@ func (fileSystem *FS) open(file fs.File, name string) (fs.File, error) {
 	}
 	if info.IsDir() {
 		if dir, ok := file.(fs.ReadDirFile); ok {
-			return &linkDirectory{ReadDirFile: dir, fileSystem: fileSystem, name: name}, nil
+			return &linkDirectory{ctx: ctx, ReadDirFile: dir, fileSystem: fileSystem, name: name}, nil
 		}
 		return file, nil
 	}
@@ -170,7 +172,7 @@ func (fileSystem *FS) open(file fs.File, name string) (fs.File, error) {
 	if link.size > math.MaxInt64 {
 		return nil, ErrInvalidLink
 	}
-	reader, err := eris.NewReaderWithSize(link.capability, fileSystem.source, int64(link.size))
+	reader, err := eris.NewReaderWithSize(ctx, link.capability, fileSystem.source, int64(link.size))
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +183,7 @@ func (fileSystem *FS) open(file fs.File, name string) (fs.File, error) {
 // Name, mode, modification time, and Sys remain those of the base file.
 // Detection requires read access to regular files, even for ordinary files.
 // If base implements fs.StatFS, non-regular files are not opened.
-func (fileSystem *FS) Stat(name string) (fs.FileInfo, error) {
+func (fileSystem *FS) Stat(ctx context.Context, name string) (fs.FileInfo, error) {
 	if err := fileSystem.checkPath(name); err != nil {
 		return nil, linkPathError("stat", name, err)
 	}
@@ -199,7 +201,7 @@ func (fileSystem *FS) Stat(name string) (fs.FileInfo, error) {
 			return info, nil
 		}
 	}
-	file, err := fileSystem.Open(name)
+	file, err := fileSystem.Open(ctx, name)
 	if err != nil {
 		return nil, linkPathError("stat", name, err)
 	}
@@ -218,7 +220,7 @@ func (fileSystem *FS) Stat(name string) (fs.FileInfo, error) {
 // Regular ERIS link files report their declared content size, as in Stat.
 // If base does not implement fs.ReadLinkFS, Lstat falls back to Stat.
 // As with Open, this does not protect against concurrent path changes.
-func (fileSystem *FS) Lstat(name string) (fs.FileInfo, error) {
+func (fileSystem *FS) Lstat(ctx context.Context, name string) (fs.FileInfo, error) {
 	if err := fileSystem.checkPath(name); err != nil {
 		return nil, linkPathError("lstat", name, err)
 	}
@@ -234,14 +236,14 @@ func (fileSystem *FS) Lstat(name string) (fs.FileInfo, error) {
 			return info, nil
 		}
 	}
-	info, err := fileSystem.Stat(name)
+	info, err := fileSystem.Stat(ctx, name)
 	return info, linkPathError("lstat", name, err)
 }
 
 // ReadLink returns the base symbolic link target without following it.
 // The target is unchanged and can be absolute or contain parent components.
 // It returns fs.ErrInvalid if base does not implement fs.ReadLinkFS.
-func (fileSystem *FS) ReadLink(name string) (string, error) {
+func (fileSystem *FS) ReadLink(ctx context.Context, name string) (string, error) {
 	if err := fileSystem.checkPath(name); err != nil {
 		return "", linkPathError("readlink", name, err)
 	}
@@ -254,8 +256,8 @@ func (fileSystem *FS) ReadLink(name string) (string, error) {
 
 // ReadFile reads resolved content without allocating from an untrusted size.
 // It reads all content into memory. Use Open and io.LimitReader for a byte limit.
-func (fileSystem *FS) ReadFile(name string) ([]byte, error) {
-	file, err := fileSystem.Open(name)
+func (fileSystem *FS) ReadFile(ctx context.Context, name string) ([]byte, error) {
+	file, err := fileSystem.Open(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -273,12 +275,12 @@ func (fileSystem *FS) ReadFile(name string) ([]byte, error) {
 // Nil entries or invalid entry names from the base FS return fs.ErrInvalid
 // and no entries. Returned entry names and types are fixed at the time of the
 // read, even if the base later changes its entries.
-func (fileSystem *FS) ReadDir(name string) ([]fs.DirEntry, error) {
+func (fileSystem *FS) ReadDir(ctx context.Context, name string) ([]fs.DirEntry, error) {
 	if err := fileSystem.checkPath(name); err != nil {
 		return nil, linkPathError("readdir", name, err)
 	}
 	entries, err := fileSystem.readDir(name)
-	entries, wrapErr := fileSystem.wrapEntries(name, entries)
+	entries, wrapErr := fileSystem.wrapEntries(ctx, name, entries)
 	if wrapErr != nil {
 		err = errors.Join(err, wrapErr)
 	}
@@ -316,7 +318,7 @@ func (fileSystem *FS) checkPath(name string) error {
 	return nil
 }
 
-func (fileSystem *FS) wrapEntries(name string, entries []fs.DirEntry) ([]fs.DirEntry, error) {
+func (fileSystem *FS) wrapEntries(ctx context.Context, name string, entries []fs.DirEntry) ([]fs.DirEntry, error) {
 	result := make([]fs.DirEntry, len(entries))
 	for i, entry := range entries {
 		if entry == nil {
@@ -327,7 +329,7 @@ func (fileSystem *FS) wrapEntries(name string, entries []fs.DirEntry) ([]fs.DirE
 		if !fs.ValidPath(child) || child == "." || strings.Contains(child, "/") {
 			return nil, fs.ErrInvalid
 		}
-		result[i] = &linkDirEntry{
+		result[i] = &linkDirEntry{ctx: ctx,
 			DirEntry: entry, fileSystem: fileSystem, name: path.Join(name, child),
 			child: child, mode: entry.Type(),
 		}
@@ -438,6 +440,7 @@ func (file *resolvedFile) Seek(offset int64, whence int) (int64, error) {
 func (file *resolvedFile) Close() error { return file.reader.Close() }
 
 type linkDirectory struct {
+	ctx context.Context
 	fs.ReadDirFile
 	fileSystem *FS
 	name       string
@@ -445,7 +448,7 @@ type linkDirectory struct {
 
 func (file *linkDirectory) ReadDir(n int) ([]fs.DirEntry, error) {
 	entries, err := file.ReadDirFile.ReadDir(n)
-	entries, wrapErr := file.fileSystem.wrapEntries(file.name, entries)
+	entries, wrapErr := file.fileSystem.wrapEntries(file.ctx, file.name, entries)
 	if wrapErr != nil {
 		err = errors.Join(err, wrapErr)
 	}
@@ -453,6 +456,7 @@ func (file *linkDirectory) ReadDir(n int) ([]fs.DirEntry, error) {
 }
 
 type linkDirEntry struct {
+	ctx context.Context
 	fs.DirEntry
 	fileSystem *FS
 	name       string
@@ -481,7 +485,7 @@ func (entry *linkDirEntry) Info() (fs.FileInfo, error) {
 	}
 	// The entry may have been replaced since ReadDir. Retain the base's
 	// ability to inspect a symbolic link without following its target.
-	return entry.fileSystem.Lstat(entry.name)
+	return entry.fileSystem.Lstat(entry.ctx, entry.name)
 }
 
 func linkReadError(op, name string, err error) error {
@@ -511,11 +515,6 @@ func linkPathError(op, name string, err error) error {
 }
 
 var (
-	_ fs.FS          = (*FS)(nil)
-	_ fs.StatFS      = (*FS)(nil)
-	_ fs.ReadFileFS  = (*FS)(nil)
-	_ fs.ReadDirFS   = (*FS)(nil)
-	_ fs.ReadLinkFS  = (*FS)(nil)
 	_ fs.ReadDirFile = (*linkDirectory)(nil)
 	_ fs.File        = (*resolvedFile)(nil)
 	_ io.ReaderAt    = (*resolvedFile)(nil)

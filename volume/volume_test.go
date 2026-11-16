@@ -89,14 +89,14 @@ func TestOpenRequiresRoot(t *testing.T) {
 	writeFile(t, file, nil)
 	fileVolume := openVolume(t, file)
 	block, _ := testBlock(t, eris.BlockSize1KiB, 0)
-	if _, err := fileVolume.PutBlock(block, eris.NoTTL); !errors.Is(err, volume.ErrNotDirectory) {
+	if _, err := fileVolume.PutBlock(context.Background(), block, eris.NoTTL); !errors.Is(err, volume.ErrNotDirectory) {
 		t.Fatalf("write to a regular file root: %v", err)
 	}
 	assertFile(t, file, nil)
 	root = t.TempDir()
 	v := openVolume(t, root)
 	assertEmpty(t, root)
-	if _, err := v.GetBlock(eris.Reference{}, eris.NoTTL); !errors.Is(err, eris.ErrMissingBlock) || !errors.Is(err, fs.ErrNotExist) {
+	if _, err := v.GetBlock(context.Background(), eris.Reference{}, eris.NoTTL); !errors.Is(err, eris.ErrMissingBlock) || !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("missing block: %v", err)
 	}
 	assertEmpty(t, root)
@@ -109,7 +109,7 @@ func TestRoundTripAndReopen(t *testing.T) {
 			v := openVolume(t, root)
 			block, ref := testBlock(t, size, 17)
 			// A terminal store accepts TTL 1 without forwarding it.
-			got, err := v.PutBlock(block, 1, ref)
+			got, err := v.PutBlock(context.Background(), block, 1, ref)
 			if err != nil || got != ref {
 				t.Fatalf("PutBlock: %s, %v", got, err)
 			}
@@ -121,13 +121,13 @@ func TestRoundTripAndReopen(t *testing.T) {
 				t.Fatal(err)
 			}
 			v = openVolume(t, root)
-			read, err := v.GetBlock(ref, 1)
+			read, err := v.GetBlock(context.Background(), ref, 1)
 			if err != nil || !bytes.Equal(read, block) {
 				t.Fatalf("GetBlock: length %d, %v", len(read), err)
 			}
 			read[0]++
 			assertFile(t, filepath.Join(root, volume.BlockPath(ref)), block)
-			if _, err := v.PutBlock(block, eris.NoTTL); err != nil {
+			if _, err := v.PutBlock(context.Background(), block, eris.NoTTL); err != nil {
 				t.Fatalf("duplicate write: %v", err)
 			}
 		})
@@ -147,7 +147,7 @@ func TestFlatFallbackAndPrecedence(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		got, err := v.GetBlock(ref, eris.NoTTL)
+		got, err := v.GetBlock(context.Background(), ref, eris.NoTTL)
 		if err != nil || !bytes.Equal(got, block) {
 			t.Fatalf("flat fallback: length %d, %v", len(got), err)
 		}
@@ -156,20 +156,20 @@ func TestFlatFallbackAndPrecedence(t *testing.T) {
 		}
 	}
 	writeFile(t, nested, []byte("corrupt"))
-	if got, err := v.GetBlock(ref, eris.NoTTL); !errors.Is(err, eris.ErrInvalidBlock) || got != nil {
+	if got, err := v.GetBlock(context.Background(), ref, eris.NoTTL); !errors.Is(err, eris.ErrInvalidBlock) || got != nil {
 		t.Fatalf("corrupt canonical file bypassed: %v", err)
 	}
-	if _, err := v.PutBlock(block, eris.NoTTL); err != nil {
+	if _, err := v.PutBlock(context.Background(), block, eris.NoTTL); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	assertFile(t, nested, block)
 	assertFile(t, flat, block)
 	writeFile(t, flat, []byte("invalid flat copy"))
-	got, err := v.GetBlock(ref, eris.NoTTL)
+	got, err := v.GetBlock(context.Background(), ref, eris.NoTTL)
 	if err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("canonical precedence: %v", err)
 	}
-	if _, err := v.PutBlock(block, eris.NoTTL); err != nil {
+	if _, err := v.PutBlock(context.Background(), block, eris.NoTTL); err != nil {
 		t.Fatal(err)
 	}
 	assertFile(t, flat, []byte("invalid flat copy"))
@@ -191,7 +191,7 @@ func TestInvalidWritesDoNotChangeVolume(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			v := openVolume(t, root)
-			if _, err := v.PutBlock(tc.block, eris.NoTTL, tc.expected...); !errors.Is(err, eris.ErrInvalidBlock) {
+			if _, err := v.PutBlock(context.Background(), tc.block, eris.NoTTL, tc.expected...); !errors.Is(err, eris.ErrInvalidBlock) {
 				t.Fatalf("invalid write: %v", err)
 			}
 			assertEmpty(t, root)
@@ -210,7 +210,7 @@ func TestInvalidStoredBlocks(t *testing.T) {
 				path = ref.String()
 			}
 			writeFile(t, filepath.Join(root, path), data)
-			got, err := v.GetBlock(ref, eris.NoTTL)
+			got, err := v.GetBlock(context.Background(), ref, eris.NoTTL)
 			if !errors.Is(err, eris.ErrInvalidBlock) || got != nil {
 				t.Fatalf("invalid stored block (flat=%v, size=%d): %v", flat, len(data), err)
 			}
@@ -226,7 +226,7 @@ func TestUnrelatedFilesAndCollisions(t *testing.T) {
 	for _, name := range []string{"README.md", "other/data", filepath.Join(filepath.Dir(volume.BlockPath(ref)), ".eris-tmp-unrelated")} {
 		writeFile(t, filepath.Join(root, name), []byte(name))
 	}
-	if _, err := v.PutBlock(block, eris.NoTTL); err != nil {
+	if _, err := v.PutBlock(context.Background(), block, eris.NoTTL); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"README.md", "other/data", filepath.Join(filepath.Dir(volume.BlockPath(ref)), ".eris-tmp-unrelated")} {
@@ -239,10 +239,10 @@ func TestUnrelatedFilesAndCollisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(root, ref.String()), block)
-	if _, err := v.GetBlock(ref, eris.NoTTL); !errors.Is(err, eris.ErrInvalidBlock) {
+	if _, err := v.GetBlock(context.Background(), ref, eris.NoTTL); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Fatalf("directory accepted as block or flat fallback used: %v", err)
 	}
-	if _, err := v.PutBlock(block, eris.NoTTL); err == nil {
+	if _, err := v.PutBlock(context.Background(), block, eris.NoTTL); err == nil {
 		t.Fatal("write replaced a directory")
 	}
 	entries, err := os.ReadDir(filepath.Dir(nested))
@@ -254,10 +254,10 @@ func TestUnrelatedFilesAndCollisions(t *testing.T) {
 		v = openVolume(t, root)
 		writeFile(t, filepath.Join(root, parent), []byte("prefix collision"))
 		writeFile(t, filepath.Join(root, ref.String()), block)
-		if _, err := v.PutBlock(block, eris.NoTTL); err == nil {
+		if _, err := v.PutBlock(context.Background(), block, eris.NoTTL); err == nil {
 			t.Fatal("write accepted a non-directory prefix")
 		}
-		if got, err := v.GetBlock(ref, eris.NoTTL); got != nil || err == nil || errors.Is(err, eris.ErrMissingBlock) || errors.Is(err, fs.ErrNotExist) {
+		if got, err := v.GetBlock(context.Background(), ref, eris.NoTTL); got != nil || err == nil || errors.Is(err, eris.ErrMissingBlock) || errors.Is(err, fs.ErrNotExist) {
 			t.Fatalf("non-directory prefix %s did not produce an I/O error: %v", parent, err)
 		}
 		assertFile(t, filepath.Join(root, parent), []byte("prefix collision"))
@@ -270,10 +270,10 @@ func TestCancellationAndClosedVolume(t *testing.T) {
 	block, ref := testBlock(t, eris.BlockSize1KiB, 7)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := v.GetBlockContext(ctx, ref, eris.NoTTL); !errors.Is(err, context.Canceled) {
+	if _, err := v.GetBlock(ctx, ref, eris.NoTTL); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled read: %v", err)
 	}
-	if _, err := v.PutBlockContext(ctx, block, eris.NoTTL); !errors.Is(err, context.Canceled) {
+	if _, err := v.PutBlock(ctx, block, eris.NoTTL); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled write: %v", err)
 	}
 	assertEmpty(t, root)
@@ -281,13 +281,13 @@ func TestCancellationAndClosedVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, closed := range []*volume.Volume{v, nil, {}} {
-		if _, err := closed.GetBlock(ref, eris.NoTTL); !errors.Is(err, fs.ErrClosed) {
+		if _, err := closed.GetBlock(context.Background(), ref, eris.NoTTL); !errors.Is(err, fs.ErrClosed) {
 			t.Fatalf("closed read: %v", err)
 		}
-		if _, err := closed.PutBlock(block, eris.NoTTL); !errors.Is(err, fs.ErrClosed) {
+		if _, err := closed.PutBlock(context.Background(), block, eris.NoTTL); !errors.Is(err, fs.ErrClosed) {
 			t.Fatalf("closed write: %v", err)
 		}
-		if _, err := closed.PutBlock(nil, eris.NoTTL); !errors.Is(err, fs.ErrClosed) {
+		if _, err := closed.PutBlock(context.Background(), nil, eris.NoTTL); !errors.Is(err, fs.ErrClosed) {
 			t.Fatalf("invalid write to closed volume: %v", err)
 		}
 	}
@@ -303,7 +303,7 @@ func TestConcurrentPublication(t *testing.T) {
 			v := writers[i%len(writers)]
 			for range 15 {
 				if i%3 == 0 {
-					got, err := v.GetBlock(ref, eris.NoTTL)
+					got, err := v.GetBlock(context.Background(), ref, eris.NoTTL)
 					if errors.Is(err, eris.ErrMissingBlock) {
 						continue
 					}
@@ -311,7 +311,7 @@ func TestConcurrentPublication(t *testing.T) {
 						t.Errorf("concurrent read: length %d, %v", len(got), err)
 						return
 					}
-				} else if _, err := v.PutBlock(block, eris.NoTTL); err != nil {
+				} else if _, err := v.PutBlock(context.Background(), block, eris.NoTTL); err != nil {
 					t.Errorf("concurrent write: %v", err)
 					return
 				}
@@ -334,11 +334,11 @@ func TestSymlinkCannotEscapeRoot(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, ref.String()[:3])); err != nil {
 		t.Skipf("symbolic links unavailable: %v", err)
 	}
-	if _, err := v.PutBlock(block, eris.NoTTL); err == nil {
+	if _, err := v.PutBlock(context.Background(), block, eris.NoTTL); err == nil {
 		t.Fatal("write followed a link outside the root")
 	}
 	assertEmpty(t, outside)
-	if _, err := v.GetBlock(ref, eris.NoTTL); err == nil || errors.Is(err, eris.ErrMissingBlock) {
+	if _, err := v.GetBlock(context.Background(), ref, eris.NoTTL); err == nil || errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("read did not reject escaping link: %v", err)
 	}
 	if err := os.Remove(filepath.Join(root, ref.String()[:3])); err != nil {
@@ -349,7 +349,7 @@ func TestSymlinkCannotEscapeRoot(t *testing.T) {
 	if err := os.Symlink(outsideFile, filepath.Join(root, ref.String())); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v.GetBlock(ref, eris.NoTTL); err == nil {
+	if _, err := v.GetBlock(context.Background(), ref, eris.NoTTL); err == nil {
 		t.Fatal("flat read followed a link outside the root")
 	}
 	assertFile(t, outsideFile, block)
@@ -363,13 +363,13 @@ func TestEncodedContentRoundTrip(t *testing.T) {
 	}
 	v := openVolume(t, t.TempDir())
 	for ref, block := range blocks {
-		if _, err := v.PutBlock(block, eris.NoTTL, ref); err != nil {
+		if _, err := v.PutBlock(context.Background(), block, eris.NoTTL, ref); err != nil {
 			t.Fatal(err)
 		}
 	}
 	stored := make(eris.BlockSet)
 	for ref := range blocks {
-		stored[ref], err = v.GetBlock(ref, eris.NoTTL)
+		stored[ref], err = v.GetBlock(context.Background(), ref, eris.NoTTL)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -400,7 +400,7 @@ func TestPublicationReplacesLinksWithoutChangingTargets(t *testing.T) {
 			if err := link(target, name); err != nil {
 				t.Skipf("links unavailable: %v", err)
 			}
-			if _, err := v.PutBlock(block, eris.NoTTL, ref); err != nil {
+			if _, err := v.PutBlock(context.Background(), block, eris.NoTTL, ref); err != nil {
 				t.Fatal(err)
 			}
 			assertFile(t, target, original)
@@ -435,13 +435,13 @@ func TestRelativeDirectoryLinks(t *testing.T) {
 				t.Skipf("symbolic links unavailable: %v", err)
 			}
 			v := openVolume(t, root)
-			_, err := v.PutBlock(block, eris.NoTTL)
+			_, err := v.PutBlock(context.Background(), block, eris.NoTTL)
 			if escape {
 				if err == nil {
 					t.Fatal("write escaped root through a relative link")
 				}
 				assertEmpty(t, target)
-				if _, err := v.GetBlock(ref, eris.NoTTL); err == nil || errors.Is(err, eris.ErrMissingBlock) {
+				if _, err := v.GetBlock(context.Background(), ref, eris.NoTTL); err == nil || errors.Is(err, eris.ErrMissingBlock) {
 					t.Fatalf("escaping relative link: %v", err)
 				}
 				return
@@ -449,7 +449,7 @@ func TestRelativeDirectoryLinks(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := v.GetBlock(ref, eris.NoTTL)
+			got, err := v.GetBlock(context.Background(), ref, eris.NoTTL)
 			if err != nil || !bytes.Equal(got, block) {
 				t.Fatalf("read through an internal relative link: %v", err)
 			}

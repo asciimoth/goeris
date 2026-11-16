@@ -2,7 +2,6 @@ package http
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	nethttp "net/http"
@@ -70,7 +69,11 @@ func (handler Handler) serveBlock(writer nethttp.ResponseWriter, request *nethtt
 		writer.WriteHeader(nethttp.StatusBadRequest)
 		return
 	}
-	block, err := requestBlockSource{ctx: request.Context(), source: handler.Blocks}.GetBlock(ref, ttl)
+	if err := request.Context().Err(); err != nil {
+		writeSourceError(writer, err)
+		return
+	}
+	block, err := handler.Blocks.GetBlock(request.Context(), ref, ttl)
 	if err != nil {
 		writeSourceError(writer, err)
 		return
@@ -93,9 +96,7 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 	if limit == 0 {
 		limit = -1
 	}
-	ctx, cancel := context.WithCancel(request.Context())
-	defer cancel()
-	reader, err := eris.NewReaderWithLimit(capability, requestBlockSource{ctx: ctx, source: handler.Blocks}, limit, ttl)
+	reader, err := eris.NewReaderWithLimit(request.Context(), capability, handler.Blocks, limit, ttl)
 	if err != nil {
 		if errors.Is(err, eris.ErrDecodedTooLarge) {
 			writer.WriteHeader(nethttp.StatusRequestEntityTooLarge)
@@ -104,21 +105,42 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 		writeSourceError(writer, err)
 		return
 	}
+	response := &checkedResponseWriter{ResponseWriter: writer}
 	defer func() {
-		// ServeContent can return on a failed response write while its
-		// multipart goroutine is still reading a block. Cancel that read
-		// before Close waits for the reader's lock.
-		cancel()
+		if response.failed {
+			// A multipart producer can still be in a block read. Return so
+			// net/http can cancel the original request context, then let Close
+			// wait for that read. Never replace the caller's context.
+			go func() { _ = reader.Close() }()
+			return
+		}
 		_ = reader.Close()
 	}()
 	setResourceHeaders(writer)
 	stream := &checkedContent{ReadSeeker: reader}
 	request = safeRangeRequest(request, reader.Size())
-	nethttp.ServeContent(writer, request, "", time.Time{}, stream)
+	nethttp.ServeContent(response, request, "", time.Time{}, stream)
 	if stream.failed.Load() {
 		panic(nethttp.ErrAbortHandler)
 	}
 }
+
+// checkedResponseWriter records write failures, including a panic in Write.
+// Unwrap preserves access through net/http.ResponseController.
+type checkedResponseWriter struct {
+	nethttp.ResponseWriter
+	failed bool
+}
+
+func (writer *checkedResponseWriter) Write(p []byte) (int, error) {
+	failed := writer.failed
+	writer.failed = true
+	n, err := writer.ResponseWriter.Write(p)
+	writer.failed = failed || err != nil || n != len(p)
+	return n, err
+}
+
+func (writer *checkedResponseWriter) Unwrap() nethttp.ResponseWriter { return writer.ResponseWriter }
 
 // ServeContent does not report copy errors. Abort the response so a failed
 // block fetch cannot produce a complete multipart response with missing data.
@@ -135,22 +157,6 @@ func (reader *checkedContent) Read(buffer []byte) (int, error) {
 		reader.failed.Store(true)
 	}
 	return n, err
-}
-
-// requestBlockSource adds request cancellation and preserves the block TTL.
-type requestBlockSource struct {
-	ctx    context.Context
-	source eris.BlockSource
-}
-
-func (source requestBlockSource) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	if err := source.ctx.Err(); err != nil {
-		return nil, err
-	}
-	if contextual, ok := source.source.(eris.ContextBlockSource); ok {
-		return contextual.GetBlockContext(source.ctx, ref, ttl)
-	}
-	return source.source.GetBlock(ref, ttl)
 }
 
 func (handler Handler) next() nethttp.Handler {

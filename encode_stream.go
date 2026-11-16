@@ -2,6 +2,7 @@ package eris
 
 import (
 	"bytes"
+	"context"
 	"io"
 
 	"github.com/asciimoth/goeris/internal/streamio"
@@ -10,27 +11,35 @@ import (
 // EncodeContent reads content, encodes it with ERIS, and writes each encrypted
 // block to sink. It keeps only one content block and a bounded set of pending
 // tree pairs per level. The result matches Encode for the same bytes, secret,
-// and block size. Each write uses NoTTL.
+// and block size. Each write uses NoTTL and passes ctx unchanged. Cancellation
+// is checked between input reads and block writes; it cannot stop a blocked
+// input Read.
 //
 // Encoding stops at the first io.EOF, including EOF returned with data. Other
 // read errors are preserved. After 100 consecutive empty reads it returns
 // io.ErrNoProgress. A nil reader or sink returns ErrInvalidInput. A failed call
 // can leave blocks in the sink and returns no usable capability.
-func EncodeContent(content io.Reader, secret Secret, blockSize BlockSize, sink BlockSink) (Capability, error) {
+func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockSize BlockSize, sink BlockSink) (Capability, error) {
 	if !blockSize.Valid() {
 		return Capability{}, ErrInvalidBlockSize
 	}
 	if content == nil || sink == nil {
 		return Capability{}, ErrInvalidInput
 	}
-	encoder := treeEncoder{secret: secret, blockSize: blockSize, sink: sink}
+	if err := ctx.Err(); err != nil {
+		return Capability{}, err
+	}
+	encoder := treeEncoder{ctx: ctx, secret: secret, blockSize: blockSize, sink: sink}
 	ended := false
 	for {
+		if err := ctx.Err(); err != nil {
+			return Capability{}, err
+		}
 		node := make([]byte, int(blockSize))
 		n := 0
 		if !ended {
 			var err error
-			n, err = streamio.ReadFull(content, node)
+			n, err = streamio.ReadFull(ctx, content, node)
 			if err != nil && err != io.EOF {
 				return Capability{}, err
 			}
@@ -39,7 +48,7 @@ func EncodeContent(content io.Reader, secret Secret, blockSize BlockSize, sink B
 		if n < len(node) {
 			node[n] = 0x80
 		}
-		pair, err := putNode(node, secret, 0, sink)
+		pair, err := putNode(ctx, node, secret, 0, sink)
 		if err != nil {
 			return Capability{}, err
 		}
@@ -59,12 +68,15 @@ func EncodeContent(content io.Reader, secret Secret, blockSize BlockSize, sink B
 // shorter content or 32 KiB blocks otherwise. The input is read once and need
 // not support seeking. The result matches EncodeRecommended for the same bytes
 // and secret. Writes and errors follow EncodeContent.
-func EncodeContentRecommended(content io.Reader, secret Secret, sink BlockSink) (Capability, error) {
+func EncodeContentRecommended(ctx context.Context, content io.Reader, secret Secret, sink BlockSink) (Capability, error) {
 	if content == nil || sink == nil {
 		return Capability{}, ErrInvalidInput
 	}
+	if err := ctx.Err(); err != nil {
+		return Capability{}, err
+	}
 	prefix := make([]byte, 1<<14)
-	n, err := streamio.ReadFull(content, prefix)
+	n, err := streamio.ReadFull(ctx, content, prefix)
 	var input io.Reader = bytes.NewReader(prefix[:n])
 	switch err {
 	case nil:
@@ -73,15 +85,18 @@ func EncodeContentRecommended(content io.Reader, secret Secret, sink BlockSink) 
 	default:
 		return Capability{}, err
 	}
-	return EncodeContent(input, secret, ChooseBlockSize(n), sink)
+	return EncodeContent(ctx, input, secret, ChooseBlockSize(n), sink)
 }
 
-func putNode(node []byte, secret Secret, level Level, sink BlockSink) (Pair, error) {
+func putNode(ctx context.Context, node []byte, secret Secret, level Level, sink BlockSink) (Pair, error) {
+	if err := ctx.Err(); err != nil {
+		return Pair{}, err
+	}
 	block, key, err := EncryptNodeForStorage(node, secret, level)
 	if err != nil {
 		return Pair{}, err
 	}
-	ref, err := sink.PutBlock(block, NoTTL)
+	ref, err := sink.PutBlock(ctx, block, NoTTL)
 	if err != nil {
 		return Pair{}, err
 	}
@@ -89,6 +104,7 @@ func putNode(node []byte, secret Secret, level Level, sink BlockSink) (Pair, err
 }
 
 type treeEncoder struct {
+	ctx       context.Context
 	secret    Secret
 	blockSize BlockSize
 	sink      BlockSink
@@ -125,7 +141,7 @@ func (encoder *treeEncoder) parent(level int) (Pair, error) {
 		copy(node[offset+32:offset+PairSize], pair.Key[:])
 	}
 	encoder.levels[level] = encoder.levels[level][:0]
-	return putNode(node, encoder.secret, Level(level+1), encoder.sink)
+	return putNode(encoder.ctx, node, encoder.secret, Level(level+1), encoder.sink)
 }
 
 func (encoder *treeEncoder) finish() (Capability, error) {

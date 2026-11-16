@@ -1,6 +1,7 @@
 package link_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -35,20 +36,20 @@ func TestFSErrorTextHidesBackendDetails(t *testing.T) {
 				var err error
 				switch operation {
 				case "open":
-					_, err = wrapped.Open("public")
+					_, err = wrapped.Open(context.Background(), "public")
 				case "stat":
-					_, err = wrapped.Stat("public")
+					_, err = wrapped.Stat(context.Background(), "public")
 				case "lstat":
-					_, err = wrapped.Lstat("public")
+					_, err = wrapped.Lstat(context.Background(), "public")
 				case "readdir":
-					_, err = wrapped.ReadDir("public")
+					_, err = wrapped.ReadDir(context.Background(), "public")
 				case "read", "readat":
 					encoded, _ := encodeFSLink(t, []byte("content"))
 					wrapped = newLinkFS(t, fstest.MapFS{"public": {Data: encoded}}, &countingSource{err: cause})
 					if operation == "read" {
-						_, err = wrapped.ReadFile("public")
+						_, err = wrapped.ReadFile(context.Background(), "public")
 					} else {
-						file, openErr := wrapped.Open("public")
+						file, openErr := wrapped.Open(context.Background(), "public")
 						if openErr != nil {
 							t.Fatal(openErr)
 						}
@@ -86,7 +87,7 @@ func TestFSErrorTextDoesNotCallUnknownMethods(t *testing.T) {
 	cycle.Err = cycle
 	for _, cause := range []error{&panicMessageError{}, (*fs.PathError)(nil), cycle} {
 		base := openFSFunc(func(string) (fs.File, error) { return nil, cause })
-		_, err := newLinkFS(t, base, eris.BlockSet{}).Open("public")
+		_, err := newLinkFS(t, base, eris.BlockSet{}).Open(context.Background(), "public")
 		if err == nil || err.Error() != "open public: eris link: operation failed" {
 			t.Fatal("unsafe backend error text")
 		}
@@ -98,7 +99,7 @@ func TestFSErrorTextKeepsKnownFailures(t *testing.T) {
 		base := openFSFunc(func(string) (fs.File, error) {
 			return nil, &fs.PathError{Op: "backend", Path: "/private", Err: cause}
 		})
-		_, err := newLinkFS(t, base, eris.BlockSet{}).Open("public")
+		_, err := newLinkFS(t, base, eris.BlockSet{}).Open(context.Background(), "public")
 		if err == nil || err.Error() != "open public: "+cause.Error() || !errors.Is(err, cause) {
 			t.Fatalf("known failure: %v", err)
 		}

@@ -1,6 +1,7 @@
 package link_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -27,7 +28,7 @@ func ExampleNewFS() {
 	if err != nil {
 		panic(err)
 	}
-	content, err := fs.ReadFile(files, "hello.txt.eris")
+	content, err := fs.ReadFile(link.NewIOFS(context.Background(), files), "hello.txt.eris")
 	if err != nil {
 		panic(err)
 	}
@@ -49,7 +50,7 @@ func ExampleFS_Open() {
 	if err != nil {
 		panic(err)
 	}
-	file, err := files.Open("message")
+	file, err := files.Open(context.Background(), "message")
 	if err != nil {
 		panic(err)
 	}

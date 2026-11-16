@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -60,7 +61,7 @@ func TestCompressedFileRoundTripAndDeterminism(t *testing.T) {
 			if run == 1 {
 				input = smallChunkReader{Reader: input, max: 37}
 			}
-			if err := builder.AddCompressedFile("file", input, true); err != nil {
+			if err := builder.AddCompressedFile(context.Background(), "file", input, true); err != nil {
 				t.Fatalf("compress %d bytes: %v", len(content), err)
 			}
 			if run == 0 {
@@ -79,7 +80,7 @@ func TestCompressedFileRoundTripAndDeterminism(t *testing.T) {
 			if fileEntry.Compression != Lzip || fileEntry.Size != int64(len(content)) {
 				t.Fatalf("compressed metadata = %#v", index)
 			}
-			raw, err := eris.NewReader(fileEntry.Capability, blocks)
+			raw, err := eris.NewReader(context.Background(), fileEntry.Capability, blocks)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -91,19 +92,19 @@ func TestCompressedFileRoundTripAndDeterminism(t *testing.T) {
 			if got := binary.LittleEndian.Uint64(compressed[len(compressed)-8:]); got != uint64(len(compressed)) {
 				t.Fatalf("Lzip member size %d, want %d", got, len(compressed))
 			}
-			cap, err := builder.Finish()
+			cap, err := builder.Finish(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
-			image, err := OpenFS(cap, blocks)
+			image, err := OpenFS(context.Background(), cap, blocks)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := stdfs.ReadFile(image, "file")
+			got, err := stdfs.ReadFile(NewIOFS(context.Background(), image), "file")
 			if err != nil || !bytes.Equal(got, content) {
 				t.Fatalf("round trip %d bytes: %v", len(content), err)
 			}
-			info, err := image.Stat("file")
+			info, err := image.Stat(context.Background(), "file")
 			if err != nil || info.Size() != int64(len(content)) || info.Mode() != 0o555 {
 				t.Fatalf("stat: %v, %v", info, err)
 			}
@@ -118,53 +119,53 @@ func TestCompressedFileRoundTripAndDeterminism(t *testing.T) {
 
 func TestCompressedFileErrors(t *testing.T) {
 	var nilBuilder *Builder
-	if err := nilBuilder.AddCompressedFile("file", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidEntry) {
+	if err := nilBuilder.AddCompressedFile(context.Background(), "file", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatal(err)
 	}
 	builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
-	if err := builder.AddCompressedFile("file", nil, false); !errors.Is(err, ErrInvalidEntry) {
+	if err := builder.AddCompressedFile(context.Background(), "file", nil, false); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatal(err)
 	}
-	if err := builder.AddCompressedFile(".", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidPath) {
+	if err := builder.AddCompressedFile(context.Background(), ".", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidPath) {
 		t.Fatal(err)
 	}
 	if err := builder.AddSymlink("file", "target"); err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.AddCompressedFile("file", bytes.NewReader(nil), false); !errors.Is(err, ErrPathConflict) {
+	if err := builder.AddCompressedFile(context.Background(), "file", bytes.NewReader(nil), false); !errors.Is(err, ErrPathConflict) {
 		t.Fatal(err)
 	}
 	sentinel := errors.New("sentinel")
 	builder = NewBuilder(make(eris.BlockSet), eris.Secret{})
-	if err := builder.AddCompressedFile("file", errorReader{sentinel}, false); !errors.Is(err, sentinel) {
+	if err := builder.AddCompressedFile(context.Background(), "file", errorReader{sentinel}, false); !errors.Is(err, sentinel) {
 		t.Fatalf("source error: %v", err)
 	}
 	if len(builder.Index().Entries) != 0 {
 		t.Fatal("source error added entry")
 	}
 	builder = NewBuilder(errorSink{sentinel}, eris.Secret{})
-	if err := builder.AddCompressedFile("file", bytes.NewReader(deterministicBytes(100000)), false); !errors.Is(err, sentinel) {
+	if err := builder.AddCompressedFile(context.Background(), "file", bytes.NewReader(deterministicBytes(100000)), false); !errors.Is(err, sentinel) {
 		t.Fatalf("sink error: %v", err)
 	}
 	if len(builder.Index().Entries) != 0 {
 		t.Fatal("sink error added entry")
 	}
-	if _, err := writeLzip(failWriter{sentinel}, bytes.NewReader(nil)); !errors.Is(err, sentinel) {
+	if _, err := writeLzip(context.Background(), failWriter{sentinel}, bytes.NewReader(nil)); !errors.Is(err, sentinel) {
 		t.Fatalf("output error: %v", err)
 	}
-	if _, err := writeLzip(shortWriter{}, bytes.NewReader(nil)); !errors.Is(err, io.ErrShortWrite) {
+	if _, err := writeLzip(context.Background(), shortWriter{}, bytes.NewReader(nil)); !errors.Is(err, io.ErrShortWrite) {
 		t.Fatalf("short output: %v", err)
 	}
 	for _, call := range []int{2, 3} {
 		writer := &failOnCall{failAt: call, err: sentinel}
-		if _, err := writeLzip(writer, bytes.NewReader([]byte("payload"))); !errors.Is(err, sentinel) {
+		if _, err := writeLzip(context.Background(), writer, bytes.NewReader([]byte("payload"))); !errors.Is(err, sentinel) {
 			t.Fatalf("write %d: %v", call, err)
 		}
 	}
 	// Fail while the compressor writes content, before it writes the end marker.
 	writer := &failOnCall{failAt: 2, err: sentinel}
 	input := &countReader{reader: bytes.NewReader(autoRandomBytes(9 << 20))}
-	if _, err := writeLzip(writer, input); !errors.Is(err, sentinel) {
+	if _, err := writeLzip(context.Background(), writer, input); !errors.Is(err, sentinel) {
 		t.Fatalf("compressed body write: %v", err)
 	}
 	if input.size >= 9<<20 {

@@ -1,6 +1,7 @@
 package volume_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -23,11 +24,11 @@ func Example() {
 	}
 	defer func() { _ = store.Close() }()
 
-	capability, err := eris.EncodeContentRecommended(strings.NewReader("Hello, ERIS!"), eris.Secret{}, store)
+	capability, err := eris.EncodeContentRecommended(context.Background(), strings.NewReader("Hello, ERIS!"), eris.Secret{}, store)
 	if err != nil {
 		panic(err)
 	}
-	reader, err := eris.NewReader(capability, store)
+	reader, err := eris.NewReader(context.Background(), capability, store)
 	if err != nil {
 		panic(err)
 	}

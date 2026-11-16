@@ -52,7 +52,7 @@ func TestChainReads(t *testing.T) {
 	}
 	ref, _ := elements[0].Reference()
 	writeFile(t, filepath.Join("first", volume.BlockPath(ref)), []byte("corrupt"))
-	got, err := chain.GetBlock(ref, 1)
+	got, err := chain.GetBlock(context.Background(), ref, 1)
 	if err != nil || !bytes.Equal(got, blocks[ref]) {
 		t.Fatalf("CBOR fallback: length %d, %v", len(got), err)
 	}
@@ -64,7 +64,7 @@ func TestChainReads(t *testing.T) {
 	block, lastRef := testBlock(t, eris.BlockSize1KiB, 75)
 	writeFile(t, filepath.Join("last", lastRef.String()), block)
 	indexes, failures = nil, nil
-	got, err = chain.GetBlockContext(context.Background(), lastRef, eris.NoTTL)
+	got, err = chain.GetBlock(context.Background(), lastRef, eris.NoTTL)
 	if err != nil || !bytes.Equal(got, block) || !reflect.DeepEqual(indexes, []int{0, 1}) {
 		t.Fatalf("last-volume fallback: length %d, errors %v, %v", len(got), indexes, err)
 	}
@@ -73,7 +73,7 @@ func TestChainReads(t *testing.T) {
 	writeFile(t, filepath.Join("first", volume.BlockPath(lastRef)), block)
 	writeFile(t, "backup.cbor", []byte("invalid"))
 	indexes = nil
-	if _, err := chain.GetBlock(lastRef, eris.NoTTL); err != nil || len(indexes) != 0 {
+	if _, err := chain.GetBlock(context.Background(), lastRef, eris.NoTTL); err != nil || len(indexes) != 0 {
 		t.Fatalf("first-volume success: %v, %v", indexes, err)
 	}
 }
@@ -92,7 +92,7 @@ func TestChainWrites(t *testing.T) {
 		failures = append(failures, err)
 	}
 	block, ref := testBlock(t, eris.BlockSize1KiB, 76)
-	got, err := chain.PutBlockContext(context.Background(), block, 1, ref)
+	got, err := chain.PutBlock(context.Background(), block, 1, ref)
 	if err != nil || got != ref || !reflect.DeepEqual(indexes, []int{0}) || !errors.Is(failures[0], volume.ErrNotDirectory) {
 		t.Fatalf("write past CBOR root: %s, %v, %v", got, indexes, err)
 	}
@@ -108,7 +108,7 @@ func TestChainWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	indexes, failures = nil, nil
-	got, err = chain.PutBlock(block, eris.NoTTL, ref)
+	got, err = chain.PutBlock(context.Background(), block, eris.NoTTL, ref)
 	if err != nil || got != ref || !reflect.DeepEqual(indexes, []int{0, 1}) {
 		t.Fatalf("write after failed destination: %s, %v, %v", got, indexes, err)
 	}
@@ -123,17 +123,17 @@ func TestChainErrorsAndCancellation(t *testing.T) {
 	chain := openChain(t, "first;invalid.cbor")
 	var indexes []int
 	chain.OnError = func(index int, _ error) { indexes = append(indexes, index) }
-	if _, err := chain.GetBlock(eris.Reference{}, eris.NoTTL); err != cbor.ErrInvalidEncoding || !reflect.DeepEqual(indexes, []int{0}) {
+	if _, err := chain.GetBlock(context.Background(), eris.Reference{}, eris.NoTTL); err != cbor.ErrInvalidEncoding || !reflect.DeepEqual(indexes, []int{0}) {
 		t.Fatalf("last error not preserved: %v, %v", indexes, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	indexes = nil
-	if _, err := chain.GetBlockContext(ctx, eris.Reference{}, eris.NoTTL); !errors.Is(err, context.Canceled) {
+	if _, err := chain.GetBlock(ctx, eris.Reference{}, eris.NoTTL); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled read: %v", err)
 	}
 	block, _ := testBlock(t, eris.BlockSize1KiB, 77)
-	if _, err := chain.PutBlockContext(ctx, block, eris.NoTTL); !errors.Is(err, context.Canceled) {
+	if _, err := chain.PutBlock(ctx, block, eris.NoTTL); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled write: %v", err)
 	}
 	if len(indexes) != 0 {
@@ -141,7 +141,7 @@ func TestChainErrorsAndCancellation(t *testing.T) {
 	}
 	assertEmpty(t, "first")
 	readOnly := openChain(t, "invalid.cbor")
-	if _, err := readOnly.PutBlock(block, eris.NoTTL); !errors.Is(err, volume.ErrNotDirectory) {
+	if _, err := readOnly.PutBlock(context.Background(), block, eris.NoTTL); !errors.Is(err, volume.ErrNotDirectory) {
 		t.Fatalf("file-only chain write: %v", err)
 	}
 }
@@ -153,7 +153,7 @@ func TestChainPathList(t *testing.T) {
 	chain := openChain(t, "first; with spaces ;first")
 	var indexes []int
 	chain.OnError = func(index int, _ error) { indexes = append(indexes, index) }
-	if _, err := chain.GetBlock(eris.Reference{}, eris.NoTTL); !errors.Is(err, eris.ErrMissingBlock) || !reflect.DeepEqual(indexes, []int{0, 1}) {
+	if _, err := chain.GetBlock(context.Background(), eris.Reference{}, eris.NoTTL); !errors.Is(err, eris.ErrMissingBlock) || !reflect.DeepEqual(indexes, []int{0, 1}) {
 		t.Fatalf("literal paths or duplicates not preserved: %v, %v", indexes, err)
 	}
 	for _, paths := range []string{";", ";first", "first;", "first;;first"} {
@@ -172,28 +172,28 @@ func TestChainPathList(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		chainDirectory(t, "with:colon")
 		colonChain := openChain(t, "with:colon;first")
-		if _, err := colonChain.GetBlock(eris.Reference{}, eris.NoTTL); !errors.Is(err, eris.ErrMissingBlock) {
+		if _, err := colonChain.GetBlock(context.Background(), eris.Reference{}, eris.NoTTL); !errors.Is(err, eris.ErrMissingBlock) {
 			t.Fatalf("colon in path: %v", err)
 		}
 	}
 	absolute := t.TempDir()
 	absoluteChain := openChain(t, absolute+";"+absolute)
-	if _, err := absoluteChain.GetBlock(eris.Reference{}, eris.NoTTL); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err := absoluteChain.GetBlock(context.Background(), eris.Reference{}, eris.NoTTL); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("absolute paths: %v", err)
 	}
 }
 
 func TestEmptyChain(t *testing.T) {
 	chain := &volume.Chain{}
-	if _, err := chain.GetBlock(eris.Reference{}, eris.NoTTL); err != eris.ErrNoBlockStorage {
+	if _, err := chain.GetBlock(context.Background(), eris.Reference{}, eris.NoTTL); err != eris.ErrNoBlockStorage {
 		t.Fatalf("empty read: %v", err)
 	}
-	if _, err := chain.PutBlock(nil, eris.NoTTL); err != eris.ErrNoBlockStorage {
+	if _, err := chain.PutBlock(context.Background(), nil, eris.NoTTL); err != eris.ErrNoBlockStorage {
 		t.Fatalf("empty write: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := chain.GetBlockContext(ctx, eris.Reference{}, eris.NoTTL); err != context.Canceled {
+	if _, err := chain.GetBlock(ctx, eris.Reference{}, eris.NoTTL); err != context.Canceled {
 		t.Fatalf("empty canceled read: %v", err)
 	}
 	if err := chain.Close(); err != nil {

@@ -58,13 +58,13 @@ link, and `Finish`. No extra deterministic mode is needed:
 ```go
 blocks := make(eris.BlockSet)
 builder := erisfs.NewBuilder(blocks, eris.Secret{})
-if err := builder.AddFile("docs/readme", strings.NewReader("hello\n"), false); err != nil {
+if err := builder.AddFile(ctx, "docs/readme", strings.NewReader("hello\n"), false); err != nil {
 	return err
 }
 if err := builder.AddSymlink("readme", "docs/readme"); err != nil {
 	return err
 }
-capability, err := builder.Finish()
+capability, err := builder.Finish(ctx)
 if err != nil {
 	return err
 }
@@ -97,7 +97,7 @@ profile.
 In the example above, replace the file call with:
 
 ```go
-if err := builder.AddAutoFile("docs/readme", strings.NewReader("hello\n"), false); err != nil {
+if err := builder.AddAutoFile(ctx, "docs/readme", strings.NewReader("hello\n"), false); err != nil {
 	return err
 }
 ```

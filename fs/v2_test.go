@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -38,7 +39,7 @@ func storeV1Index(t testing.TB, index Index, blocks eris.BlockSet) eris.Capabili
 			data = appendBytes(data, cap)
 		}
 	}
-	cap, err := eris.EncodeContent(bytes.NewReader(data), eris.Secret{}, eris.BlockSize1KiB, blocks)
+	cap, err := eris.EncodeContent(context.Background(), bytes.NewReader(data), eris.Secret{}, eris.BlockSize1KiB, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,28 +204,28 @@ func TestV1FilesAndMixedNestedImages(t *testing.T) {
 	for _, kind := range []EntryType{Regular, Executable} {
 		blocks := make(eris.BlockSet)
 		content := bytes.Repeat([]byte("old file\n"), 3000)
-		capability, err := eris.EncodeContent(bytes.NewReader(content), eris.Secret{}, eris.BlockSize1KiB, blocks)
+		capability, err := eris.EncodeContent(context.Background(), bytes.NewReader(content), eris.Secret{}, eris.BlockSize1KiB, blocks)
 		if err != nil {
 			t.Fatal(err)
 		}
 		old := storeV1Index(t, Index{Entries: []Entry{{Path: []string{"file"}, Type: kind, Capability: capability}}}, blocks)
-		parsed, err := DecodeIndex(old, blocks)
+		parsed, err := DecodeIndex(context.Background(), old, blocks)
 		if err != nil || parsed.Entries[0].Size != -1 {
 			t.Fatalf("v1 size: %v, %v", parsed, err)
 		}
-		if _, err := EncodeIndex(parsed, eris.Secret{}, blocks); !errors.Is(err, ErrUnknownSize) {
+		if _, err := EncodeIndex(context.Background(), parsed, eris.Secret{}, blocks); !errors.Is(err, ErrUnknownSize) {
 			t.Fatal(err)
 		}
-		image, err := OpenFS(old, blocks)
+		image, err := OpenFS(context.Background(), old, blocks)
 		if err != nil {
 			t.Fatal(err)
 		}
-		info, err := image.Stat("file")
+		info, err := image.Stat(context.Background(), "file")
 		if err != nil || info.Size() != int64(len(content)) {
 			t.Fatalf("stat: %v, %v", info, err)
 		}
 		for range 2 {
-			file, err := image.OpenFile("file")
+			file, err := image.OpenFile(context.Background(), "file")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -235,7 +236,7 @@ func TestV1FilesAndMixedNestedImages(t *testing.T) {
 			_ = file.Close()
 		}
 		parsed.Entries[0].Size = int64(len(content))
-		modern, err := EncodeIndex(parsed, eris.Secret{}, blocks)
+		modern, err := EncodeIndex(context.Background(), parsed, eris.Secret{}, blocks)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,15 +246,15 @@ func TestV1FilesAndMixedNestedImages(t *testing.T) {
 		if err := builder.AddSubdirectory("old", oldParent); err != nil {
 			t.Fatal(err)
 		}
-		root, err := builder.Finish()
+		root, err := builder.Finish(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
-		mixed, err := OpenFS(root, blocks)
+		mixed, err := OpenFS(context.Background(), root, blocks)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := stdfs.ReadFile(mixed, "old/new/file")
+		got, err := stdfs.ReadFile(NewIOFS(context.Background(), mixed), "old/new/file")
 		if err != nil || !bytes.Equal(got, content) {
 			t.Fatalf("nested read: %v", err)
 		}
@@ -263,30 +264,30 @@ func TestV1FilesAndMixedNestedImages(t *testing.T) {
 func TestV2MetadataWithoutContent(t *testing.T) {
 	blocks := make(eris.BlockSet)
 	index := Index{Entries: []Entry{{Path: []string{"file"}, Capability: eris.Capability{BlockSize: eris.BlockSize1KiB}, Size: 123}}}
-	root, err := EncodeIndex(index, eris.Secret{}, blocks)
+	root, err := EncodeIndex(context.Background(), index, eris.Secret{}, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := &failAfterSource{BlockSource: blocks}
-	image, err := OpenFS(root, source)
+	image, err := OpenFS(context.Background(), root, source)
 	if err != nil {
 		t.Fatal(err)
 	}
 	source.calls = 0
-	for _, stat := range []func(string) (stdfs.FileInfo, error){image.Stat, image.Lstat} {
-		info, err := stat("file")
+	for _, stat := range []func(context.Context, string) (stdfs.FileInfo, error){image.Stat, image.Lstat} {
+		info, err := stat(context.Background(), "file")
 		if err != nil || info.Size() != 123 {
 			t.Fatalf("metadata: %v, %v", info, err)
 		}
 	}
-	entries, err := image.ReadDir(".")
+	entries, err := image.ReadDir(context.Background(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info, err := entries[0].Info(); err != nil || info.Size() != 123 {
 		t.Fatalf("dir metadata: %v, %v", info, err)
 	}
-	file, err := image.OpenFile("file")
+	file, err := image.OpenFile(context.Background(), "file")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +303,7 @@ func TestV2MetadataWithoutContent(t *testing.T) {
 func TestV2AdditionalErrorPaths(t *testing.T) {
 	sentinel := errors.New("storage failed")
 	builder := NewBuilder(errorSink{sentinel}, eris.Secret{})
-	if err := builder.AddFile("file", strings.NewReader("data"), false); !errors.Is(err, sentinel) {
+	if err := builder.AddFile(context.Background(), "file", strings.NewReader("data"), false); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
 	if len(builder.Index().Entries) != 0 {
@@ -320,17 +321,17 @@ func TestV2AdditionalErrorPaths(t *testing.T) {
 	blocks := make(eris.BlockSet)
 	cap, _, _ := eris.Encode([]byte("missing"), eris.Secret{}, eris.BlockSize1KiB)
 	old := storeV1Index(t, Index{Entries: []Entry{{Path: []string{"file"}, Capability: cap}}}, blocks)
-	image, err := OpenFS(old, blocks)
+	image, err := OpenFS(context.Background(), old, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := image.Open("file"); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err := image.Open(context.Background(), "file"); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatal(err)
 	}
-	if _, err := image.Lstat("absent"); !errors.Is(err, stdfs.ErrNotExist) {
+	if _, err := image.Lstat(context.Background(), "absent"); !errors.Is(err, stdfs.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if _, err := image.Sub("file"); !errors.Is(err, stdfs.ErrInvalid) {
+	if _, err := image.Sub(context.Background(), "file"); !errors.Is(err, stdfs.ErrInvalid) {
 		t.Fatal(err)
 	}
 }
@@ -338,10 +339,10 @@ func TestV2AdditionalErrorPaths(t *testing.T) {
 func TestMixedSubdirectoryReuse(t *testing.T) {
 	blocks := make(eris.BlockSet)
 	nested := NewBuilder(blocks, eris.Secret{})
-	if err := nested.AddFile("dir/file", strings.NewReader("content"), false); err != nil {
+	if err := nested.AddFile(context.Background(), "dir/file", strings.NewReader("content"), false); err != nil {
 		t.Fatal(err)
 	}
-	inner, err := nested.Finish()
+	inner, err := nested.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,29 +350,29 @@ func TestMixedSubdirectoryReuse(t *testing.T) {
 	if err := outer.AddSubdirectory("nested", inner); err != nil {
 		t.Fatal(err)
 	}
-	root, err := outer.Finish()
+	root, err := outer.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := &failAfterSource{BlockSource: blocks}
-	image, err := OpenFS(root, source)
+	image, err := OpenFS(context.Background(), root, source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sub, err := image.Sub("nested")
+	sub, err := image.Sub(context.Background(), "nested")
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := source.calls
 	for range 2 {
-		if _, err := image.ReadDir("nested"); err != nil {
+		if _, err := image.ReadDir(context.Background(), "nested"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if source.calls != before {
 		t.Fatal("nested index was fetched again")
 	}
-	deeper, err := stdfs.Sub(sub, "dir")
+	deeper, err := stdfs.Sub(NewIOFS(context.Background(), sub), "dir")
 	if err != nil {
 		t.Fatal(err)
 	}

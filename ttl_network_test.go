@@ -36,19 +36,13 @@ type ttlStore struct {
 	seen []eris.TTL
 }
 
-func (s *ttlStore) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (s *ttlStore) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	s.seen = append(s.seen, ttl)
-	return s.BlockSet.GetBlock(ref, ttl)
+	return s.BlockSet.GetBlock(ctx, ref, ttl)
 }
-func (s *ttlStore) PutBlock(block []byte, ttl eris.TTL, refs ...eris.Reference) (eris.Reference, error) {
+func (s *ttlStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, refs ...eris.Reference) (eris.Reference, error) {
 	s.seen = append(s.seen, ttl)
-	return s.BlockSet.PutBlock(block, ttl, refs...)
-}
-func (s *ttlStore) GetBlockContext(_ context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return s.GetBlock(ref, ttl)
-}
-func (s *ttlStore) PutBlockContext(_ context.Context, block []byte, ttl eris.TTL, refs ...eris.Reference) (eris.Reference, error) {
-	return s.PutBlock(block, ttl, refs...)
+	return s.BlockSet.PutBlock(ctx, block, ttl, refs...)
 }
 
 // Each transport uses real request builders and handlers, but no sockets. The
@@ -137,18 +131,18 @@ func ttlNetwork(t *testing.T, name string, target eris.BlockSource, wire *[]eris
 func TestNetworkTTLRoundTrip(t *testing.T) {
 	for _, name := range []string{"http", "s3", "coap"} {
 		for _, ttl := range []eris.TTL{0, 1, 2, 9, 255} {
-			for _, plain := range []bool{false, true} {
-				t.Run(fmt.Sprintf("%s/%d/plain=%v", name, ttl, plain), func(t *testing.T) {
+			for _, wrapped := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%d/wrapped=%v", name, ttl, wrapped), func(t *testing.T) {
 					block := make([]byte, eris.BlockSize1KiB)
 					ref, _ := eris.ReferenceOf(block)
 					terminal := &ttlStore{BlockSet: eris.BlockSet{ref: block}}
 					var target eris.BlockSource = terminal
-					if plain {
+					if wrapped {
 						target = struct{ eris.BlockStore }{terminal}
 					}
 					var wire []eris.TTL
 					client := ttlNetwork(t, name, target, &wire)
-					got, err := client.GetBlockContext(context.Background(), ref, ttl)
+					got, err := client.GetBlock(context.Background(), ref, ttl)
 					count := 1
 					if ttl == 1 {
 						if !errors.Is(err, eris.ErrTTLExpired) {
@@ -159,7 +153,7 @@ func TestNetworkTTLRoundTrip(t *testing.T) {
 					}
 					if name != "http" {
 						count++
-						_, err = client.PutBlockContext(context.Background(), block, ttl, ref)
+						_, err = client.PutBlock(context.Background(), block, ttl, ref)
 						if ttl == 1 {
 							if !errors.Is(err, eris.ErrTTLExpired) {
 								t.Fatalf("PUT: %v", err)
@@ -201,7 +195,7 @@ func TestNetworkTTLStopsLoops(t *testing.T) {
 				loop = *eris.NewCombinedBlockStore(client)
 				block := make([]byte, eris.BlockSize1KiB)
 				ref, _ := eris.ReferenceOf(block)
-				_, err := client.GetBlock(ref, ttl)
+				_, err := client.GetBlock(context.Background(), ref, ttl)
 				check := func(err error) {
 					t.Helper()
 					if !errors.Is(err, eris.ErrTTLExpired) {
@@ -223,7 +217,7 @@ func TestNetworkTTLStopsLoops(t *testing.T) {
 				check(err)
 				if name != "http" {
 					wire = nil
-					_, err = client.PutBlock(block, ttl, ref)
+					_, err = client.PutBlock(context.Background(), block, ttl, ref)
 					check(err)
 				}
 			})
@@ -237,7 +231,7 @@ func TestCoAPBlockWisePreservesTTL(t *testing.T) {
 	terminal := &ttlStore{BlockSet: make(eris.BlockSet)}
 	var wire []eris.TTL
 	client := ttlNetwork(t, "coap", terminal, &wire)
-	if _, err := client.PutBlock(block, 7, ref); err != nil {
+	if _, err := client.PutBlock(context.Background(), block, 7, ref); err != nil {
 		t.Fatal(err)
 	}
 	if len(wire) < 2 {
@@ -249,7 +243,7 @@ func TestCoAPBlockWisePreservesTTL(t *testing.T) {
 		}
 	}
 	wire = nil
-	if got, err := client.GetBlock(ref, 7); err != nil || !bytes.Equal(got, block) {
+	if got, err := client.GetBlock(context.Background(), ref, 7); err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("GET: %v", err)
 	}
 	if len(wire) < 2 {
@@ -395,9 +389,9 @@ func TestTTLStopsMixedProtocolLoops(t *testing.T) {
 		ref, _ := eris.ReferenceOf(block)
 		var err error
 		if write {
-			_, err = client.PutBlock(block, 7, ref)
+			_, err = client.PutBlock(context.Background(), block, 7, ref)
 		} else {
-			_, err = client.GetBlock(ref, 7)
+			_, err = client.GetBlock(context.Background(), ref, 7)
 		}
 		if !errors.Is(err, eris.ErrTTLExpired) {
 			t.Fatalf("write %v: %v", write, err)
@@ -420,11 +414,11 @@ func TestLocalTTLAllowsFallbackAfterNetworkStore(t *testing.T) {
 			var wire []eris.TTL
 			network := ttlNetwork(t, name, local, &wire)
 			combined := eris.NewCombinedBlockStore(network, local)
-			got, err := combined.GetBlockContext(context.Background(), ref, eris.LocalTTL)
+			got, err := combined.GetBlock(context.Background(), ref, eris.LocalTTL)
 			if err != nil || !bytes.Equal(got, block) {
 				t.Fatalf("local read: %v", err)
 			}
-			stored, err := combined.PutBlockContext(context.Background(), block, eris.LocalTTL, ref)
+			stored, err := combined.PutBlock(context.Background(), block, eris.LocalTTL, ref)
 			if err != nil || stored != ref {
 				t.Fatalf("local write: %v", err)
 			}

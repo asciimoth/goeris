@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"reflect"
 	"slices"
@@ -77,7 +78,7 @@ func TestIndexRecommendedBlockSizeBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 		blocks := make(eris.BlockSet)
-		got, err := EncodeIndex(index, eris.Secret{}, blocks)
+		got, err := EncodeIndex(context.Background(), index, eris.Secret{}, blocks)
 		if err != nil || got != want || !reflect.DeepEqual(blocks, wantBlocks) {
 			t.Fatalf("index size %d: wrong capability or blocks: %v", size, err)
 		}

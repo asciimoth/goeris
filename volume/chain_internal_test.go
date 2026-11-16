@@ -1,6 +1,7 @@
 package volume
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -30,7 +31,7 @@ func TestChainCloseOwnsAllHandles(t *testing.T) {
 		t.Fatalf("close error not retained: %v", err)
 	}
 	for index, v := range chain.volumes {
-		if _, err := v.GetBlock(eris.Reference{}, eris.NoTTL); !errors.Is(err, fs.ErrClosed) {
+		if _, err := v.GetBlock(context.Background(), eris.Reference{}, eris.NoTTL); !errors.Is(err, fs.ErrClosed) {
 			t.Fatalf("volume %d left open: %v", index, err)
 		}
 	}

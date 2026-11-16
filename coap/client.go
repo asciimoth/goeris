@@ -47,12 +47,7 @@ func NewClient(requester protocol.Requester, store StoreURL, config ClientConfig
 }
 
 // GetBlock retrieves and verifies one encrypted block.
-func (client *Client) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return client.GetBlockContext(context.Background(), ref, ttl)
-}
-
-// GetBlockContext retrieves and verifies one encrypted block.
-func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	if client == nil || client.requester == nil {
 		return nil, ErrNilRequester
 	}
@@ -89,15 +84,10 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference, t
 	return block, nil
 }
 
-// PutBlock stores one encrypted block and returns its reference.
-func (client *Client) PutBlock(block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
-	return client.PutBlockContext(context.Background(), block, ttl, expected...)
-}
-
-// PutBlockContext stores one encrypted block and returns its reference. If an
+// PutBlock stores one encrypted block and returns its reference. If an
 // older server returns no reference, it computes the reference locally when
 // no expected reference was supplied.
-func (client *Client) PutBlockContext(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	if client == nil || client.requester == nil {
 		return eris.Reference{}, ErrNilRequester
 	}
@@ -227,8 +217,4 @@ func (requester *limitedRequester) Request(ctx context.Context, request *protoco
 	return response, nil
 }
 
-var (
-	_ eris.BlockStore         = (*Client)(nil)
-	_ eris.ContextBlockSource = (*Client)(nil)
-	_ eris.ContextBlockSink   = (*Client)(nil)
-)
+var _ eris.BlockStore = (*Client)(nil)

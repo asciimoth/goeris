@@ -24,9 +24,11 @@
 // unlimited decoded content. The handler scans the tree to find its size, even
 // for HEAD and range requests. Requests with more than 16 range entries receive
 // HTTP 416 before any block reads. Block sources must verify blocks as required by
-// eris.BlockSource. Sources that implement eris.ContextBlockSource can stop
-// pending reads when a request is canceled or a response write fails. Sources
-// without context support must bound their own read time.
+// eris.BlockSource. Each block read receives the request context unchanged.
+// Sources that support cancellation can stop pending reads when the request
+// ends. After a response write fails, Handler returns so net/http can cancel
+// that context. Callers that invoke Handler directly must cancel the request
+// context themselves. Sources that ignore cancellation must bound their read time.
 // For very large resources, the handler ignores ranges if their combined size
 // could overflow the response length. Small ranges remain available.
 //

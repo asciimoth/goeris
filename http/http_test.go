@@ -23,7 +23,7 @@ func (function clientFunc) Do(request *nethttp.Request) (*nethttp.Response, erro
 
 type sourceFunc func(eris.Reference) ([]byte, error)
 
-func (function sourceFunc) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (function sourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	return function(ref)
 }
 
@@ -72,25 +72,19 @@ func TestHandlerCombinedPlainBlockSets(t *testing.T) {
 }
 
 type contextSource struct {
-	blocks       eris.BlockSet
-	wantContext  context.Context
-	contextCalls int
-	plainCalls   int
+	blocks      eris.BlockSet
+	wantContext context.Context
+	calls       int
 }
 
 type requestContextKey struct{}
 
-func (source *contextSource) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	source.plainCalls++
-	return source.blocks.GetBlock(ref, 0)
-}
-
-func (source *contextSource) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	source.contextCalls++
-	if ctx.Value(requestContextKey{}) != source.wantContext.Value(requestContextKey{}) {
+func (source *contextSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+	source.calls++
+	if ctx != source.wantContext {
 		return nil, errors.New("incorrect request context")
 	}
-	return source.blocks.GetBlock(ref, 0)
+	return source.blocks.GetBlock(ctx, ref, 0)
 }
 
 func TestResourceURL(t *testing.T) {
@@ -229,8 +223,8 @@ func TestHandlerForwardsRequestContext(t *testing.T) {
 	if recorder.Code != nethttp.StatusOK || !bytes.Equal(recorder.Body.Bytes(), content) {
 		t.Fatalf("response = %d, %q", recorder.Code, recorder.Body.Bytes())
 	}
-	if source.contextCalls == 0 || source.plainCalls != 0 {
-		t.Fatalf("context calls = %d, plain calls = %d", source.contextCalls, source.plainCalls)
+	if source.calls == 0 {
+		t.Fatal("storage was not called")
 	}
 }
 
@@ -285,11 +279,7 @@ func TestClientGetBlock(t *testing.T) {
 	})}
 	base, _ := url.Parse("http://in-memory.invalid")
 	client, _ := NewClient(httpClient, base)
-	got, err := client.GetBlockContext(context.Background(), ref, 0)
-	if err != nil || !bytes.Equal(got, blocks[ref]) {
-		t.Fatalf("GetBlockContext() = %x, %v", got, err)
-	}
-	got, err = client.GetBlock(ref, 0)
+	got, err := client.GetBlock(context.Background(), ref, 0)
 	if err != nil || !bytes.Equal(got, blocks[ref]) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
@@ -309,7 +299,7 @@ func TestClientBlockSizeBoundaryAndClose(t *testing.T) {
 		response.Body = body
 		return response, nil
 	}), base)
-	got, err := client.GetBlock(ref, 0)
+	got, err := client.GetBlock(context.Background(), ref, 0)
 	if err != nil || !bytes.Equal(got, blocks[ref]) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
@@ -379,7 +369,7 @@ func TestClientGetBlockErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client, _ := NewClient(test.do, base)
-			got, err := client.GetBlockContext(context.Background(), ref, 0)
+			got, err := client.GetBlock(context.Background(), ref, 0)
 			if got != nil {
 				t.Fatalf("block = %x", got)
 			}

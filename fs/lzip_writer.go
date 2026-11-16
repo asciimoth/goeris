@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"encoding/binary"
 	"hash/crc32"
 	"io"
@@ -13,7 +14,7 @@ import (
 // writeLzip streams one deterministic Lzip member. The LZMA writer emits a
 // 13-byte .lzma header, which Lzip replaces with its own six-byte header.
 // The 20-byte Lzip trailer contains CRC-32, decoded size, and member size.
-func writeLzip(output io.Writer, content io.Reader) (int64, error) {
+func writeLzip(ctx context.Context, output io.Writer, content io.Reader) (int64, error) {
 	header := [...]byte{'L', 'Z', 'I', 'P', 1, 23} // 2^23 = 8 MiB dictionary.
 	if err := writeAll(output, header[:]); err != nil {
 		return 0, err
@@ -40,7 +41,7 @@ func writeLzip(output io.Writer, content io.Reader) (int64, error) {
 	counted := &countReader{reader: io.TeeReader(content, checksum)}
 	var buffer [32 << 10]byte
 	for {
-		n, err := streamio.ReadFull(counted, buffer[:])
+		n, err := streamio.ReadFull(ctx, counted, buffer[:])
 		if err != nil && err != io.EOF {
 			return 0, err
 		}

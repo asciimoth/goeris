@@ -1,6 +1,7 @@
 package link
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -32,7 +33,7 @@ func BenchmarkFSOpen(b *testing.B) {
 			}
 			b.ReportAllocs()
 			for b.Loop() {
-				file, err := files.Open("file")
+				file, err := files.Open(context.Background(), "file")
 				if err != nil {
 					b.Fatal(err)
 				}

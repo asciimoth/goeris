@@ -12,7 +12,7 @@ import (
 
 type sourceFunc func(eris.Reference) ([]byte, error)
 
-func (function sourceFunc) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (function sourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	return function(ref)
 }
 
@@ -23,7 +23,7 @@ type storeFunc struct {
 
 type wrongReferenceStore struct{ eris.BlockSet }
 
-func (wrongReferenceStore) PutBlock(block []byte, ttl eris.TTL, _ ...eris.Reference) (eris.Reference, error) {
+func (wrongReferenceStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, _ ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -32,25 +32,21 @@ func (wrongReferenceStore) PutBlock(block []byte, ttl eris.TTL, _ ...eris.Refere
 	return ref, nil
 }
 
-func (store wrongReferenceStore) PutBlockContext(_ context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
-	return store.PutBlock(block, ttl, expected...)
-}
-
 type permissiveStore struct{ writes *int }
 
-func (permissiveStore) GetBlock(eris.Reference, eris.TTL) ([]byte, error) {
+func (permissiveStore) GetBlock(context.Context, eris.Reference, eris.TTL) ([]byte, error) {
 	return nil, eris.ErrMissingBlock
 }
 
-func (store permissiveStore) PutBlock(block []byte, ttl eris.TTL, _ ...eris.Reference) (eris.Reference, error) {
+func (store permissiveStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, _ ...eris.Reference) (eris.Reference, error) {
 	(*store.writes)++
 	return eris.ReferenceOf(block)
 }
 
-func (store storeFunc) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (store storeFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	return store.get(ref)
 }
-func (store storeFunc) PutBlock(block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (store storeFunc) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -69,19 +65,13 @@ type contextStore struct {
 	put    bool
 }
 
-func (store *contextStore) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	panic("non-context GetBlock called")
-}
-func (store *contextStore) PutBlock([]byte, eris.TTL, ...eris.Reference) (eris.Reference, error) {
-	panic("non-context PutBlock called")
-}
-func (store *contextStore) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (store *contextStore) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	store.get = ctx.Value(store.key) == store.value
-	return store.blocks.GetBlock(ref, 0)
+	return store.blocks.GetBlock(ctx, ref, 0)
 }
-func (store *contextStore) PutBlockContext(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (store *contextStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	store.put = ctx.Value(store.key) == store.value
-	return store.blocks.PutBlock(block, 0, expected...)
+	return store.blocks.PutBlock(ctx, block, 0, expected...)
 }
 
 func serve(t *testing.T, handler protocol.Handler, request *protocol.Message) *protocol.Message {
@@ -114,7 +104,7 @@ func TestHandlerGet(t *testing.T) {
 		t.Errorf("Max-Age = %d", age)
 	}
 	response.Payload[0]++
-	stored, _ := blocks.GetBlock(ref, 0)
+	stored, _ := blocks.GetBlock(context.Background(), ref, 0)
 	if !bytes.Equal(stored, block) {
 		t.Fatal("response aliases stored block")
 	}
@@ -172,12 +162,12 @@ func TestHandlerPut(t *testing.T) {
 	if response := serve(t, handler, request); response.Code != protocol.Created || !bytes.Equal(response.Payload, ref[:]) {
 		t.Fatalf("PUT response = %s, %x", response.Code, response.Payload)
 	}
-	stored, err := blocks.GetBlock(ref, 0)
+	stored, err := blocks.GetBlock(context.Background(), ref, 0)
 	if err != nil || !bytes.Equal(stored, block) {
 		t.Fatalf("stored block = %x, %v", stored, err)
 	}
 	request.Payload[0]++
-	stored, _ = blocks.GetBlock(ref, 0)
+	stored, _ = blocks.GetBlock(context.Background(), ref, 0)
 	if !bytes.Equal(stored, block) {
 		t.Fatal("sink retained request payload")
 	}
@@ -211,8 +201,12 @@ func TestHandlerPut(t *testing.T) {
 			clone.Options = removeTestOption(clone.Options, protocol.OptionSize1)
 			return clone
 		}(), protocol.BadRequest},
-		{"missing error", Handler{Blocks: storeFunc{get: func(ref eris.Reference) ([]byte, error) { return blocks.GetBlock(ref, 0) }, put: func(eris.Reference, []byte) error { return eris.ErrMissingBlock }}, AllowPut: true}, base, protocol.NotFound},
-		{"sink error", Handler{Blocks: storeFunc{get: func(ref eris.Reference) ([]byte, error) { return blocks.GetBlock(ref, 0) }, put: func(eris.Reference, []byte) error { return errors.New("store") }}, AllowPut: true}, base, protocol.InternalServerError},
+		{"missing error", Handler{Blocks: storeFunc{get: func(ref eris.Reference) ([]byte, error) {
+			return blocks.GetBlock(context.Background(), ref, 0)
+		}, put: func(eris.Reference, []byte) error { return eris.ErrMissingBlock }}, AllowPut: true}, base, protocol.NotFound},
+		{"sink error", Handler{Blocks: storeFunc{get: func(ref eris.Reference) ([]byte, error) {
+			return blocks.GetBlock(context.Background(), ref, 0)
+		}, put: func(eris.Reference, []byte) error { return errors.New("store") }}, AllowPut: true}, base, protocol.InternalServerError},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -352,10 +346,10 @@ func TestBlockWiseClientHandler(t *testing.T) {
 	}
 	for _, size := range []eris.BlockSize{eris.BlockSize1KiB, eris.BlockSize32KiB} {
 		block, ref := makeBlock(int(size), 11)
-		if _, err := client.PutBlock(block, 0, ref); err != nil {
+		if _, err := client.PutBlock(context.Background(), block, 0, ref); err != nil {
 			t.Fatal(err)
 		}
-		got, err := client.GetBlock(ref, 0)
+		got, err := client.GetBlock(context.Background(), ref, 0)
 		if err != nil || !bytes.Equal(got, block) {
 			t.Fatalf("GetBlock() = %x, %v", got, err)
 		}

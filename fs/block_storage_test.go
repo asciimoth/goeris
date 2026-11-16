@@ -2,6 +2,7 @@ package fs_test
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ type opaqueBlocks struct {
 	writes int
 }
 
-func (store *opaqueBlocks) PutBlock(block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (store *opaqueBlocks) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -31,7 +32,7 @@ func (store *opaqueBlocks) PutBlock(block []byte, ttl eris.TTL, expected ...eris
 	return ref, nil
 }
 
-func (store *opaqueBlocks) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (store *opaqueBlocks) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	store.reads++
 	block, ok := store.data[ref]
 	if !ok {
@@ -47,10 +48,10 @@ func TestImageThroughBlockStorage(t *testing.T) {
 	plain := bytes.Repeat([]byte("a block storage image "), 4000)
 	packed := strings.Repeat("compress this text ", 4000)
 	nested := erisfs.NewBuilder(store, eris.Secret{1})
-	if err := nested.AddFile("plain", bytes.NewReader(plain), false); err != nil {
+	if err := nested.AddFile(context.Background(), "plain", bytes.NewReader(plain), false); err != nil {
 		t.Fatal(err)
 	}
-	nestedCap, err := nested.Finish()
+	nestedCap, err := nested.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestImageThroughBlockStorage(t *testing.T) {
 	if err := builder.AddSubdirectory("nested", nestedCap); err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.AddAutoFile("packed", strings.NewReader(packed), false); err != nil {
+	if err := builder.AddAutoFile(context.Background(), "packed", strings.NewReader(packed), false); err != nil {
 		t.Fatal(err)
 	}
 	if builder.Index().Entries[1].Compression != erisfs.Lzip {
@@ -67,7 +68,7 @@ func TestImageThroughBlockStorage(t *testing.T) {
 	if err := builder.AddSymlink("link", "nested/plain"); err != nil {
 		t.Fatal(err)
 	}
-	capability, err := builder.Finish()
+	capability, err := builder.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +78,7 @@ func TestImageThroughBlockStorage(t *testing.T) {
 
 	// Read through a separate handle, as with an external block service.
 	reader := &opaqueBlocks{data: store.data}
-	image, err := erisfs.OpenFS(capability, reader)
+	image, err := erisfs.OpenFS(context.Background(), capability, reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +86,7 @@ func TestImageThroughBlockStorage(t *testing.T) {
 		t.Fatal("opening the index did not use GetBlock")
 	}
 	reader.reads = 0
-	file, err := image.OpenFile("nested/plain")
+	file, err := image.OpenFile(context.Background(), "nested/plain")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,7 @@ func TestImageThroughBlockStorage(t *testing.T) {
 		"link":   plain,
 		"packed": []byte(packed),
 	} {
-		opened, err := image.Open(name)
+		opened, err := image.Open(context.Background(), name)
 		if err != nil {
 			t.Fatal(err)
 		}

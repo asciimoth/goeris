@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base32"
 	"encoding/json"
 	"errors"
@@ -83,7 +84,7 @@ func TestERISOfficialVectors(t *testing.T) {
 		t.Run(path.Base(header.Name), func(t *testing.T) {
 			content := decode(vector.Content)
 			decoded, err := Decode(capability, blocks)
-			reader, readErr := NewReader(capability, blocks)
+			reader, readErr := NewReader(context.Background(), capability, blocks)
 			var streamed []byte
 			if readErr == nil {
 				streamed, readErr = io.ReadAll(reader)
@@ -109,7 +110,7 @@ func TestERISOfficialVectors(t *testing.T) {
 			}
 			for _, chunk := range []int{37, 32768} {
 				actualBlocks = make(BlockSet)
-				actualCap, err = EncodeContent(smallChunkReader{bytes.NewReader(content), chunk}, secret, BlockSize(vector.Size), actualBlocks)
+				actualCap, err = EncodeContent(context.Background(), smallChunkReader{bytes.NewReader(content), chunk}, secret, BlockSize(vector.Size), actualBlocks)
 				if err != nil || actualCap != capability || !reflect.DeepEqual(actualBlocks, blocks) {
 					t.Fatalf("EncodeContent chunk %d differs from official capability or blocks: %v", chunk, err)
 				}

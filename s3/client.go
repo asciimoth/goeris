@@ -104,12 +104,7 @@ func (client *Client) newRequest(ctx context.Context, method string, ref eris.Re
 }
 
 // GetBlock retrieves and verifies one block.
-func (client *Client) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return client.GetBlockContext(context.Background(), ref, ttl)
-}
-
-// GetBlockContext retrieves and verifies one block.
-func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	request, err := client.newRequest(ctx, http.MethodGet, ref, nil, ttl, true)
 	if err != nil {
 		return nil, err
@@ -140,12 +135,7 @@ func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference, t
 }
 
 // PutBlock stores one block and returns its reference.
-func (client *Client) PutBlock(block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
-	return client.PutBlockContext(context.Background(), block, ttl, expected...)
-}
-
-// PutBlockContext stores one block and returns its reference.
-func (client *Client) PutBlockContext(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	if client == nil || client.httpClient == nil {
 		return eris.Reference{}, ErrNilHTTPClient
 	}
@@ -186,8 +176,4 @@ func responseError(response *http.Response) error {
 	return &ResponseError{StatusCode: response.StatusCode, Status: response.Status}
 }
 
-var (
-	_ eris.BlockStore         = (*Client)(nil)
-	_ eris.ContextBlockSource = (*Client)(nil)
-	_ eris.ContextBlockSink   = (*Client)(nil)
-)
+var _ eris.BlockStore = (*Client)(nil)

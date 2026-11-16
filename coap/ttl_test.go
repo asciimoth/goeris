@@ -30,8 +30,8 @@ func TestClientTTLOverridesConfiguredHopLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, getErr := client.GetBlock(ref, test.ttl)
-		_, putErr := client.PutBlock(block, test.ttl, ref)
+		_, getErr := client.GetBlock(context.Background(), ref, test.ttl)
+		_, putErr := client.PutBlock(context.Background(), block, test.ttl, ref)
 		if test.ttl == 1 {
 			if calls != 0 || !errors.Is(getErr, eris.ErrTTLExpired) || !errors.Is(putErr, eris.ErrTTLExpired) {
 				t.Fatalf("expired: %d calls, %v, %v", calls, getErr, putErr)
@@ -85,9 +85,9 @@ func TestClientBlockWiseTTLExpired(t *testing.T) {
 				t.Fatal(err)
 			}
 			if test.method == protocol.PUT {
-				_, err = client.PutBlock(block, 4, ref)
+				_, err = client.PutBlock(context.Background(), block, 4, ref)
 			} else {
-				_, err = client.GetBlock(ref, 4)
+				_, err = client.GetBlock(context.Background(), ref, 4)
 			}
 			var responseError *ResponseError
 			if !errors.Is(err, eris.ErrTTLExpired) || !errors.As(err, &responseError) || responseError.Code != protocol.HopLimitReached {

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -88,7 +89,7 @@ func TestLzipEncodingVectors(t *testing.T) {
 			for _, chunk := range chunks {
 				var output bytes.Buffer
 				input := iotest.DataErrReader(smallChunkReader{bytes.NewReader(content), chunk})
-				n, err := writeLzip(&output, input)
+				n, err := writeLzip(context.Background(), &output, input)
 				if err != nil || n != int64(len(content)) {
 					t.Fatalf("chunk %d: size=%d, error=%v", chunk, n, err)
 				}
@@ -111,7 +112,7 @@ func TestLzipEncodingVectors(t *testing.T) {
 			}
 			blocks := make(eris.BlockSet)
 			builder := NewBuilder(blocks, eris.Secret{})
-			if err := builder.AddCompressedFile("file", bytes.NewReader(content), false); err != nil {
+			if err := builder.AddCompressedFile(context.Background(), "file", bytes.NewReader(content), false); err != nil {
 				t.Fatal(err)
 			}
 			entry := builder.Index().Entries[0]
@@ -122,7 +123,7 @@ func TestLzipEncodingVectors(t *testing.T) {
 			if err != nil || hex.EncodeToString(index) != vector.IndexHex {
 				t.Fatalf("index differs from fixture: %v", err)
 			}
-			capability, err := builder.Finish()
+			capability, err := builder.Finish(context.Background())
 			if err != nil || capability.String() != vector.ImageURN {
 				t.Fatalf("image capability differs from fixture: %v", err)
 			}
@@ -141,7 +142,7 @@ func TestLzipIndependentDecoder(t *testing.T) {
 		t.Run(vector.Name, func(t *testing.T) {
 			content := vector.content(t)
 			var output bytes.Buffer
-			if _, err := writeLzip(&output, bytes.NewReader(content)); err != nil {
+			if _, err := writeLzip(context.Background(), &output, bytes.NewReader(content)); err != nil {
 				t.Fatal(err)
 			}
 			command := exec.Command(xz, "--format=lzip", "--decompress", "--stdout")

@@ -1,6 +1,7 @@
 package link_test
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"testing"
@@ -18,7 +19,7 @@ func (failedReadLinkFS) ReadLink(string) (string, error) {
 
 func TestFSDiscardsFailedReadLinkTarget(t *testing.T) {
 	wrapped := newLinkFS(t, failedReadLinkFS{fstest.MapFS{}}, eris.BlockSet{})
-	if target, err := wrapped.ReadLink("public"); target != "" || !errors.Is(err, fs.ErrPermission) {
+	if target, err := wrapped.ReadLink(context.Background(), "public"); target != "" || !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("failed ReadLink returned %q, %v", target, err)
 	}
 }
@@ -53,7 +54,7 @@ func TestFSDiscardsFailedMetadata(t *testing.T) {
 			if method == "Lstat" {
 				stat = wrapped.Lstat
 			}
-			if info, err := stat(name); info != nil || !errors.Is(err, fs.ErrPermission) {
+			if info, err := stat(context.Background(), name); info != nil || !errors.Is(err, fs.ErrPermission) {
 				t.Fatalf("%s(%q): failed metadata returned %v, %v", method, name, info, err)
 			}
 		}
@@ -99,15 +100,15 @@ func TestFSRejectsMissingBaseResults(t *testing.T) {
 			var err error
 			switch method {
 			case "Open", "File.Stat":
-				_, err = wrapped.Open("file")
+				_, err = wrapped.Open(context.Background(), "file")
 			case "ReadDir":
-				_, err = wrapped.ReadDir("dir")
+				_, err = wrapped.ReadDir(context.Background(), "dir")
 			case "Stat":
-				_, err = wrapped.Stat("file")
+				_, err = wrapped.Stat(context.Background(), "file")
 			case "Lstat":
-				_, err = wrapped.Lstat("file")
+				_, err = wrapped.Lstat(context.Background(), "file")
 			case "DirEntry.Info":
-				entries, readErr := wrapped.ReadDir("dir")
+				entries, readErr := wrapped.ReadDir(context.Background(), "dir")
 				if readErr != nil {
 					t.Fatal(readErr)
 				}
@@ -157,7 +158,7 @@ func TestFSRejectsMissingMetadataAfterOpen(t *testing.T) {
 				if method == "Lstat" {
 					stat = wrapped.Lstat
 				}
-				if info, err := stat(name); info != nil || !errors.Is(err, fs.ErrInvalid) {
+				if info, err := stat(context.Background(), name); info != nil || !errors.Is(err, fs.ErrInvalid) {
 					t.Fatalf("missing metadata: %v, %v", info, err)
 				}
 				if observed.closes != 1 {
@@ -182,9 +183,11 @@ func TestFSNonRegularEntryInfo(t *testing.T) {
 				info:     func() (fs.FileInfo, error) { return info, infoErr },
 			}}}
 			wrapped := newLinkFS(t, base, eris.BlockSet{})
-			readDir := func() ([]fs.DirEntry, error) { return wrapped.ReadDir("dir") }
+			readDir := func() ([]fs.DirEntry, error) {
+				return wrapped.ReadDir(context.Background(), "dir")
+			}
 			if viaOpen {
-				file, err := wrapped.Open("dir")
+				file, err := wrapped.Open(context.Background(), "dir")
 				if err != nil {
 					t.Fatal(err)
 				}

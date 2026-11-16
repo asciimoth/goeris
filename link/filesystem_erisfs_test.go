@@ -2,6 +2,7 @@ package link_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/asciimoth/goeris"
 	erisfs "github.com/asciimoth/goeris/fs"
+	"github.com/asciimoth/goeris/link"
 )
 
 func TestFSWithERISFSBase(t *testing.T) {
@@ -46,15 +48,15 @@ func TestFSWithERISFSBase(t *testing.T) {
 				if entry.compressed {
 					add = builder.AddCompressedFile
 				}
-				if err := add(entry.name, bytes.NewReader(entry.data), entry.executable); err != nil {
+				if err := add(context.Background(), entry.name, bytes.NewReader(entry.data), entry.executable); err != nil {
 					t.Fatal(err)
 				}
 			}
 			nested := erisfs.NewBuilder(baseBlocks, eris.Secret{})
-			if err := nested.AddFile("inner", bytes.NewReader(encoded), false); err != nil {
+			if err := nested.AddFile(context.Background(), "inner", bytes.NewReader(encoded), false); err != nil {
 				t.Fatal(err)
 			}
-			nestedRoot, err := nested.Finish()
+			nestedRoot, err := nested.Finish(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -64,18 +66,18 @@ func TestFSWithERISFSBase(t *testing.T) {
 			if err := builder.AddSymlink("alias", "docs/content"); err != nil {
 				t.Fatal(err)
 			}
-			root, err := builder.Finish()
+			root, err := builder.Finish(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
 			baseSource := &countingSource{BlockSource: baseBlocks}
 			targetSource := &countingSource{BlockSource: targets}
-			base, err := erisfs.OpenFS(root, baseSource)
+			base, err := erisfs.OpenFS(context.Background(), root, baseSource)
 			if err != nil {
 				t.Fatal(err)
 			}
 			baseSource.calls.Store(0)
-			wrapped := newLinkFS(t, base, targetSource)
+			wrapped := newLinkFS(t, erisfs.NewIOFS(context.Background(), base), targetSource)
 			if baseSource.calls.Load() != 0 || targetSource.calls.Load() != 0 {
 				t.Fatal("NewFS fetched blocks")
 			}
@@ -83,7 +85,7 @@ func TestFSWithERISFSBase(t *testing.T) {
 			// The base must fetch the encoded link. The overlay must defer
 			// target block reads, including when the base link is compressed.
 			for _, name := range []string{"docs/content", "docs/compressed.eris", "nested/inner", "empty"} {
-				file, err := wrapped.Open(name)
+				file, err := wrapped.Open(context.Background(), name)
 				if err != nil {
 					t.Fatalf("Open(%q): %v", name, err)
 				}
@@ -105,7 +107,7 @@ func TestFSWithERISFSBase(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			entries, err := wrapped.ReadDir("docs")
+			entries, err := wrapped.ReadDir(context.Background(), "docs")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -129,7 +131,7 @@ func TestFSWithERISFSBase(t *testing.T) {
 			paths := make([]string, 0, len(want))
 			for name, content := range want {
 				paths = append(paths, name)
-				got, err := fs.ReadFile(wrapped, name)
+				got, err := fs.ReadFile(link.NewIOFS(context.Background(), wrapped), name)
 				if err != nil || !bytes.Equal(got, content) {
 					t.Fatalf("ReadFile(%q): %d bytes, %v", name, len(got), err)
 				}
@@ -137,11 +139,11 @@ func TestFSWithERISFSBase(t *testing.T) {
 			if targetSource.calls.Load() == 0 {
 				t.Fatal("content reads did not fetch target blocks")
 			}
-			if err := fstest.TestFS(wrapped, paths...); err != nil {
+			if err := fstest.TestFS(link.NewIOFS(context.Background(), wrapped), paths...); err != nil {
 				t.Fatal(err)
 			}
 			for _, name := range []string{"docs/content", "docs/compressed.eris", "nested/inner"} {
-				file, err := wrapped.Open(name)
+				file, err := wrapped.Open(context.Background(), name)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -160,22 +162,22 @@ func TestFSWithERISFSBase(t *testing.T) {
 				_ = file.Close()
 			}
 			// Sub must work both before and after adding the overlay.
-			subOverlay, err := fs.Sub(wrapped, "docs")
+			subOverlay, err := fs.Sub(link.NewIOFS(context.Background(), wrapped), "docs")
 			if err != nil {
 				t.Fatal(err)
 			}
-			subBase, err := fs.Sub(base, "docs")
+			subBase, err := fs.Sub(erisfs.NewIOFS(context.Background(), base), "docs")
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, sub := range []fs.FS{subOverlay, newLinkFS(t, subBase, targetSource)} {
+			for _, sub := range []fs.FS{subOverlay, link.NewIOFS(context.Background(), newLinkFS(t, subBase, targetSource))} {
 				got, err := fs.ReadFile(sub, "content")
 				if err != nil || !bytes.Equal(got, payload) {
 					t.Fatalf("Sub read: %v", err)
 				}
 			}
 			for _, name := range []string{"docs/content", "docs/compressed.eris"} {
-				got, err := fs.ReadFile(base, name)
+				got, err := fs.ReadFile(erisfs.NewIOFS(context.Background(), base), name)
 				if err != nil || !bytes.Equal(got, encoded) {
 					t.Fatalf("base link %s changed: %v", name, err)
 				}
@@ -198,22 +200,22 @@ func TestFSWithERISFSBaseErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			baseBlocks := make(eris.BlockSet)
 			builder := erisfs.NewBuilder(baseBlocks, eris.Secret{})
-			if err := builder.AddFile("file", bytes.NewReader(encoded), false); err != nil {
+			if err := builder.AddFile(context.Background(), "file", bytes.NewReader(encoded), false); err != nil {
 				t.Fatal(err)
 			}
-			root, err := builder.Finish()
+			root, err := builder.Finish(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
 			baseSource := &countingSource{BlockSource: baseBlocks}
-			base, err := erisfs.OpenFS(root, baseSource)
+			base, err := erisfs.OpenFS(context.Background(), root, baseSource)
 			if err != nil {
 				t.Fatal(err)
 			}
 			baseSource.err = test.baseErr
 			targetSource := &countingSource{BlockSource: targets, err: test.targetErr}
-			wrapped := newLinkFS(t, base, targetSource)
-			file, err := wrapped.Open("file")
+			wrapped := newLinkFS(t, erisfs.NewIOFS(context.Background(), base), targetSource)
+			file, err := wrapped.Open(context.Background(), "file")
 			want := test.baseErr
 			if want == nil {
 				if err != nil {

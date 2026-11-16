@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -198,7 +199,7 @@ func buildAutoImage(t testing.TB, input io.Reader, executable, reverse bool) (er
 			t.Fatal(err)
 		}
 	}
-	if err := builder.AddAutoFile("file", input, executable); err != nil {
+	if err := builder.AddAutoFile(context.Background(), "file", input, executable); err != nil {
 		t.Fatal(err)
 	}
 	entries := builder.Index().Entries
@@ -208,7 +209,7 @@ func buildAutoImage(t testing.TB, input io.Reader, executable, reverse bool) (er
 			t.Fatal(err)
 		}
 	}
-	root, err := builder.Finish()
+	root, err := builder.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,15 +242,15 @@ func TestAutoFileRoundTripAndDeterminism(t *testing.T) {
 			if cap != cap2 || !reflect.DeepEqual(blocks, blocks2) || !reflect.DeepEqual(entry, entry2) {
 				t.Fatal("chunk size or insertion order changed image")
 			}
-			image, err := OpenFS(cap, blocks)
+			image, err := OpenFS(context.Background(), cap, blocks)
 			if err != nil {
 				t.Fatal(err)
 			}
-			content, err := stdfs.ReadFile(image, "link")
+			content, err := stdfs.ReadFile(NewIOFS(context.Background(), image), "link")
 			if err != nil || !bytes.Equal(content, test.content) {
 				t.Fatalf("round trip: %v", err)
 			}
-			file, err := image.OpenFile("file")
+			file, err := image.OpenFile(context.Background(), "file")
 			if test.want == Lzip {
 				if !errors.Is(err, ErrNotSeekable) {
 					t.Fatalf("compressed OpenFile: %v", err)
@@ -270,9 +271,9 @@ func TestAutoFileRoundTripAndDeterminism(t *testing.T) {
 			forcedBlocks := make(eris.BlockSet)
 			forced := NewBuilder(forcedBlocks, eris.Secret{1, 2, 3})
 			if test.want == Lzip {
-				err = forced.AddCompressedFile("file", bytes.NewReader(test.content), true)
+				err = forced.AddCompressedFile(context.Background(), "file", bytes.NewReader(test.content), true)
 			} else {
-				err = forced.AddFile("file", bytes.NewReader(test.content), true)
+				err = forced.AddFile(context.Background(), "file", bytes.NewReader(test.content), true)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -280,7 +281,7 @@ func TestAutoFileRoundTripAndDeterminism(t *testing.T) {
 			if err := forced.AddSymlink("link", "file"); err != nil {
 				t.Fatal(err)
 			}
-			forcedCap, err := forced.Finish()
+			forcedCap, err := forced.Finish(context.Background())
 			if err != nil || forcedCap != cap || !reflect.DeepEqual(forcedBlocks, blocks) {
 				t.Fatalf("auto differs from selected explicit mode: %v", err)
 			}
@@ -292,27 +293,27 @@ func TestAutoFileErrors(t *testing.T) {
 	sentinel := errors.New("source failure")
 	var absent *Builder
 	for _, builder := range []*Builder{absent, NewBuilder(nil, eris.Secret{})} {
-		if err := builder.AddAutoFile("file", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidEntry) {
+		if err := builder.AddAutoFile(context.Background(), "file", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidEntry) {
 			t.Fatal(err)
 		}
 	}
 	builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
-	if err := builder.AddAutoFile("file", nil, false); !errors.Is(err, ErrInvalidEntry) {
+	if err := builder.AddAutoFile(context.Background(), "file", nil, false); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatal(err)
 	}
-	if err := builder.AddAutoFile(".", errorReader{sentinel}, false); !errors.Is(err, ErrInvalidPath) {
+	if err := builder.AddAutoFile(context.Background(), ".", errorReader{sentinel}, false); !errors.Is(err, ErrInvalidPath) {
 		t.Fatal(err)
 	}
 	if err := builder.AddSymlink("file", "target"); err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.AddAutoFile("file", errorReader{sentinel}, false); !errors.Is(err, ErrPathConflict) {
+	if err := builder.AddAutoFile(context.Background(), "file", errorReader{sentinel}, false); !errors.Is(err, ErrPathConflict) {
 		t.Fatal(err)
 	}
 	for _, prefix := range [][]byte{nil, make([]byte, 100), make([]byte, AutoCompressionSampleSize), autoRandomBytes(AutoCompressionSampleSize)} {
 		builder = NewBuilder(make(eris.BlockSet), eris.Secret{})
 		input := io.MultiReader(bytes.NewReader(prefix), errorReader{sentinel})
-		if err := builder.AddAutoFile("file", input, false); !errors.Is(err, sentinel) {
+		if err := builder.AddAutoFile(context.Background(), "file", input, false); !errors.Is(err, sentinel) {
 			t.Fatalf("failure after %d bytes: %v", len(prefix), err)
 		}
 		if len(builder.Index().Entries) != 0 {
@@ -321,7 +322,7 @@ func TestAutoFileErrors(t *testing.T) {
 	}
 	for _, data := range [][]byte{make([]byte, 1024), autoRandomBytes(32769)} {
 		builder = NewBuilder(errorSink{sentinel}, eris.Secret{})
-		if err := builder.AddAutoFile("file", bytes.NewReader(data), false); !errors.Is(err, sentinel) {
+		if err := builder.AddAutoFile(context.Background(), "file", bytes.NewReader(data), false); !errors.Is(err, sentinel) {
 			t.Fatal(err)
 		}
 		if len(builder.Index().Entries) != 0 {
@@ -374,7 +375,7 @@ func TestAutoFilePreservesReadErrors(t *testing.T) {
 		for _, cause := range []error{sentinel, io.ErrUnexpectedEOF} {
 			builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
 			input := &finalErrorReader{data: make([]byte, size), err: cause}
-			if err := builder.AddAutoFile("file", input, false); !errors.Is(err, cause) {
+			if err := builder.AddAutoFile(context.Background(), "file", input, false); !errors.Is(err, cause) {
 				t.Fatalf("%d bytes with %v: %v", size, cause, err)
 			}
 			if len(builder.Index().Entries) != 0 {
@@ -383,7 +384,7 @@ func TestAutoFilePreservesReadErrors(t *testing.T) {
 		}
 	}
 	builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
-	if err := builder.AddAutoFile("file", noProgressReader{}, false); !errors.Is(err, io.ErrNoProgress) {
+	if err := builder.AddAutoFile(context.Background(), "file", noProgressReader{}, false); !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("empty reads: %v", err)
 	}
 }

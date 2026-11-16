@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"reflect"
@@ -104,7 +105,7 @@ func FuzzLzipFile(f *testing.F) {
 			t.Skip()
 		}
 		image := compressedImage(t, data, int64(size))
-		file, err := image.Open("file")
+		file, err := image.Open(context.Background(), "file")
 		if err != nil {
 			return
 		}
@@ -130,18 +131,18 @@ func FuzzCompressedFile(f *testing.F) {
 			t.Skip()
 		}
 		var first, second bytes.Buffer
-		if _, err := writeLzip(&first, bytes.NewReader(content)); err != nil {
+		if _, err := writeLzip(context.Background(), &first, bytes.NewReader(content)); err != nil {
 			t.Fatal(err)
 		}
 		input := iotest.DataErrReader(smallChunkReader{Reader: bytes.NewReader(content), max: int(chunk) + 1})
-		if _, err := writeLzip(&second, input); err != nil {
+		if _, err := writeLzip(context.Background(), &second, input); err != nil {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(first.Bytes(), second.Bytes()) {
 			t.Fatal("compression depends on read chunk size")
 		}
 		image := compressedImage(t, first.Bytes(), int64(len(content)))
-		file, err := image.Open("file")
+		file, err := image.Open(context.Background(), "file")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -202,11 +203,11 @@ func FuzzAutoFile(f *testing.F) {
 		if entry.Size != int64(len(content)) || entry.Compression != ChooseCompression(content) {
 			t.Fatal("incorrect auto metadata")
 		}
-		image, err := OpenFS(cap, blocks)
+		image, err := OpenFS(context.Background(), cap, blocks)
 		if err != nil {
 			t.Fatal(err)
 		}
-		file, err := image.Open("file")
+		file, err := image.Open(context.Background(), "file")
 		if err != nil {
 			t.Fatal(err)
 		}

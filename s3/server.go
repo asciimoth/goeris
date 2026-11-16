@@ -33,8 +33,8 @@ func (function RequestAuthenticatorFunc) Authenticate(request *http.Request, pay
 type Authorizer func(ctx context.Context, identity, method, bucket string, ref eris.Reference) bool
 
 // Handler serves one fixed bucket. GET and HEAD are public. PUT requires Auth,
-// public-read, and a Blocks value that also implements eris.BlockSink or
-// eris.ContextBlockSink. PUT is disabled unless AllowPut is true.
+// public-read, and a Blocks value that also implements eris.BlockSink.
+// PUT is disabled unless AllowPut is true.
 // GET and HEAD requests with more than 16 range entries receive HTTP 416
 // before storage access.
 type Handler struct {
@@ -168,8 +168,7 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		return
 	}
 	_, sinkOK := handler.Blocks.(eris.BlockSink)
-	_, contextSinkOK := handler.Blocks.(eris.ContextBlockSink)
-	if !sinkOK && !contextSinkOK {
+	if !sinkOK {
 		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store is not writable.")
 		return
 	}
@@ -204,23 +203,14 @@ func (handler Handler) getBlock(ctx context.Context, ref eris.Reference, ttl eri
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if source, ok := handler.Blocks.(eris.ContextBlockSource); ok {
-		return source.GetBlockContext(ctx, ref, ttl)
-	}
-	return handler.Blocks.GetBlock(ref, ttl)
+	return handler.Blocks.GetBlock(ctx, ref, ttl)
 }
 
 func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block []byte, ttl eris.TTL) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	var stored eris.Reference
-	var err error
-	if contextual, ok := handler.Blocks.(eris.ContextBlockSink); ok {
-		stored, err = contextual.PutBlockContext(ctx, block, ttl, ref)
-	} else {
-		stored, err = handler.Blocks.(eris.BlockSink).PutBlock(block, ttl, ref)
-	}
+	stored, err := handler.Blocks.(eris.BlockSink).PutBlock(ctx, block, ttl, ref)
 	if err != nil {
 		return err
 	}

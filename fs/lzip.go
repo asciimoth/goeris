@@ -3,6 +3,7 @@ package fs
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
@@ -26,6 +27,7 @@ const MaxLzipDictionarySize = 64 << 20
 // files. Lzip uses LZMA1 with fixed properties and a mandatory end marker.
 // See https://www.nongnu.org/lzip/manual/lzip_manual.html#File-format.
 type lzipFile struct {
+	ctx        context.Context
 	mu         sync.Mutex
 	node       *node
 	raw        *eris.Reader
@@ -39,14 +41,14 @@ type lzipFile struct {
 	closed     bool
 }
 
-func openLzipFile(item *node) (*lzipFile, error) {
-	raw, err := eris.NewReader(item.capability, item.source)
+func openLzipFile(ctx context.Context, item *node) (*lzipFile, error) {
+	raw, err := eris.NewReader(ctx, item.capability, item.source)
 	if err != nil {
 		return nil, err
 	}
 	// LZMA requests individual bytes. Buffer them so each request does not
 	// traverse the ERIS tree or acquire the underlying reader's mutex.
-	file := &lzipFile{node: item, raw: raw, input: countReader{reader: bufio.NewReader(raw)}}
+	file := &lzipFile{ctx: ctx, node: item, raw: raw, input: countReader{reader: bufio.NewReader(raw)}}
 	if err := file.nextMember(); err != nil {
 		_ = raw.Close()
 		return nil, err
@@ -132,6 +134,9 @@ func (file *lzipFile) Read(p []byte) (int, error) {
 	if file.closed {
 		return 0, ErrClosed
 	}
+	if err := file.ctx.Err(); err != nil {
+		return 0, err
+	}
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -169,7 +174,7 @@ func (file *lzipFile) Stat() (stdfs.FileInfo, error) {
 	if file.closed {
 		return nil, ErrClosed
 	}
-	return file.node.info()
+	return file.node.info(file.ctx)
 }
 
 func (file *lzipFile) Close() error {

@@ -3,6 +3,7 @@ package link_test
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -25,10 +26,10 @@ func TestFSLocalFiles(t *testing.T) {
 		}
 	}
 	wrapped := newLinkFS(t, os.DirFS(dir), blocks)
-	if err := fstest.TestFS(wrapped, "linked", "plain"); err != nil {
+	if err := fstest.TestFS(link.NewIOFS(context.Background(), wrapped), "linked", "plain"); err != nil {
 		t.Fatal(err)
 	}
-	file, err := wrapped.Open("plain")
+	file, err := wrapped.Open(context.Background(), "plain")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +45,7 @@ func TestFSLocalFiles(t *testing.T) {
 	if _, err := file.(io.ReaderAt).ReadAt(buffer, 0); err != nil || string(buffer) != "ordinary" {
 		t.Fatalf("ordinary ReadAt: %q, %v", buffer, err)
 	}
-	got, err = fs.ReadFile(wrapped, "linked")
+	got, err = fs.ReadFile(link.NewIOFS(context.Background(), wrapped), "linked")
 	if err != nil || !bytes.Equal(got, payload) {
 		t.Fatalf("linked read: %q, %v", got, err)
 	}
@@ -52,11 +53,11 @@ func TestFSLocalFiles(t *testing.T) {
 	if err := os.Symlink("linked", filepath.Join(dir, "alias")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	got, err = fs.ReadFile(wrapped, "alias")
+	got, err = fs.ReadFile(link.NewIOFS(context.Background(), wrapped), "alias")
 	if err != nil || !bytes.Equal(got, payload) {
 		t.Fatalf("symlink read: %q, %v", got, err)
 	}
-	entries, err := wrapped.ReadDir(".")
+	entries, err := wrapped.ReadDir(context.Background(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,16 +69,16 @@ func TestFSLocalFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, target := range map[string]string{"alias": "linked", "broken": "missing"} {
-		info, err := fs.Lstat(wrapped, name)
+		info, err := fs.Lstat(link.NewIOFS(context.Background(), wrapped), name)
 		if err != nil || info.Mode()&fs.ModeSymlink == 0 {
 			t.Errorf("Lstat(%q): %v, %v", name, info, err)
 		}
-		got, err := fs.ReadLink(wrapped, name)
+		got, err := fs.ReadLink(link.NewIOFS(context.Background(), wrapped), name)
 		if err != nil || got != target {
 			t.Errorf("ReadLink(%q): %q, %v", name, got, err)
 		}
 	}
-	info, err = fs.Lstat(wrapped, "linked")
+	info, err = fs.Lstat(link.NewIOFS(context.Background(), wrapped), "linked")
 	if err != nil || info.Size() != int64(len(payload)) {
 		t.Fatalf("Lstat regular link: %v, %v", info, err)
 	}
@@ -104,10 +105,10 @@ func TestFSZip(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrapped := newLinkFS(t, base, blocks)
-	if err := fstest.TestFS(wrapped, "dir/link", "dir/plain"); err != nil {
+	if err := fstest.TestFS(link.NewIOFS(context.Background(), wrapped), "dir/link", "dir/plain"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := fs.ReadFile(wrapped, "dir/link")
+	got, err := fs.ReadFile(link.NewIOFS(context.Background(), wrapped), "dir/link")
 	if err != nil || string(got) != "zip link content" {
 		t.Fatalf("ZIP link: %q, %v", got, err)
 	}
@@ -118,7 +119,7 @@ func TestFSConcurrentReads(t *testing.T) {
 	encoded, blocks := encodeFSLink(t, payload)
 	source := &countingSource{BlockSource: blocks}
 	wrapped := newLinkFS(t, fstest.MapFS{"file": {Data: encoded}}, source)
-	shared, err := wrapped.Open("file")
+	shared, err := wrapped.Open(context.Background(), "file")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +127,7 @@ func TestFSConcurrentReads(t *testing.T) {
 	for i := range 16 {
 		t.Run(string(rune('a'+i)), func(t *testing.T) {
 			t.Parallel()
-			got, err := fs.ReadFile(wrapped, "file")
+			got, err := fs.ReadFile(link.NewIOFS(context.Background(), wrapped), "file")
 			if err != nil || !bytes.Equal(got, payload) {
 				t.Fatalf("independent read: %v", err)
 			}
@@ -165,7 +166,7 @@ func FuzzFS(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		file, err := wrapped.Open("file")
+		file, err := wrapped.Open(context.Background(), "file")
 		if !link.HasHeader(data) {
 			if err != nil {
 				t.Fatal(err)

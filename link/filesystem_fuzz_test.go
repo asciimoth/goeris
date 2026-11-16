@@ -2,6 +2,7 @@ package link_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -48,7 +49,7 @@ func FuzzFSOpen(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		file, openErr := files.Open("file")
+		file, openErr := files.Open(context.Background(), "file")
 		if source.calls.Load() != 0 {
 			t.Fatal("Open fetched linked content")
 		}

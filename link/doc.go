@@ -4,7 +4,8 @@
 // media type, and optional metadata attributes. The codec operates on byte
 // slices. NewFS wraps an io/fs.FS and an eris.BlockSource to expose linked
 // content at the original file paths. It uses only these supplied interfaces
-// for file and block access.
+// for file and block access. Its methods accept context. Use
+// NewIOFS(ctx, image) for the standard io/fs interfaces.
 //
 // Parsing checks the link structure. It does not retrieve the content or
 // verify that Size, MIME, or Attributes describe that content. Treat these

@@ -85,8 +85,6 @@ func (chain *Chain) Close() error {
 }
 
 var (
-	_ eris.BlockStore         = (*Chain)(nil)
-	_ eris.ContextBlockSource = (*Chain)(nil)
-	_ eris.ContextBlockSink   = (*Chain)(nil)
-	_ io.Closer               = (*Chain)(nil)
+	_ eris.BlockStore = (*Chain)(nil)
+	_ io.Closer       = (*Chain)(nil)
 )

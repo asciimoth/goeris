@@ -21,11 +21,10 @@ import (
 type Handler struct {
 	// Path contains the store path before its final blocks segment.
 	Path []string
-	// Blocks supplies reads and, when it also implements eris.BlockSink or
-	// eris.ContextBlockSink, writes.
+	// Blocks supplies reads and, when it also implements eris.BlockSink, writes.
 	Blocks eris.BlockSource
-	// AllowPut enables PUT when Blocks also implements eris.BlockSink or
-	// eris.ContextBlockSink. The zero value rejects PUT with 4.01 Unauthorized.
+	// AllowPut enables PUT when Blocks also implements eris.BlockSink.
+	// The zero value rejects PUT with 4.01 Unauthorized.
 	AllowPut bool
 	// MaxTransfers limits active and retained block-wise transfers. Zero uses
 	// DefaultMaxTransfers. It applies only to the handler returned by BlockWise.
@@ -198,23 +197,16 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 }
 
 func (handler Handler) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	if contextual, ok := handler.Blocks.(eris.ContextBlockSource); ok {
-		return contextual.GetBlockContext(ctx, ref, ttl)
-	}
-	return handler.Blocks.GetBlock(ref, ttl)
+	return handler.Blocks.GetBlock(ctx, ref, ttl)
 }
 
 func (handler Handler) writable() bool {
 	_, sink := handler.Blocks.(eris.BlockSink)
-	_, contextual := handler.Blocks.(eris.ContextBlockSink)
-	return sink || contextual
+	return sink
 }
 
 func (handler Handler) putBlock(ctx context.Context, block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
-	if contextual, ok := handler.Blocks.(eris.ContextBlockSink); ok {
-		return contextual.PutBlockContext(ctx, append([]byte(nil), block...), ttl, expected...)
-	}
-	return handler.Blocks.(eris.BlockSink).PutBlock(append([]byte(nil), block...), ttl, expected...)
+	return handler.Blocks.(eris.BlockSink).PutBlock(ctx, append([]byte(nil), block...), ttl, expected...)
 }
 
 var _ protocol.Handler = Handler{}

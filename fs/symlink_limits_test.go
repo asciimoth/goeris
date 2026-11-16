@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"errors"
 	stdfs "io/fs"
 	"strings"
@@ -18,10 +19,10 @@ func expandingLinkImage() *FS {
 func TestExpandingSymlink(t *testing.T) {
 	t.Parallel()
 	image := expandingLinkImage()
-	if _, err := image.Stat("loop"); !errors.Is(err, stdfs.ErrInvalid) {
+	if _, err := image.Stat(context.Background(), "loop"); !errors.Is(err, stdfs.ErrInvalid) {
 		t.Fatalf("expanding link error = %v", err)
 	}
-	if info, err := image.Lstat("loop"); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
+	if info, err := image.Lstat(context.Background(), "loop"); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
 		t.Fatalf("Lstat must not expand the target: %v", err)
 	}
 }
@@ -43,7 +44,7 @@ func BenchmarkExpandingSymlink(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		if _, err := image.Stat("loop"); !errors.Is(err, stdfs.ErrInvalid) {
+		if _, err := image.Stat(context.Background(), "loop"); !errors.Is(err, stdfs.ErrInvalid) {
 			b.Fatal(err)
 		}
 	}

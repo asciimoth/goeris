@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"io"
 	stdfs "io/fs"
 	"path"
@@ -14,8 +15,9 @@ import (
 
 const directoryType EntryType = 255
 
-// FS exposes an ERIS-FS image through the standard library file-system
-// interfaces. Nested ERIS-FS indexes are loaded when a caller enters them.
+// FS provides context-aware access to an ERIS-FS image. Use NewIOFS to
+// use the standard library file-system interfaces. Nested ERIS-FS indexes are
+// loaded when a caller enters them.
 // Its methods are safe for concurrent use when the block source supports
 // concurrent calls. Each Open call returns a separate file position. Calls on
 // the same open directory must be serialized by the caller.
@@ -35,6 +37,7 @@ type node struct {
 	target      string
 	children    map[string]*node
 	loaded      bool
+	loading     chan struct{}
 	indexLimit  int64
 	size        int64
 	sizeKnown   bool
@@ -42,15 +45,16 @@ type node struct {
 }
 
 // OpenFS decodes the top-level index and returns a read-only virtual file
-// system. It does not read the content of regular files.
-func OpenFS(capability eris.Capability, source eris.BlockSource) (*FS, error) {
-	return OpenFSWithLimit(capability, source, DefaultMaxIndexSize)
+// system. It uses ctx only for this initial read and does not retain it.
+// Later operations use their own contexts. It does not read regular files.
+func OpenFS(ctx context.Context, capability eris.Capability, source eris.BlockSource) (*FS, error) {
+	return OpenFSWithLimit(ctx, capability, source, DefaultMaxIndexSize)
 }
 
 // OpenFSWithLimit opens an image whose top-level and nested decoded indexes
 // are each at most limit bytes. A non-positive limit is invalid.
-func OpenFSWithLimit(capability eris.Capability, source eris.BlockSource, limit int64) (*FS, error) {
-	index, err := DecodeIndexWithLimit(capability, source, limit)
+func OpenFSWithLimit(ctx context.Context, capability eris.Capability, source eris.BlockSource, limit int64) (*FS, error) {
+	index, err := DecodeIndexWithLimit(ctx, capability, source, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -91,26 +95,56 @@ func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit
 	return root
 }
 
-func (item *node) load() error {
+func (item *node) load(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if item.kind != Subdirectory {
 		return nil
 	}
-	item.mu.Lock()
-	defer item.mu.Unlock()
-	if item.loaded {
-		return nil
+	for {
+		item.mu.Lock()
+		if item.loaded {
+			item.mu.Unlock()
+			return ctx.Err()
+		}
+		if item.loading == nil {
+			item.loading = make(chan struct{})
+			item.mu.Unlock()
+			break
+		}
+		loading := item.loading
+		item.mu.Unlock()
+		// Each caller has its own context. Waiting for a shared index must
+		// not require the caller that started the load to finish first.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-loading:
+		}
 	}
-	index, err := DecodeIndexWithLimit(item.capability, item.source, item.indexLimit)
+	defer func() {
+		item.mu.Lock()
+		close(item.loading)
+		item.loading = nil
+		item.mu.Unlock()
+	}()
+	index, err := DecodeIndexWithLimit(ctx, item.capability, item.source, item.indexLimit)
 	if err != nil {
 		return err
 	}
 	root := buildTree(index, item.source, item.name, item.indexLimit)
+	item.mu.Lock()
 	item.children = root.children
 	item.loaded = true
+	item.mu.Unlock()
 	return nil
 }
 
-func (fileSystem *FS) find(name string, followFinal bool) (*node, error) {
+func (fileSystem *FS) find(ctx context.Context, name string, followFinal bool) (*node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if fileSystem == nil || fileSystem.root == nil || !stdfs.ValidPath(name) {
 		return nil, stdfs.ErrInvalid
 	}
@@ -155,7 +189,7 @@ func (fileSystem *FS) find(name string, followFinal bool) (*node, error) {
 			ancestors = ancestors[:len(ancestors)-1]
 			continue
 		}
-		if err := current.load(); err != nil {
+		if err := current.load(ctx); err != nil {
 			return nil, err
 		}
 		current.mu.Lock()
@@ -182,34 +216,35 @@ func (fileSystem *FS) find(name string, followFinal bool) (*node, error) {
 	return ancestors[len(ancestors)-1], nil
 }
 
-// Open implements io/fs.FS. Links are resolved only within this image. An
-// absolute link or a relative link that escapes the image is not followed.
-func (fileSystem *FS) Open(path string) (stdfs.File, error) {
-	item, err := fileSystem.find(path, true)
+// Open opens a file. The returned file uses ctx for all later block reads.
+// Links are resolved only within this image. An absolute link or a relative
+// link that escapes the image is not followed.
+func (fileSystem *FS) Open(ctx context.Context, path string) (stdfs.File, error) {
+	item, err := fileSystem.find(ctx, path, true)
 	if err != nil {
 		return nil, pathError("open", path, err)
 	}
 	if item.isDir() {
-		if err = item.load(); err != nil {
+		if err = item.load(ctx); err != nil {
 			return nil, pathError("open", path, err)
 		}
-		return &directoryFile{node: item}, nil
+		return &directoryFile{ctx: ctx, node: item}, nil
 	}
 	if item.compression == Lzip {
-		file, err := openLzipFile(item)
+		file, err := openLzipFile(ctx, item)
 		if err != nil {
 			return nil, pathError("open", path, err)
 		}
 		return file, nil
 	}
-	return fileSystem.openRegular(item, path)
+	return fileSystem.openRegular(ctx, item, path)
 }
 
-// ReadFile implements io/fs.ReadFileFS. It grows the buffer as content is read,
+// ReadFile reads the complete file. It grows the buffer as content is read,
 // without allocating from the untrusted size in the index. To limit memory for
 // large content, use Open and read through an io.LimitReader instead.
-func (fileSystem *FS) ReadFile(name string) ([]byte, error) {
-	file, err := fileSystem.Open(name)
+func (fileSystem *FS) ReadFile(ctx context.Context, name string) ([]byte, error) {
+	file, err := fileSystem.Open(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -221,29 +256,30 @@ func (fileSystem *FS) ReadFile(name string) ([]byte, error) {
 	return data, nil
 }
 
-func (fileSystem *FS) openRegular(item *node, path string) (ReadSeekCloser, error) {
+func (fileSystem *FS) openRegular(ctx context.Context, item *node, path string) (ReadSeekCloser, error) {
 	var reader *eris.Reader
 	var err error
 	item.mu.Lock()
 	size, known := item.size, item.sizeKnown
 	item.mu.Unlock()
 	if known {
-		reader, err = eris.NewReaderWithSize(item.capability, fileSystem.source, size)
+		reader, err = eris.NewReaderWithSize(ctx, item.capability, fileSystem.source, size)
 	} else {
-		reader, err = eris.NewReader(item.capability, fileSystem.source)
+		reader, err = eris.NewReader(ctx, item.capability, fileSystem.source)
 	}
 	if err != nil {
 		return nil, pathError("open", path, err)
 	}
 	item.setSize(reader.Size())
-	return &regularFile{node: item, Reader: reader}, nil
+	return &regularFile{ctx: ctx, node: item, Reader: reader}, nil
 }
 
 // OpenFile opens a regular file and returns its random-access interface. It
 // follows links within this image. A directory returns fs.ErrInvalid and a
 // compressed file returns ErrNotSeekable; use Open to read compressed files.
-func (fileSystem *FS) OpenFile(name string) (ReadSeekCloser, error) {
-	item, err := fileSystem.find(name, true)
+// The returned file uses ctx for all later block reads.
+func (fileSystem *FS) OpenFile(ctx context.Context, name string) (ReadSeekCloser, error) {
+	item, err := fileSystem.find(ctx, name, true)
 	if err != nil {
 		return nil, pathError("open", name, err)
 	}
@@ -253,54 +289,54 @@ func (fileSystem *FS) OpenFile(name string) (ReadSeekCloser, error) {
 	if item.compression == Lzip {
 		return nil, pathError("open", name, ErrNotSeekable)
 	}
-	return fileSystem.openRegular(item, name)
+	return fileSystem.openRegular(ctx, item, name)
 }
 
-// Stat implements io/fs.StatFS. It follows links within this image.
-func (fileSystem *FS) Stat(path string) (stdfs.FileInfo, error) {
-	item, err := fileSystem.find(path, true)
+// Stat returns file metadata. It follows links within this image.
+func (fileSystem *FS) Stat(ctx context.Context, path string) (stdfs.FileInfo, error) {
+	item, err := fileSystem.find(ctx, path, true)
 	if err != nil {
 		return nil, pathError("stat", path, err)
 	}
-	info, err := item.info()
+	info, err := item.info(ctx)
 	if err != nil {
 		return nil, pathError("stat", path, err)
 	}
 	return info, nil
 }
 
-// Lstat implements io/fs.ReadLinkFS without following the final link.
-func (fileSystem *FS) Lstat(path string) (stdfs.FileInfo, error) {
-	item, err := fileSystem.find(path, false)
+// Lstat returns metadata without following the final link.
+func (fileSystem *FS) Lstat(ctx context.Context, path string) (stdfs.FileInfo, error) {
+	item, err := fileSystem.find(ctx, path, false)
 	if err != nil {
 		return nil, pathError("lstat", path, err)
 	}
-	info, err := item.info()
+	info, err := item.info(ctx)
 	if err != nil {
 		return nil, pathError("lstat", path, err)
 	}
 	return info, nil
 }
 
-// ReadDir implements io/fs.ReadDirFS.
-func (fileSystem *FS) ReadDir(path string) ([]stdfs.DirEntry, error) {
-	item, err := fileSystem.find(path, true)
+// ReadDir returns directory entries. Entry.Info uses ctx for block reads.
+func (fileSystem *FS) ReadDir(ctx context.Context, path string) ([]stdfs.DirEntry, error) {
+	item, err := fileSystem.find(ctx, path, true)
 	if err != nil {
 		return nil, pathError("readdir", path, err)
 	}
-	if err = item.load(); err != nil {
+	if err = item.load(ctx); err != nil {
 		return nil, pathError("readdir", path, err)
 	}
 	if !item.isDir() {
 		return nil, pathError("readdir", path, stdfs.ErrInvalid)
 	}
-	return item.dirEntries(), nil
+	return item.dirEntries(ctx), nil
 }
 
-// ReadLink implements io/fs.ReadLinkFS. The returned target is not cleaned or
+// ReadLink reads a symbolic link. The returned target is not cleaned or
 // restricted because ERIS-FS permits targets outside the image.
-func (fileSystem *FS) ReadLink(path string) (string, error) {
-	item, err := fileSystem.find(path, false)
+func (fileSystem *FS) ReadLink(ctx context.Context, path string) (string, error) {
+	item, err := fileSystem.find(ctx, path, false)
 	if err != nil {
 		return "", pathError("readlink", path, err)
 	}
@@ -310,14 +346,14 @@ func (fileSystem *FS) ReadLink(path string) (string, error) {
 	return item.target, nil
 }
 
-// Sub implements io/fs.SubFS. Links in the result can resolve to paths outside
+// Sub selects a directory. Links in the result can resolve to paths outside
 // the selected directory but remain inside the same image.
-func (fileSystem *FS) Sub(name string) (stdfs.FS, error) {
-	item, err := fileSystem.find(name, true)
+func (fileSystem *FS) Sub(ctx context.Context, name string) (*FS, error) {
+	item, err := fileSystem.find(ctx, name, true)
 	if err != nil {
 		return nil, pathError("sub", name, err)
 	}
-	if err = item.load(); err != nil {
+	if err = item.load(ctx); err != nil {
 		return nil, pathError("sub", name, err)
 	}
 	if !item.isDir() {
@@ -333,12 +369,12 @@ func (fileSystem *FS) Sub(name string) (stdfs.FS, error) {
 	}, nil
 }
 
-func (node *node) dirEntries() []stdfs.DirEntry {
+func (node *node) dirEntries(ctx context.Context) []stdfs.DirEntry {
 	node.mu.Lock()
 	defer node.mu.Unlock()
 	entries := make([]stdfs.DirEntry, 0, len(node.children))
 	for _, child := range node.children {
-		entries = append(entries, child)
+		entries = append(entries, dirEntry{node: child, ctx: ctx})
 	}
 	slices.SortFunc(entries, func(a, b stdfs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
 	return entries
@@ -353,14 +389,15 @@ func (node *node) Size() int64 {
 	if node.kind != Regular && node.kind != Executable {
 		return 0
 	}
-	size, err := node.contentSize()
-	if err != nil {
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	if !node.sizeKnown {
 		return -1
 	}
-	return size
+	return node.size
 }
 
-func (node *node) contentSize() (int64, error) {
+func (node *node) contentSize(ctx context.Context) (int64, error) {
 	node.mu.Lock()
 	if node.sizeKnown {
 		size := node.size
@@ -368,7 +405,7 @@ func (node *node) contentSize() (int64, error) {
 		return size, nil
 	}
 	node.mu.Unlock()
-	reader, err := eris.NewReader(node.capability, node.source)
+	reader, err := eris.NewReader(ctx, node.capability, node.source)
 	if err != nil {
 		return 0, err
 	}
@@ -384,9 +421,9 @@ func (node *node) setSize(size int64) {
 	node.mu.Unlock()
 }
 
-func (node *node) info() (stdfs.FileInfo, error) {
+func (node *node) info(ctx context.Context) (stdfs.FileInfo, error) {
 	if node.kind == Regular || node.kind == Executable {
-		if _, err := node.contentSize(); err != nil {
+		if _, err := node.contentSize(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -406,14 +443,21 @@ func (node *node) Mode() stdfs.FileMode {
 	}
 }
 
-func (node *node) Type() stdfs.FileMode          { return node.Mode().Type() }
-func (node *node) ModTime() time.Time            { return time.Time{} }
-func (node *node) IsDir() bool                   { return node.isDir() }
-func (node *node) Sys() any                      { return nil }
-func (node *node) Info() (stdfs.FileInfo, error) { return node.info() }
-func (node *node) isDir() bool                   { return node.kind == directoryType || node.kind == Subdirectory }
+func (node *node) Type() stdfs.FileMode { return node.Mode().Type() }
+func (node *node) ModTime() time.Time   { return time.Time{} }
+func (node *node) IsDir() bool          { return node.isDir() }
+func (node *node) Sys() any             { return nil }
+
+type dirEntry struct {
+	*node
+	ctx context.Context
+}
+
+func (entry dirEntry) Info() (stdfs.FileInfo, error) { return entry.info(entry.ctx) }
+func (node *node) isDir() bool                       { return node.kind == directoryType || node.kind == Subdirectory }
 
 type regularFile struct {
+	ctx  context.Context
 	node *node
 	*eris.Reader
 }
@@ -422,10 +466,11 @@ func (file *regularFile) Stat() (stdfs.FileInfo, error) {
 	if file.IsClosed() {
 		return nil, ErrClosed
 	}
-	return file.node.info()
+	return file.node.info(file.ctx)
 }
 
 type directoryFile struct {
+	ctx     context.Context
 	node    *node
 	entries []stdfs.DirEntry
 	offset  int
@@ -436,7 +481,7 @@ func (file *directoryFile) Stat() (stdfs.FileInfo, error) {
 	if file.closed {
 		return nil, ErrClosed
 	}
-	return file.node.info()
+	return file.node.info(file.ctx)
 }
 
 func (file *directoryFile) Read([]byte) (int, error) {
@@ -451,7 +496,7 @@ func (file *directoryFile) ReadDir(count int) ([]stdfs.DirEntry, error) {
 		return nil, ErrClosed
 	}
 	if file.entries == nil {
-		file.entries = file.node.dirEntries()
+		file.entries = file.node.dirEntries(file.ctx)
 	}
 	entries := file.entries
 	if file.offset == len(entries) && count > 0 {
@@ -479,11 +524,5 @@ func pathError(operation, path string, err error) error {
 
 var (
 	_ FileSystem        = (*FS)(nil)
-	_ stdfs.FS          = (*FS)(nil)
-	_ stdfs.ReadFileFS  = (*FS)(nil)
-	_ stdfs.ReadDirFS   = (*FS)(nil)
-	_ stdfs.ReadLinkFS  = (*FS)(nil)
-	_ stdfs.StatFS      = (*FS)(nil)
-	_ stdfs.SubFS       = (*FS)(nil)
 	_ stdfs.ReadDirFile = (*directoryFile)(nil)
 )

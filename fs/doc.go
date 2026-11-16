@@ -9,7 +9,11 @@
 // eris.NewReader.
 //
 // The high-level API contains Builder, FileSystem, and OpenFS. It exposes an
-// encoded image through the standard io/fs interfaces without extraction.
+// encoded image without extraction. All storage operations accept context.
+// NewIOFS(ctx, image) binds a context and implements the standard io/fs
+// interfaces. Open files and directory entries retain that context. OpenFS
+// uses its context only to read the initial index; the returned FS does not
+// retain it. Later FS calls accept their own contexts.
 // OpenFile also gives typed access to seeking and random-access reads for
 // uncompressed files. AddCompressedFile creates deterministic Lzip content;
 // compressed files are read sequentially with Open.

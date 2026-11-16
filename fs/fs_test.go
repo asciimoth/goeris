@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -238,21 +239,21 @@ func TestIndexDecodeLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocks := make(eris.BlockSet)
-	capability, err := EncodeIndex(index, eris.Secret{}, blocks)
+	capability, err := EncodeIndex(context.Background(), index, eris.Secret{}, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = DecodeIndexWithLimit(capability, blocks, int64(len(data)-1)); !errors.Is(err, ErrIndexTooLarge) {
+	if _, err = DecodeIndexWithLimit(context.Background(), capability, blocks, int64(len(data)-1)); !errors.Is(err, ErrIndexTooLarge) {
 		t.Fatalf("small limit error = %v", err)
 	}
-	decoded, err := DecodeIndexWithLimit(capability, blocks, int64(len(data)))
+	decoded, err := DecodeIndexWithLimit(context.Background(), capability, blocks, int64(len(data)))
 	if err != nil || !reflect.DeepEqual(decoded, index) {
 		t.Fatalf("exact limit decode = (%v, %v)", decoded, err)
 	}
-	if _, err = DecodeIndexWithLimit(capability, blocks, 0); !errors.Is(err, ErrInvalidLimit) {
+	if _, err = DecodeIndexWithLimit(context.Background(), capability, blocks, 0); !errors.Is(err, ErrInvalidLimit) {
 		t.Fatalf("invalid limit error = %v", err)
 	}
-	if _, err = OpenFSWithLimit(capability, blocks, int64(len(data)-1)); !errors.Is(err, ErrIndexTooLarge) {
+	if _, err = OpenFSWithLimit(context.Background(), capability, blocks, int64(len(data)-1)); !errors.Is(err, ErrIndexTooLarge) {
 		t.Fatalf("OpenFSWithLimit error = %v", err)
 	}
 }
@@ -268,7 +269,7 @@ func TestNestedIndexUsesConfiguredLimit(t *testing.T) {
 		}
 	}
 	nestedData, _ := nested.MarshalBinary()
-	nestedCap, err := EncodeIndex(nested, eris.Secret{}, blocks)
+	nestedCap, err := EncodeIndex(context.Background(), nested, eris.Secret{}, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,15 +278,15 @@ func TestNestedIndexUsesConfiguredLimit(t *testing.T) {
 	if len(topData) >= len(nestedData) {
 		t.Fatal("test nested index is not larger than top index")
 	}
-	topCap, err := EncodeIndex(top, eris.Secret{}, blocks)
+	topCap, err := EncodeIndex(context.Background(), top, eris.Secret{}, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFSWithLimit(topCap, blocks, int64(len(topData)))
+	image, err := OpenFSWithLimit(context.Background(), topCap, blocks, int64(len(topData)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = image.ReadDir("nested"); !errors.Is(err, ErrIndexTooLarge) {
+	if _, err = image.ReadDir(context.Background(), "nested"); !errors.Is(err, ErrIndexTooLarge) {
 		t.Fatalf("nested limit error = %v", err)
 	}
 }
@@ -295,18 +296,18 @@ func TestBuilderAndFileSystem(t *testing.T) {
 	blocks := make(eris.BlockSet)
 	secret := eris.Secret{4, 5, 6}
 	nested := NewBuilder(blocks, secret)
-	if err := nested.AddFile("inside", bytes.NewBufferString("nested data"), false); err != nil {
+	if err := nested.AddFile(context.Background(), "inside", bytes.NewBufferString("nested data"), false); err != nil {
 		t.Fatal(err)
 	}
-	nestedCap, err := nested.Finish()
+	nestedCap, err := nested.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	builder := NewBuilder(blocks, secret)
-	if err = builder.AddFile("docs/readme", bytes.NewBufferString("hello"), false); err != nil {
+	if err = builder.AddFile(context.Background(), "docs/readme", bytes.NewBufferString("hello"), false); err != nil {
 		t.Fatal(err)
 	}
-	if err = builder.AddFile("bin/run", bytes.NewBufferString("execute"), true); err != nil {
+	if err = builder.AddFile(context.Background(), "bin/run", bytes.NewBufferString("execute"), true); err != nil {
 		t.Fatal(err)
 	}
 	if err = builder.AddSymlink("latest", "docs/readme"); err != nil {
@@ -315,20 +316,20 @@ func TestBuilderAndFileSystem(t *testing.T) {
 	if err = builder.AddSubdirectory("vendor", nestedCap); err != nil {
 		t.Fatal(err)
 	}
-	capability, err := builder.Finish()
+	capability, err := builder.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(capability, blocks)
+	image, err := OpenFS(context.Background(), capability, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var highLevel FileSystem = image
-	data, err := stdfs.ReadFile(image, "docs/readme")
+	data, err := stdfs.ReadFile(NewIOFS(context.Background(), image), "docs/readme")
 	if err != nil || string(data) != "hello" {
 		t.Fatalf("ReadFile = (%q, %v)", data, err)
 	}
-	openedFile, err := image.Open("docs/readme")
+	openedFile, err := image.Open(context.Background(), "docs/readme")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +337,7 @@ func TestBuilderAndFileSystem(t *testing.T) {
 		t.Fatalf("opened file Stat = (%v, %v)", info, statErr)
 	}
 	_ = openedFile.Close()
-	randomAccessFile, err := highLevel.OpenFile("docs/readme")
+	randomAccessFile, err := highLevel.OpenFile(context.Background(), "docs/readme")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,41 +349,41 @@ func TestBuilderAndFileSystem(t *testing.T) {
 		t.Fatalf("OpenFile Seek = (%d, %v)", offset, seekErr)
 	}
 	_ = randomAccessFile.Close()
-	if _, err = highLevel.OpenFile("docs"); !errors.Is(err, stdfs.ErrInvalid) {
+	if _, err = highLevel.OpenFile(context.Background(), "docs"); !errors.Is(err, stdfs.ErrInvalid) {
 		t.Fatalf("OpenFile directory error = %v", err)
 	}
-	if _, err = highLevel.OpenFile("missing"); !errors.Is(err, stdfs.ErrNotExist) {
+	if _, err = highLevel.OpenFile(context.Background(), "missing"); !errors.Is(err, stdfs.ErrNotExist) {
 		t.Fatalf("OpenFile missing error = %v", err)
 	}
-	data, err = stdfs.ReadFile(image, "vendor/inside")
+	data, err = stdfs.ReadFile(NewIOFS(context.Background(), image), "vendor/inside")
 	if err != nil || string(data) != "nested data" {
 		t.Fatalf("nested ReadFile = (%q, %v)", data, err)
 	}
-	target, err := image.ReadLink("latest")
+	target, err := image.ReadLink(context.Background(), "latest")
 	if err != nil || target != "docs/readme" {
 		t.Fatalf("ReadLink = (%q, %v)", target, err)
 	}
-	info, err := image.Lstat("latest")
+	info, err := image.Lstat(context.Background(), "latest")
 	if err != nil || info.Mode()&stdfs.ModeSymlink == 0 || info.Size() != int64(len(target)) {
 		t.Fatalf("Lstat link = (%v, %v)", info, err)
 	}
-	info, err = image.Stat("bin/run")
+	info, err = image.Stat(context.Background(), "bin/run")
 	if err != nil || info.Mode()&0o111 == 0 || info.Size() != 7 {
 		t.Fatalf("Stat executable = (%v, %v)", info, err)
 	}
-	entries, err := image.ReadDir(".")
+	entries, err := image.ReadDir(context.Background(), ".")
 	if err != nil || names(entries) != "bin,docs,latest,vendor" {
 		t.Fatalf("ReadDir = (%v, %v)", names(entries), err)
 	}
-	sub, err := image.Sub("docs")
+	sub, err := image.Sub(context.Background(), "docs")
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err = stdfs.ReadFile(sub, "readme")
+	data, err = stdfs.ReadFile(NewIOFS(context.Background(), sub), "readme")
 	if err != nil || string(data) != "hello" {
 		t.Fatalf("sub ReadFile = (%q, %v)", data, err)
 	}
-	data, err = stdfs.ReadFile(image, "latest")
+	data, err = stdfs.ReadFile(NewIOFS(context.Background(), image), "latest")
 	if err != nil || string(data) != "hello" {
 		t.Fatalf("ReadFile through link = (%q, %v)", data, err)
 	}
@@ -394,7 +395,7 @@ func TestBuilderBlockSizeBoundary(t *testing.T) {
 		content := deterministicBytes(length)
 		blocks := make(eris.BlockSet)
 		builder := NewBuilder(blocks, eris.Secret{})
-		if err := builder.AddFile("file", bytes.NewReader(content), false); err != nil {
+		if err := builder.AddFile(context.Background(), "file", bytes.NewReader(content), false); err != nil {
 			t.Fatal(err)
 		}
 		entry := builder.Index().Entries[0]
@@ -404,7 +405,7 @@ func TestBuilderBlockSizeBoundary(t *testing.T) {
 		if entry.Capability.BlockSize != eris.ChooseBlockSize(length) {
 			t.Errorf("length %d block size = %d", length, entry.Capability.BlockSize)
 		}
-		reader, err := eris.NewReader(entry.Capability, blocks)
+		reader, err := eris.NewReader(context.Background(), entry.Capability, blocks)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -419,24 +420,24 @@ func TestFileSystemConformance(t *testing.T) {
 	t.Parallel()
 	blocks := make(eris.BlockSet)
 	builder := NewBuilder(blocks, eris.Secret{7})
-	if err := builder.AddFile("a/file", bytes.NewBufferString("content"), false); err != nil {
+	if err := builder.AddFile(context.Background(), "a/file", bytes.NewBufferString("content"), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.AddFile("tool", bytes.NewBufferString("run"), true); err != nil {
+	if err := builder.AddFile(context.Background(), "tool", bytes.NewBufferString("run"), true); err != nil {
 		t.Fatal(err)
 	}
 	if err := builder.AddSymlink("a/link", "../tool"); err != nil {
 		t.Fatal(err)
 	}
-	capability, err := builder.Finish()
+	capability, err := builder.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(capability, blocks)
+	image, err := OpenFS(context.Background(), capability, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = fstest.TestFS(image, "a", "a/file", "a/link", "tool"); err != nil {
+	if err = fstest.TestFS(NewIOFS(context.Background(), image), "a", "a/file", "a/link", "tool"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -464,15 +465,15 @@ func TestDirectoryReadDirReturnedSliceIsIndependent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	capability, err := builder.Finish()
+	capability, err := builder.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(capability, blocks)
+	image, err := OpenFS(context.Background(), capability, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, err := image.Open(".")
+	file, err := image.Open(context.Background(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +490,7 @@ func TestDirectoryReadDirReturnedSliceIsIndependent(t *testing.T) {
 	if err != nil || names(rest) != "b,c" {
 		t.Fatalf("remaining entries: %v, %v", rest, err)
 	}
-	again, err := image.ReadDir(".")
+	again, err := image.ReadDir(context.Background(), ".")
 	if err != nil || names(again) != "a,b,c" {
 		t.Fatalf("independent listing: %v, %v", again, err)
 	}
@@ -500,18 +501,18 @@ func TestOpenReturnsNilOnContentError(t *testing.T) {
 	// A leaf capability cannot hold the advertised 1024 bytes plus padding.
 	index := Index{Entries: []Entry{{Path: []string{"file"}, Size: 1024,
 		Capability: eris.Capability{BlockSize: eris.BlockSize1KiB}}}}
-	capability, err := EncodeIndex(index, eris.Secret{}, blocks)
+	capability, err := EncodeIndex(context.Background(), index, eris.Secret{}, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(capability, blocks)
+	image, err := OpenFS(context.Background(), capability, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if file, err := image.Open("file"); file != nil || !errors.Is(err, ErrSizeMismatch) {
+	if file, err := image.Open(context.Background(), "file"); file != nil || !errors.Is(err, ErrSizeMismatch) {
 		t.Fatalf("Open: %v, %v", file, err)
 	}
-	if file, err := image.OpenFile("file"); file != nil || !errors.Is(err, ErrSizeMismatch) {
+	if file, err := image.OpenFile(context.Background(), "file"); file != nil || !errors.Is(err, ErrSizeMismatch) {
 		t.Fatalf("OpenFile: %v, %v", file, err)
 	}
 }
@@ -531,27 +532,27 @@ func TestFileSystemLinkResolutionStaysVirtual(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := builder.AddFile("directory/file", bytes.NewBufferString("virtual"), false); err != nil {
+	if err := builder.AddFile(context.Background(), "directory/file", bytes.NewBufferString("virtual"), false); err != nil {
 		t.Fatal(err)
 	}
-	capability, err := builder.Finish()
+	capability, err := builder.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(capability, blocks)
+	image, err := OpenFS(context.Background(), capability, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := stdfs.ReadFile(image, "directory-link/file")
+	data, err := stdfs.ReadFile(NewIOFS(context.Background(), image), "directory-link/file")
 	if err != nil || string(data) != "virtual" {
 		t.Fatalf("internal directory link = (%q, %v)", data, err)
 	}
 	for _, name := range []string{"absolute", "directory/escape"} {
-		if _, err = image.Open(name); !errors.Is(err, stdfs.ErrNotExist) {
+		if _, err = image.Open(context.Background(), name); !errors.Is(err, stdfs.ErrNotExist) {
 			t.Errorf("Open(%q) error = %v", name, err)
 		}
 	}
-	if _, err = image.Open("loop-a"); !errors.Is(err, stdfs.ErrInvalid) {
+	if _, err = image.Open(context.Background(), "loop-a"); !errors.Is(err, stdfs.ErrInvalid) {
 		t.Fatalf("link loop error = %v", err)
 	}
 }
@@ -562,9 +563,9 @@ func TestDirectoryFile(t *testing.T) {
 	builder := NewBuilder(blocks, eris.Secret{})
 	_ = builder.AddSymlink("b", "x")
 	_ = builder.AddSymlink("a", "x")
-	capability, _ := builder.Finish()
-	image, _ := OpenFS(capability, blocks)
-	opened, err := image.Open(".")
+	capability, _ := builder.Finish(context.Background())
+	image, _ := OpenFS(context.Background(), capability, blocks)
+	opened, err := image.Open(context.Background(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,49 +616,49 @@ type failAfterSource struct {
 	err    error
 }
 
-func (source *failAfterSource) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (source *failAfterSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	source.calls++
 	if source.calls == source.failAt {
 		return nil, source.err
 	}
-	return source.BlockSource.GetBlock(ref, 0)
+	return source.BlockSource.GetBlock(ctx, ref, 0)
 }
 
-func (source *flakySource) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (source *flakySource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	if ref == source.ref && source.remaining > 0 {
 		source.remaining--
 		return nil, source.err
 	}
-	return source.BlockSource.GetBlock(ref, 0)
+	return source.BlockSource.GetBlock(ctx, ref, 0)
 }
 
 type errorSink struct{ err error }
 
-func (sink errorSink) PutBlock([]byte, eris.TTL, ...eris.Reference) (eris.Reference, error) {
+func (sink errorSink) PutBlock(context.Context, []byte, eris.TTL, ...eris.Reference) (eris.Reference, error) {
 	return eris.Reference{}, sink.err
 }
 
 func TestCodecErrors(t *testing.T) {
 	t.Parallel()
 	sentinel := errors.New("sentinel")
-	if _, err := DecodeIndex(eris.Capability{}, make(eris.BlockSet)); err == nil {
+	if _, err := DecodeIndex(context.Background(), eris.Capability{}, make(eris.BlockSet)); err == nil {
 		t.Fatal("invalid index capability accepted")
 	}
 	index := Index{Entries: []Entry{{Path: []string{"link"}, Type: Symlink, Target: "target"}}}
 	blocks := make(eris.BlockSet)
-	indexCap, encodeErr := EncodeIndex(index, eris.Secret{}, blocks)
+	indexCap, encodeErr := EncodeIndex(context.Background(), index, eris.Secret{}, blocks)
 	if encodeErr != nil {
 		t.Fatal(encodeErr)
 	}
 	failingSource := &failAfterSource{BlockSource: blocks, failAt: 2, err: sentinel}
-	if _, err := DecodeIndex(indexCap, failingSource); !errors.Is(err, sentinel) {
+	if _, err := DecodeIndex(context.Background(), indexCap, failingSource); !errors.Is(err, sentinel) {
 		t.Fatalf("DecodeIndex source error = %v", err)
 	}
-	if _, err := EncodeIndex(Index{Entries: []Entry{{Type: Symlink}}}, eris.Secret{}, make(eris.BlockSet)); !errors.Is(err, ErrInvalidPath) {
+	if _, err := EncodeIndex(context.Background(), Index{Entries: []Entry{{Type: Symlink}}}, eris.Secret{}, make(eris.BlockSet)); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("invalid index error = %v", err)
 	}
 	var builder *Builder
-	if err := builder.AddFile("a", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidEntry) {
+	if err := builder.AddFile(context.Background(), "a", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatalf("nil builder AddFile error = %v", err)
 	}
 	if err := builder.AddSymlink(".", "x"); !errors.Is(err, ErrInvalidPath) {
@@ -666,7 +667,7 @@ func TestCodecErrors(t *testing.T) {
 	if err := builder.AddSubdirectory(".", eris.Capability{}); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("invalid tree path error = %v", err)
 	}
-	if _, err := builder.Finish(); !errors.Is(err, ErrInvalidEntry) {
+	if _, err := builder.Finish(context.Background()); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatalf("nil builder Finish error = %v", err)
 	}
 }
@@ -681,7 +682,7 @@ func TestEncodeIndexNilSink(t *testing.T) {
 		{"invalid index", Index{Entries: []Entry{{Type: Symlink}}}, ErrInvalidPath},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			capability, err := EncodeIndex(test.index, eris.Secret{}, nil)
+			capability, err := EncodeIndex(context.Background(), test.index, eris.Secret{}, nil)
 			if !errors.Is(err, test.want) || capability != (eris.Capability{}) {
 				t.Fatalf("EncodeIndex with nil sink = %v, %v; want zero capability, %v", capability, err, test.want)
 			}
@@ -693,31 +694,31 @@ func TestFileSystemErrorsAndMetadata(t *testing.T) {
 	t.Parallel()
 	blocks := make(eris.BlockSet)
 	builder := NewBuilder(blocks, eris.Secret{})
-	_ = builder.AddFile("dir/file", bytes.NewBufferString("data"), false)
+	_ = builder.AddFile(context.Background(), "dir/file", bytes.NewBufferString("data"), false)
 	_ = builder.AddSymlink("link", "/outside")
-	capability, _ := builder.Finish()
-	image, _ := OpenFS(capability, blocks)
+	capability, _ := builder.Finish(context.Background())
+	image, _ := OpenFS(context.Background(), capability, blocks)
 	for _, path := range []string{"missing", "dir/file/child", "../bad"} {
-		if _, err := image.Open(path); err == nil {
+		if _, err := image.Open(context.Background(), path); err == nil {
 			t.Errorf("Open(%q) succeeded", path)
 		}
 	}
-	if _, err := image.Stat("missing"); !errors.Is(err, stdfs.ErrNotExist) {
+	if _, err := image.Stat(context.Background(), "missing"); !errors.Is(err, stdfs.ErrNotExist) {
 		t.Errorf("Stat missing error = %v", err)
 	}
-	if _, err := image.ReadDir("dir/file"); !errors.Is(err, stdfs.ErrInvalid) {
+	if _, err := image.ReadDir(context.Background(), "dir/file"); !errors.Is(err, stdfs.ErrInvalid) {
 		t.Errorf("ReadDir file error = %v", err)
 	}
-	if _, err := image.ReadLink("dir/file"); !errors.Is(err, stdfs.ErrInvalid) {
+	if _, err := image.ReadLink(context.Background(), "dir/file"); !errors.Is(err, stdfs.ErrInvalid) {
 		t.Errorf("ReadLink file error = %v", err)
 	}
-	if _, err := image.Sub("dir/file"); !errors.Is(err, stdfs.ErrInvalid) {
+	if _, err := image.Sub(context.Background(), "dir/file"); !errors.Is(err, stdfs.ErrInvalid) {
 		t.Errorf("Sub file error = %v", err)
 	}
-	if _, err := image.Sub("missing"); !errors.Is(err, stdfs.ErrNotExist) {
+	if _, err := image.Sub(context.Background(), "missing"); !errors.Is(err, stdfs.ErrNotExist) {
 		t.Errorf("Sub missing error = %v", err)
 	}
-	entries, _ := image.ReadDir(".")
+	entries, _ := image.ReadDir(context.Background(), ".")
 	for _, entry := range entries {
 		info, err := entry.Info()
 		if err != nil || entry.Type() != info.Mode().Type() || entry.IsDir() != info.IsDir() || !info.ModTime().IsZero() || info.Sys() != nil {
@@ -725,39 +726,39 @@ func TestFileSystemErrorsAndMetadata(t *testing.T) {
 		}
 	}
 	var nilFS *FS
-	if _, err := nilFS.Open("."); !errors.Is(err, stdfs.ErrInvalid) {
+	if _, err := nilFS.Open(context.Background(), "."); !errors.Is(err, stdfs.ErrInvalid) {
 		t.Fatalf("nil FS error = %v", err)
 	}
-	if _, err := OpenFS(eris.Capability{}, blocks); err == nil {
+	if _, err := OpenFS(context.Background(), eris.Capability{}, blocks); err == nil {
 		t.Fatal("OpenFS accepted invalid capability")
 	}
-	invalidIndexCap, _ := eris.EncodeContent(bytes.NewBufferString("not an index"), eris.Secret{}, eris.BlockSize1KiB, blocks)
-	if _, err := OpenFS(invalidIndexCap, blocks); !errors.Is(err, ErrInvalidIndex) {
+	invalidIndexCap, _ := eris.EncodeContent(context.Background(), bytes.NewBufferString("not an index"), eris.Secret{}, eris.BlockSize1KiB, blocks)
+	if _, err := OpenFS(context.Background(), invalidIndexCap, blocks); !errors.Is(err, ErrInvalidIndex) {
 		t.Fatalf("OpenFS invalid index error = %v", err)
 	}
 
 	nestedBuilder := NewBuilder(blocks, eris.Secret{})
 	_ = nestedBuilder.AddSubdirectory("bad", invalidIndexCap)
-	nestedCap, _ := nestedBuilder.Finish()
-	nestedImage, _ := OpenFS(nestedCap, blocks)
+	nestedCap, _ := nestedBuilder.Finish(context.Background())
+	nestedImage, _ := OpenFS(context.Background(), nestedCap, blocks)
 	for range 2 {
-		if _, err := nestedImage.ReadDir("bad"); !errors.Is(err, ErrInvalidIndex) {
+		if _, err := nestedImage.ReadDir(context.Background(), "bad"); !errors.Is(err, ErrInvalidIndex) {
 			t.Fatalf("bad nested index error = %v", err)
 		}
 	}
-	if _, err := nestedImage.Open("bad"); !errors.Is(err, ErrInvalidIndex) {
+	if _, err := nestedImage.Open(context.Background(), "bad"); !errors.Is(err, ErrInvalidIndex) {
 		t.Fatalf("open bad nested index error = %v", err)
 	}
-	if _, err := nestedImage.Open("bad/child"); !errors.Is(err, ErrInvalidIndex) {
+	if _, err := nestedImage.Open(context.Background(), "bad/child"); !errors.Is(err, ErrInvalidIndex) {
 		t.Fatalf("walk bad nested index error = %v", err)
 	}
-	if _, err := nestedImage.Sub("bad"); !errors.Is(err, ErrInvalidIndex) {
+	if _, err := nestedImage.Sub(context.Background(), "bad"); !errors.Is(err, ErrInvalidIndex) {
 		t.Fatalf("sub bad nested index error = %v", err)
 	}
-	if _, err := nestedImage.ReadDir("missing"); !errors.Is(err, stdfs.ErrNotExist) {
+	if _, err := nestedImage.ReadDir(context.Background(), "missing"); !errors.Is(err, stdfs.ErrNotExist) {
 		t.Fatalf("ReadDir missing error = %v", err)
 	}
-	if _, err := nestedImage.ReadLink("missing"); !errors.Is(err, stdfs.ErrNotExist) {
+	if _, err := nestedImage.ReadLink(context.Background(), "missing"); !errors.Is(err, stdfs.ErrNotExist) {
 		t.Fatalf("ReadLink missing error = %v", err)
 	}
 
@@ -777,14 +778,14 @@ func TestFileSystemErrorsAndMetadata(t *testing.T) {
 	missingIndex := Index{Entries: []Entry{{Path: []string{"file"}, Type: Regular, Capability: missingContentCap}}}
 	missingStore := make(eris.BlockSet)
 	missingIndexCap := storeV1Index(t, missingIndex, missingStore)
-	missingImage, err := OpenFS(missingIndexCap, missingStore)
+	missingImage, err := OpenFS(context.Background(), missingIndexCap, missingStore)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = missingImage.Stat("file"); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err = missingImage.Stat(context.Background(), "file"); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("Stat missing content error = %v", err)
 	}
-	missingEntries, err := missingImage.ReadDir(".")
+	missingEntries, err := missingImage.ReadDir(context.Background(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -797,13 +798,13 @@ func TestBuilderConflictsAndReadError(t *testing.T) {
 	t.Parallel()
 	blocks := make(eris.BlockSet)
 	builder := NewBuilder(blocks, eris.Secret{})
-	if err := builder.AddFile("file", errorReader{errors.New("read failure")}, false); err == nil {
+	if err := builder.AddFile(context.Background(), "file", errorReader{errors.New("read failure")}, false); err == nil {
 		t.Fatal("AddFile ignored read error")
 	}
-	if err := builder.AddFile(".", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidPath) {
+	if err := builder.AddFile(context.Background(), ".", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("invalid file path error = %v", err)
 	}
-	if err := builder.AddFile("\xff", errorReader{errors.New("must not read")}, false); !errors.Is(err, ErrInvalidPath) {
+	if err := builder.AddFile(context.Background(), "\xff", errorReader{errors.New("must not read")}, false); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("invalid UTF-8 path error = %v", err)
 	}
 	if len(blocks) != 0 {
@@ -812,7 +813,7 @@ func TestBuilderConflictsAndReadError(t *testing.T) {
 	if err := builder.AddSymlink("file", "a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.AddFile("file", errorReader{errors.New("must not read")}, false); !errors.Is(err, ErrPathConflict) {
+	if err := builder.AddFile(context.Background(), "file", errorReader{errors.New("must not read")}, false); !errors.Is(err, ErrPathConflict) {
 		t.Fatalf("preflight conflict error = %v", err)
 	}
 	if err := builder.AddSymlink("file", "b"); !errors.Is(err, ErrPathConflict) {
@@ -848,7 +849,7 @@ func TestNestedIndexLoadRetriesSourceErrors(t *testing.T) {
 	if err := nested.AddSymlink("link", "target"); err != nil {
 		t.Fatal(err)
 	}
-	nestedCap, err := nested.Finish()
+	nestedCap, err := nested.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -856,20 +857,20 @@ func TestNestedIndexLoadRetriesSourceErrors(t *testing.T) {
 	if err = top.AddSubdirectory("nested", nestedCap); err != nil {
 		t.Fatal(err)
 	}
-	topCap, err := top.Finish()
+	topCap, err := top.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	sentinel := errors.New("temporary source failure")
 	source := &flakySource{BlockSource: blocks, ref: nestedCap.Root.Reference, remaining: 1, err: sentinel}
-	image, err := OpenFS(topCap, source)
+	image, err := OpenFS(context.Background(), topCap, source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = image.ReadDir("nested"); !errors.Is(err, sentinel) {
+	if _, err = image.ReadDir(context.Background(), "nested"); !errors.Is(err, sentinel) {
 		t.Fatalf("first ReadDir error = %v", err)
 	}
-	entries, err := image.ReadDir("nested")
+	entries, err := image.ReadDir(context.Background(), "nested")
 	if err != nil || names(entries) != "link" {
 		t.Fatalf("retried ReadDir = (%v, %v)", names(entries), err)
 	}
@@ -880,27 +881,27 @@ func TestBlockSetStorageMethods(t *testing.T) {
 	node := make([]byte, eris.BlockSize1KiB)
 	block, pair, _ := eris.EncryptNode(node, eris.Secret{}, 0)
 	blocks := make(eris.BlockSet)
-	if _, err := blocks.PutBlock(block, 0, pair.Reference); err != nil {
+	if _, err := blocks.PutBlock(context.Background(), block, 0, pair.Reference); err != nil {
 		t.Fatal(err)
 	}
 	block[0] ^= 1
-	got, err := blocks.GetBlock(pair.Reference, 0)
+	got, err := blocks.GetBlock(context.Background(), pair.Reference, 0)
 	if err != nil || got[0] == block[0] {
 		t.Fatal("store did not copy input")
 	}
 	got[0] ^= 1
-	again, _ := blocks.GetBlock(pair.Reference, 0)
+	again, _ := blocks.GetBlock(context.Background(), pair.Reference, 0)
 	if got[0] == again[0] {
 		t.Fatal("store did not copy output")
 	}
-	if _, err = blocks.GetBlock(eris.Reference{9}, 0); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err = blocks.GetBlock(context.Background(), eris.Reference{9}, 0); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("missing error = %v", err)
 	}
-	if _, err = (eris.BlockSet(nil)).PutBlock(again, 0, pair.Reference); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err = (eris.BlockSet(nil)).PutBlock(context.Background(), again, 0, pair.Reference); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("nil put error = %v", err)
 	}
 	again[0] ^= 1
-	if _, err = blocks.PutBlock(again, 0, pair.Reference); !errors.Is(err, eris.ErrInvalidBlock) {
+	if _, err = blocks.PutBlock(context.Background(), again, 0, pair.Reference); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Fatalf("corrupt put error = %v", err)
 	}
 }
@@ -930,16 +931,16 @@ func TestLinksToImageRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	capability, err := builder.Finish()
+	capability, err := builder.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(capability, blocks)
+	image, err := OpenFS(context.Background(), capability, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"root", "dir/up", "chain"} {
-		info, err := image.Stat(name)
+		info, err := image.Stat(context.Background(), name)
 		if err != nil {
 			t.Errorf("Stat(%q): %v", name, err)
 			continue
@@ -947,7 +948,7 @@ func TestLinksToImageRoot(t *testing.T) {
 		if !info.IsDir() {
 			t.Errorf("Stat(%q) is not a directory", name)
 		}
-		entries, err := image.ReadDir(name)
+		entries, err := image.ReadDir(context.Background(), name)
 		if err != nil || len(entries) != 3 {
 			t.Errorf("ReadDir(%q) = %d entries, %v", name, len(entries), err)
 		}
@@ -959,7 +960,7 @@ func TestLinkTargetsResolveComponentsInOrder(t *testing.T) {
 	blocks := make(eris.BlockSet)
 	builder := NewBuilder(blocks, eris.Secret{})
 	for name, content := range map[string]string{"value": "root", "real/value": "parent", "real/child/file": "child"} {
-		if err := builder.AddFile(name, strings.NewReader(content), false); err != nil {
+		if err := builder.AddFile(context.Background(), name, strings.NewReader(content), false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -972,20 +973,20 @@ func TestLinkTargetsResolveComponentsInOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	capability, err := builder.Finish()
+	capability, err := builder.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(capability, blocks)
+	image, err := OpenFS(context.Background(), capability, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := stdfs.ReadFile(image, "via-parent")
+	data, err := stdfs.ReadFile(NewIOFS(context.Background(), image), "via-parent")
 	if err != nil || string(data) != "parent" {
 		t.Errorf("link through directory link and parent = %q, %v", data, err)
 	}
 	for _, name := range []string{"missing-parent", "file-parent", "escape-return", "file-slash"} {
-		if _, err := image.Stat(name); !errors.Is(err, stdfs.ErrNotExist) {
+		if _, err := image.Stat(context.Background(), name); !errors.Is(err, stdfs.ErrNotExist) {
 			t.Errorf("Stat(%q) error = %v", name, err)
 		}
 	}
@@ -1004,21 +1005,21 @@ func TestLinkResolutionLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	capability, err := builder.Finish()
+	capability, err := builder.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(capability, blocks)
+	image, err := OpenFS(context.Background(), capability, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := image.Stat("link1"); err != nil || !info.IsDir() {
+	if info, err := image.Stat(context.Background(), "link1"); err != nil || !info.IsDir() {
 		t.Fatalf("40 links to root: %v", err)
 	}
-	if _, err := image.Stat("link0"); !errors.Is(err, stdfs.ErrInvalid) {
+	if _, err := image.Stat(context.Background(), "link0"); !errors.Is(err, stdfs.ErrInvalid) {
 		t.Fatalf("41 links error = %v", err)
 	}
-	if info, err := image.Lstat("link0"); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
+	if info, err := image.Lstat(context.Background(), "link0"); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
 		t.Fatalf("Lstat must not follow the final link: %v", err)
 	}
 }
@@ -1027,18 +1028,18 @@ func TestRegularFileStatAfterClose(t *testing.T) {
 	t.Parallel()
 	blocks := make(eris.BlockSet)
 	builder := NewBuilder(blocks, eris.Secret{})
-	if err := builder.AddFile("file", strings.NewReader("content"), false); err != nil {
+	if err := builder.AddFile(context.Background(), "file", strings.NewReader("content"), false); err != nil {
 		t.Fatal(err)
 	}
-	capability, err := builder.Finish()
+	capability, err := builder.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(capability, blocks)
+	image, err := OpenFS(context.Background(), capability, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, err := image.Open("file")
+	file, err := image.Open(context.Background(), "file")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1087,14 +1088,14 @@ func TestStatSourceErrorHasPath(t *testing.T) {
 	blocks := make(eris.BlockSet)
 	index := Index{Entries: []Entry{{Path: []string{"file"}, Type: Regular, Capability: capability}}}
 	root := storeV1Index(t, index, blocks)
-	image, err := OpenFS(root, blocks)
+	image, err := OpenFS(context.Background(), root, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for operation, stat := range map[string]func(string) (stdfs.FileInfo, error){
+	for operation, stat := range map[string]func(context.Context, string) (stdfs.FileInfo, error){
 		"stat": image.Stat, "lstat": image.Lstat,
 	} {
-		_, err := stat("file")
+		_, err := stat(context.Background(), "file")
 		var pathErr *stdfs.PathError
 		if !errors.As(err, &pathErr) || pathErr.Op != operation || pathErr.Path != "file" || !errors.Is(err, eris.ErrMissingBlock) {
 			t.Errorf("%s error = %v; want PathError with missing block", operation, err)

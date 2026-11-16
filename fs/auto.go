@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
 
@@ -45,7 +46,7 @@ func ChooseCompression(prefix []byte) Compression {
 // Equal image capabilities also require the same secret, metadata, index
 // structure, and Lzip encoding profile. AutoCompressionVersion identifies only
 // the selection policy; a different Lzip encoder can produce different bytes.
-func (builder *Builder) AddAutoFile(path string, content io.Reader, executable bool) error {
+func (builder *Builder) AddAutoFile(ctx context.Context, path string, content io.Reader, executable bool) error {
 	if builder == nil || builder.sink == nil || content == nil {
 		return ErrInvalidEntry
 	}
@@ -56,8 +57,11 @@ func (builder *Builder) AddAutoFile(path string, content io.Reader, executable b
 	if err := builder.checkPath(components); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	prefix := make([]byte, AutoCompressionSampleSize)
-	n, err := streamio.ReadFull(content, prefix)
+	n, err := streamio.ReadFull(ctx, content, prefix)
 	if err != nil && err != io.EOF {
 		return err
 	}
@@ -68,9 +72,9 @@ func (builder *Builder) AddAutoFile(path string, content io.Reader, executable b
 	}
 	// Replay the sample, but do not read the source again after EOF.
 	if ChooseCompression(prefix) == Lzip {
-		return builder.AddCompressedFile(path, input, executable)
+		return builder.AddCompressedFile(ctx, path, input, executable)
 	}
-	return builder.AddFile(path, input, executable)
+	return builder.AddFile(ctx, path, input, executable)
 }
 
 // autoProbeSize counts the virtual token stream defined by policy v1. Its

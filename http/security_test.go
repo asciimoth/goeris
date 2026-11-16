@@ -57,7 +57,7 @@ func TestClientCancelsPartialResponse(t *testing.T) {
 					result <- err
 					return
 				}
-				block, err := client.GetBlockContext(ctx, capability.Root.Reference, 0)
+				block, err := client.GetBlock(ctx, capability.Root.Reference, 0)
 				if block != nil {
 					result <- errors.New("partial block accepted")
 					return
@@ -104,7 +104,7 @@ func TestHandlerAbortsFailedStream(t *testing.T) {
 					if ref == pairs[0].Reference {
 						return nil, sourceErr
 					}
-					return blocks.GetBlock(ref, 0)
+					return blocks.GetBlock(context.Background(), ref, 0)
 				})}
 				request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
 				request.Header.Set("Range", byteRange)
@@ -155,7 +155,7 @@ func TestHandlerStreamFailureClosesResponse(t *testing.T) {
 		if ref == pairs[0].Reference {
 			return nil, eris.ErrMissingBlock
 		}
-		return blocks.GetBlock(ref, 0)
+		return blocks.GetBlock(context.Background(), ref, 0)
 	})})
 	defer server.Close()
 	for _, byteRange := range []string{"", "bytes=0-10", "bytes=0-10,1024-1030"} {
@@ -283,7 +283,7 @@ func TestClientBodyErrorsDoNotExposeServerText(t *testing.T) {
 			check(err)
 			check(content.Close())
 		} else {
-			block, err := client.GetBlock(capability.Root.Reference, 0)
+			block, err := client.GetBlock(context.Background(), capability.Root.Reference, 0)
 			if block != nil {
 				t.Fatal("accepted a failed block read")
 			}
@@ -330,7 +330,7 @@ func TestClientRejectsMalformedTrailerWithoutExposingText(t *testing.T) {
 			_, err = io.ReadAll(body)
 			_ = body.Close()
 		} else {
-			_, err = client.GetBlock(capability.Root.Reference, 0)
+			_, err = client.GetBlock(context.Background(), capability.Root.Reference, 0)
 		}
 		if err == nil || strings.Contains(err.Error(), privateText) {
 			t.Fatalf("decoded %v: unsafe trailer error: %v", decoded, err)
@@ -391,7 +391,7 @@ func TestClientRejectsUnexpectedSuccessStatus(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		block, err := client.GetBlock(ref, 0)
+		block, err := client.GetBlock(context.Background(), ref, 0)
 		var statusErr *ResponseError
 		if block != nil || !errors.As(err, &statusErr) || statusErr.StatusCode != status {
 			t.Fatalf("status %d: block %x, error %v", status, block, err)
@@ -433,7 +433,7 @@ func TestClientBoundsBlockResponseReads(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		block, err := client.GetBlock(eris.Reference{}, 0)
+		block, err := client.GetBlock(context.Background(), eris.Reference{}, 0)
 		if block != nil || !errors.Is(err, ErrResponseTooLarge) || !body.closed {
 			t.Fatalf("length %d: block size %d, error %v, closed %v", length, len(block), err, body.closed)
 		}
@@ -470,7 +470,7 @@ func TestClientBoundsDecompressedBlockResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	block, err := client.GetBlock(eris.Reference{}, 0)
+	block, err := client.GetBlock(context.Background(), eris.Reference{}, 0)
 	if block != nil || !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("block size %d, error %v", len(block), err)
 	}
@@ -478,11 +478,7 @@ func TestClientBoundsDecompressedBlockResponse(t *testing.T) {
 
 type contextSourceFunc func(context.Context, eris.Reference) ([]byte, error)
 
-func (source contextSourceFunc) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return source(context.Background(), ref)
-}
-
-func (source contextSourceFunc) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (source contextSourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	return source(ctx, ref)
 }
 
@@ -502,7 +498,7 @@ func (writer failedStreamWriter) Write([]byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
 
-func TestHandlerCancelsMultipartReadAfterWriteFailure(t *testing.T) {
+func TestHandlerReturnsAfterMultipartWriteFailure(t *testing.T) {
 	capability, blocks, _ := testData(t)
 	root, err := eris.DecryptNode(blocks[capability.Root.Reference], capability.Root, capability.Level)
 	if err != nil {
@@ -513,34 +509,132 @@ func TestHandlerCancelsMultipartReadAfterWriteFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
+	finished := make(chan struct{})
+	requestCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	handler := Handler{Blocks: contextSourceFunc(func(ctx context.Context, ref eris.Reference) ([]byte, error) {
+		if ctx != requestCtx {
+			t.Error("request context changed")
+		}
 		if ref == pairs[0].Reference {
 			close(started)
 			<-ctx.Done()
+			close(finished)
 			return nil, ctx.Err()
 		}
-		return blocks.GetBlock(ref, 0)
+		return blocks.GetBlock(context.Background(), ref, 0)
 	})}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil).WithContext(ctx)
+	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil).WithContext(requestCtx)
 	request.Header.Set("Range", "bytes=0-10,1024-1030")
 	done := make(chan any, 1)
 	go func() {
 		defer func() { done <- recover() }()
-		handler.ServeHTTP(failedStreamWriter{httptest.NewRecorder(), started, ctx}, request)
+		handler.ServeHTTP(failedStreamWriter{httptest.NewRecorder(), started, requestCtx}, request)
 	}()
 	select {
 	case result := <-done:
 		if result != nil && result != nethttp.ErrAbortHandler {
 			t.Fatalf("unexpected panic: %v", result)
 		}
-		if ctx.Err() != nil {
+		if requestCtx.Err() != nil {
 			t.Fatal("handler canceled the caller's context")
 		}
 	case <-time.After(5 * time.Second):
 		cancel() // Release the blocked read before reporting the failure.
 		<-done
-		t.Fatal("handler did not cancel the pending read after a response write failed")
+		t.Fatal("handler did not return after a response write failed")
+	}
+	// net/http cancels the request when ServeHTTP returns. Emulate that step
+	// because this test calls the handler directly.
+	cancel()
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("block read did not stop after request cancellation")
+	}
+}
+
+type multipartFailureWriter struct {
+	nethttp.ResponseWriter
+	started <-chan struct{}
+	ctx     context.Context
+	failure string
+}
+
+func (writer multipartFailureWriter) Write(p []byte) (int, error) {
+	select {
+	case <-writer.started:
+	case <-writer.ctx.Done():
+		return 0, writer.ctx.Err()
+	}
+	switch writer.failure {
+	case "panic":
+		panic(nethttp.ErrAbortHandler)
+	case "short write":
+		return len(p) - 1, nil
+	default:
+		return 0, io.ErrClosedPipe
+	}
+}
+
+func TestServerCancelsPendingMultipartRead(t *testing.T) {
+	capability, blocks, _ := testData(t)
+	root, err := eris.DecryptNode(blocks[capability.Root.Reference], capability.Root, capability.Level)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairs, err := eris.ParseInternalNode(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, failure := range []string{"error", "short write", "panic"} {
+		t.Run(failure, func(t *testing.T) {
+			started, finished := make(chan struct{}), make(chan struct{})
+			server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, request *nethttp.Request) {
+				source := contextSourceFunc(func(ctx context.Context, ref eris.Reference) ([]byte, error) {
+					if ctx != request.Context() {
+						t.Error("request context changed")
+					}
+					if ref == pairs[0].Reference {
+						close(started)
+						<-ctx.Done()
+						defer close(finished)
+						return nil, ctx.Err()
+					}
+					return blocks.GetBlock(ctx, ref, 0)
+				})
+				handler := Handler{Blocks: source}
+				handler.ServeHTTP(multipartFailureWriter{w, started, request.Context(), failure}, request)
+			}))
+			defer server.Close()
+			defer server.CloseClientConnections()
+			request, err := nethttp.NewRequest(nethttp.MethodGet, server.URL+N2RPath+"?"+capability.String(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Range", "bytes=0-10,1024-1030")
+			result := make(chan error, 1)
+			go func() {
+				response, err := server.Client().Do(request)
+				if err == nil {
+					_, err = io.Copy(io.Discard, response.Body)
+					_ = response.Body.Close()
+				}
+				result <- err
+			}()
+			select {
+			case err := <-result:
+				if err == nil {
+					t.Error("incomplete multipart response succeeded")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("handler did not return after response failure")
+			}
+			select {
+			case <-finished:
+			case <-time.After(5 * time.Second):
+				t.Fatal("server did not cancel the pending storage read")
+			}
+		})
 	}
 }

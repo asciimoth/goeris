@@ -2,6 +2,7 @@ package eris
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"testing"
@@ -23,9 +24,9 @@ func FuzzReaderRandomAccess(f *testing.F) {
 		for _, sized := range []bool{false, true} {
 			var reader *Reader
 			if sized {
-				reader, err = NewReaderWithSize(capability, blocks, int64(len(content)))
+				reader, err = NewReaderWithSize(context.Background(), capability, blocks, int64(len(content)))
 			} else {
-				reader, err = NewReader(capability, blocks)
+				reader, err = NewReader(context.Background(), capability, blocks)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -95,7 +96,7 @@ func FuzzTreeShape(f *testing.F) {
 		wantSize := (leaves - 1) * int(BlockSize1KiB)
 		// The size-aware reader must reject malformed visited paths too. It
 		// has no decoded-size limit, so compare before applying that limit.
-		sized, sizedErr := NewReaderWithSize(capability, blocks, int64(wantSize))
+		sized, sizedErr := NewReaderWithSize(context.Background(), capability, blocks, int64(wantSize))
 		if sizedErr == nil {
 			_, sizedErr = io.Copy(io.Discard, sized)
 			_ = sized.Close()
@@ -105,7 +106,7 @@ func FuzzTreeShape(f *testing.F) {
 		}
 		valid = valid && int64(wantSize) <= limit
 		decoded, coreErr := DecodeWithLimit(capability, blocks, limit)
-		reader, readerErr := NewReaderWithLimit(capability, blocks, limit, NoTTL)
+		reader, readerErr := NewReaderWithLimit(context.Background(), capability, blocks, limit, NoTTL)
 		if (coreErr == nil) != valid || (readerErr == nil) != valid {
 			t.Fatalf("counts %v, limit %d: core = %v, reader = %v; valid = %t", counts, limit, coreErr, readerErr, valid)
 		}

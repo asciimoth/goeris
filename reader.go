@@ -1,6 +1,7 @@
 package eris
 
 import (
+	"context"
 	"crypto/subtle"
 	"io"
 	stdfs "io/fs"
@@ -18,8 +19,10 @@ type treeSummary struct {
 // most recent leaf are cached. Use NewReaderWithSize to avoid scanning the tree
 // on open. Create a Reader with one of the NewReader functions; its zero value
 // is not ready for use. The source must verify block references as required by
-// BlockSource.
+// BlockSource. Every block read uses the context supplied at construction,
+// unchanged. Cancellation stops later reads, including reads from the cache.
 type Reader struct {
+	ctx         context.Context
 	mu          sync.Mutex
 	source      BlockSource
 	ttl         TTL
@@ -42,8 +45,8 @@ type Reader struct {
 // check the tree shape. The scan keeps one temporary summary per distinct
 // internal node. Other leaf blocks are fetched when read. Use
 // NewReaderWithSize when the decoded length is already known. Reads use NoTTL.
-func NewReader(capability Capability, source BlockSource) (*Reader, error) {
-	return NewReaderWithLimit(capability, source, -1, NoTTL)
+func NewReader(ctx context.Context, capability Capability, source BlockSource) (*Reader, error) {
+	return NewReaderWithLimit(ctx, capability, source, -1, NoTTL)
 }
 
 // NewReaderWithSize opens content with a known decoded size, without block I/O.
@@ -52,7 +55,7 @@ func NewReader(capability Capability, source BlockSource) (*Reader, error) {
 // Its cache holds at most 64 internal nodes and one leaf, independent of content
 // size. Reads use NoTTL. A negative size returns ErrInvalidSize; content that
 // does not match size returns ErrSizeMismatch when the mismatch is detected.
-func NewReaderWithSize(capability Capability, source BlockSource, size int64) (*Reader, error) {
+func NewReaderWithSize(ctx context.Context, capability Capability, source BlockSource, size int64) (*Reader, error) {
 	if source == nil || capability.Validate() != nil {
 		return nil, ErrInvalidCapability
 	}
@@ -68,7 +71,7 @@ func NewReaderWithSize(capability Capability, source BlockSource, size int64) (*
 		return nil, ErrSizeMismatch
 	}
 	return &Reader{
-		source: source, capability: capability, size: size, leaves: leaves,
+		ctx: ctx, source: source, capability: capability, size: size, leaves: leaves,
 		maxSize: -1, sized: true, cache: make(map[decodeNodeID][]Pair),
 	}, nil
 }
@@ -76,12 +79,12 @@ func NewReaderWithSize(capability Capability, source BlockSource, size int64) (*
 // NewReaderWithLimit scans the tree and rejects decoded content above maxSize.
 // A negative maxSize disables the size limit. Every block read uses ttl unchanged.
 // Content above the limit returns ErrDecodedTooLarge.
-func NewReaderWithLimit(capability Capability, source BlockSource, maxSize int64, ttl TTL) (*Reader, error) {
+func NewReaderWithLimit(ctx context.Context, capability Capability, source BlockSource, maxSize int64, ttl TTL) (*Reader, error) {
 	if source == nil || capability.Validate() != nil {
 		return nil, ErrInvalidCapability
 	}
 	reader := &Reader{
-		source: source, capability: capability, maxSize: maxSize, ttl: ttl,
+		ctx: ctx, source: source, capability: capability, maxSize: maxSize, ttl: ttl,
 		cache: make(map[decodeNodeID][]Pair), summaries: make(map[decodeNodeID]treeSummary),
 	}
 	leaves, last, err := reader.inspect(capability.Root, capability.Level, true)
@@ -155,6 +158,9 @@ func (reader *Reader) ReadAt(buffer []byte, offset int64) (int, error) {
 }
 
 func (reader *Reader) readAt(buffer []byte, offset int64) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
 	if offset < 0 {
 		return 0, stdfs.ErrInvalid
 	}
@@ -238,6 +244,7 @@ func (reader *Reader) Close() error {
 	reader.cache = nil
 	reader.summaries = nil
 	reader.source = nil
+	reader.ctx = nil
 	reader.leafData = nil
 	return nil
 }
@@ -352,7 +359,10 @@ func (reader *Reader) checkLast() error {
 }
 
 func (reader *Reader) decrypt(pair Pair, level Level) ([]byte, error) {
-	block, err := reader.source.GetBlock(pair.Reference, reader.ttl)
+	if err := reader.ctx.Err(); err != nil {
+		return nil, err
+	}
+	block, err := reader.source.GetBlock(reader.ctx, pair.Reference, reader.ttl)
 	if err != nil {
 		// A block fetch is not the end of the decoded content. Keep a source
 		// EOF from making io.ReadAll or io.Copy accept a truncated file.

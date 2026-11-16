@@ -2,6 +2,7 @@ package volume_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -111,7 +112,7 @@ func TestOpenDefaultChain(t *testing.T) {
 	chain = openChain(t, "")
 	block, ref := testBlock(t, eris.BlockSize1KiB, 92)
 	writeFile(t, filepath.Join(paths[1], ref.String()), block)
-	got, err := chain.GetBlock(ref, eris.NoTTL)
+	got, err := chain.GetBlock(context.Background(), ref, eris.NoTTL)
 	if err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("read from default cache: length %d, %v", len(got), err)
 	}

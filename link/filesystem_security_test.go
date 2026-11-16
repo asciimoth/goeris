@@ -2,6 +2,7 @@ package link_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -66,9 +67,11 @@ func TestFSRejectsInvalidEntryNames(t *testing.T) {
 				}
 				base.entries = []fs.DirEntry{namedEntry{DirEntry: fs.FileInfoToDirEntry(info), name: name}}
 				wrapped := newLinkFS(t, base, eris.BlockSet{})
-				readDir := func() ([]fs.DirEntry, error) { return wrapped.ReadDir("dir") }
+				readDir := func() ([]fs.DirEntry, error) {
+					return wrapped.ReadDir(context.Background(), "dir")
+				}
 				if viaOpen {
-					file, err := wrapped.Open("dir")
+					file, err := wrapped.Open(context.Background(), "dir")
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -100,7 +103,7 @@ func TestFSReadDirPartialResults(t *testing.T) {
 	}
 	base.entries = []fs.DirEntry{fs.FileInfoToDirEntry(info)}
 	wrapped := newLinkFS(t, base, eris.BlockSet{})
-	file, err := wrapped.Open("dir")
+	file, err := wrapped.Open(context.Background(), "dir")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +117,7 @@ func TestFSReadDirPartialResults(t *testing.T) {
 		t.Fatalf("partial entry Info: %v, %v", info, err)
 	}
 	base.err = fs.ErrPermission
-	entries, err = wrapped.ReadDir("dir")
+	entries, err = wrapped.ReadDir(context.Background(), "dir")
 	if len(entries) != 1 || !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("partial FS read: %v, %v", entries, err)
 	}
@@ -137,9 +140,11 @@ func TestFSRejectsNilDirectoryEntries(t *testing.T) {
 				source = openFSFunc(base.Open)
 			}
 			wrapped := newLinkFS(t, source, eris.BlockSet{})
-			readDir := func() ([]fs.DirEntry, error) { return wrapped.ReadDir("dir") }
+			readDir := func() ([]fs.DirEntry, error) {
+				return wrapped.ReadDir(context.Background(), "dir")
+			}
 			if mode == "open directory" {
-				file, err := wrapped.Open("dir")
+				file, err := wrapped.Open(context.Background(), "dir")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -169,7 +174,7 @@ func TestFSReadDirSortsWithoutChangingBaseEntries(t *testing.T) {
 	}
 	base := &entryFS{FS: files, entries: []fs.DirEntry{entries[1], entries[0]}}
 	for _, source := range []fs.FS{base, openFSFunc(base.Open)} {
-		got, err := newLinkFS(t, source, eris.BlockSet{}).ReadDir("dir")
+		got, err := newLinkFS(t, source, eris.BlockSet{}).ReadDir(context.Background(), "dir")
 		if err != nil || len(got) != 2 || got[0].Name() != "a" || got[1].Name() != "z" {
 			t.Fatalf("ReadDir order: %v, %v", got, err)
 		}
@@ -199,9 +204,11 @@ func TestFSKeepsCheckedEntryNamesAndTypes(t *testing.T) {
 		entry := &changingEntry{DirEntry: fs.FileInfoToDirEntry(info), name: "file"}
 		base := &entryFS{FS: files, entries: []fs.DirEntry{entry}}
 		wrapped := newLinkFS(t, base, eris.BlockSet{})
-		readDir := func() ([]fs.DirEntry, error) { return wrapped.ReadDir("dir") }
+		readDir := func() ([]fs.DirEntry, error) {
+			return wrapped.ReadDir(context.Background(), "dir")
+		}
 		if viaOpen {
-			dir, err := wrapped.Open("dir")
+			dir, err := wrapped.Open(context.Background(), "dir")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -237,11 +244,11 @@ func TestFSSymlinkInspectionDoesNotFollowTargets(t *testing.T) {
 			}
 			source := &countingSource{err: errors.New("unexpected block access")}
 			wrapped := newLinkFS(t, base, source)
-			info, err := fs.Lstat(wrapped, "loop")
+			info, err := fs.Lstat(link.NewIOFS(context.Background(), wrapped), "loop")
 			if err != nil || info.Mode()&fs.ModeSymlink == 0 || info.Size() != int64(len(target)) {
 				t.Fatalf("Lstat followed target %q: %v, %v", target, info, err)
 			}
-			got, err := fs.ReadLink(wrapped, "loop")
+			got, err := fs.ReadLink(link.NewIOFS(context.Background(), wrapped), "loop")
 			if err != nil || got != target {
 				t.Fatalf("ReadLink changed target %q: %q, %v", target, got, err)
 			}
@@ -277,8 +284,10 @@ func TestFSStatDoesNotOpenSpecialFiles(t *testing.T) {
 		}
 		base := &metadataFS{info: info}
 		wrapped := newLinkFS(t, base, eris.BlockSet{})
-		for _, stat := range []func(string) (fs.FileInfo, error){wrapped.Stat, wrapped.Lstat} {
-			got, err := stat("special")
+		for _, stat := range []func(context.Context, string) (fs.FileInfo, error){wrapped.Stat, wrapped.Lstat} {
+			got, err := stat(context.Background(),
+
+				"special")
 			if err != nil || got != info || base.opens != 0 {
 				t.Fatalf("mode %v: info %v, error %v, opens %d", mode, got, err, base.opens)
 			}
@@ -289,19 +298,19 @@ func TestFSStatDoesNotOpenSpecialFiles(t *testing.T) {
 func TestFSStatValidatesBeforeBaseAccess(t *testing.T) {
 	base := &metadataFS{err: fs.ErrNotExist}
 	wrapped := newLinkFS(t, base, eris.BlockSet{})
-	if _, err := wrapped.Stat("../secret"); !errors.Is(err, fs.ErrInvalid) {
+	if _, err := wrapped.Stat(context.Background(), "../secret"); !errors.Is(err, fs.ErrInvalid) {
 		t.Fatalf("invalid path: %v", err)
 	}
 	if base.stats != 0 || base.opens != 0 {
 		t.Fatal("invalid path reached the base FS")
 	}
-	_, err := wrapped.Stat("missing")
+	_, err := wrapped.Stat(context.Background(), "missing")
 	var pathErr *fs.PathError
 	if !errors.Is(err, fs.ErrNotExist) || !errors.As(err, &pathErr) || pathErr.Op != "stat" || pathErr.Path != "missing" || base.opens != 0 {
 		t.Fatalf("base Stat failure: %v, opens %d", err, base.opens)
 	}
 	for _, invalid := range []*link.FS{nil, {}} {
-		if _, err := invalid.Stat("valid"); !errors.Is(err, fs.ErrInvalid) {
+		if _, err := invalid.Stat(context.Background(), "valid"); !errors.Is(err, fs.ErrInvalid) {
 			t.Fatalf("uninitialized FS: %v", err)
 		}
 	}
@@ -313,9 +322,11 @@ func TestFSEntryInfoDoesNotFollowReplacementSymlink(t *testing.T) {
 		base := fstest.MapFS{"dir/file": {Data: []byte("plain")}, "private": {Data: encoded}}
 		source := &countingSource{BlockSource: blocks}
 		wrapped := newLinkFS(t, base, source)
-		readDir := func() ([]fs.DirEntry, error) { return wrapped.ReadDir("dir") }
+		readDir := func() ([]fs.DirEntry, error) {
+			return wrapped.ReadDir(context.Background(), "dir")
+		}
 		if viaOpen {
-			dir, err := wrapped.Open("dir")
+			dir, err := wrapped.Open(context.Background(), "dir")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -365,9 +376,11 @@ func TestFSEntryInfoPreservesBaseChecks(t *testing.T) {
 				},
 			}}
 			wrapped := newLinkFS(t, base, eris.BlockSet{})
-			readDir := func() ([]fs.DirEntry, error) { return wrapped.ReadDir("dir") }
+			readDir := func() ([]fs.DirEntry, error) {
+				return wrapped.ReadDir(context.Background(), "dir")
+			}
 			if viaOpen {
-				dir, err := wrapped.Open("dir")
+				dir, err := wrapped.Open(context.Background(), "dir")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -408,11 +421,11 @@ func TestFSHugeDeclaredSizeDoesNotAllocateContent(t *testing.T) {
 		}
 		source := &countingSource{err: eris.ErrMissingBlock}
 		wrapped := newLinkFS(t, fstest.MapFS{"huge": {Data: encoded}}, source)
-		info, err := wrapped.Stat("huge")
+		info, err := wrapped.Stat(context.Background(), "huge")
 		if err != nil || info.Size() != math.MaxInt64 || source.calls.Load() != 0 {
 			t.Fatalf("huge file metadata: %v, %v, fetches %d", info, err, source.calls.Load())
 		}
-		data, err := wrapped.ReadFile("huge")
+		data, err := wrapped.ReadFile(context.Background(), "huge")
 		if len(data) != 0 || !errors.Is(err, eris.ErrMissingBlock) || source.calls.Load() != 1 {
 			t.Fatalf("huge file read: %d bytes, %v, fetches %d", len(data), err, source.calls.Load())
 		}
@@ -443,7 +456,7 @@ func TestFSValidatesUnusedMetadata(t *testing.T) {
 				}
 				source := &countingSource{err: errors.New("unexpected block access")}
 				files := newLinkFS(t, base, source)
-				file, err := files.Open("file")
+				file, err := files.Open(context.Background(), "file")
 				if file != nil {
 					_ = file.Close()
 					t.Fatal("invalid metadata returned a file")

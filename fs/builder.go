@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"io"
 	stdfs "io/fs"
 	"math"
@@ -13,7 +14,8 @@ import (
 
 // Builder creates an ERIS-FS image from readers and explicit metadata. It does
 // not enumerate or read a host file system. A Builder is not safe for
-// concurrent use.
+// concurrent use. Storage operations pass ctx unchanged. Cancellation cannot
+// stop a blocked input Read.
 type Builder struct {
 	sink    eris.BlockSink
 	secret  eris.Secret
@@ -37,7 +39,7 @@ func NewBuilder(sink eris.BlockSink, secret eris.Secret) *Builder {
 // It buffers at most 16 KiB while it selects that size. Set executable to mark
 // the file as executable. A failed call does not add an index entry, but blocks
 // already accepted by the sink can remain there.
-func (builder *Builder) AddFile(path string, content io.Reader, executable bool) error {
+func (builder *Builder) AddFile(ctx context.Context, path string, content io.Reader, executable bool) error {
 	if builder == nil || builder.sink == nil || content == nil {
 		return ErrInvalidEntry
 	}
@@ -49,7 +51,7 @@ func (builder *Builder) AddFile(path string, content io.Reader, executable bool)
 		return err
 	}
 	counted := &countReader{reader: content}
-	capability, err := eris.EncodeContentRecommended(counted, builder.secret, builder.sink)
+	capability, err := eris.EncodeContentRecommended(ctx, counted, builder.secret, builder.sink)
 	if err != nil {
 		return err
 	}
@@ -64,11 +66,11 @@ func (builder *Builder) AddFile(path string, content io.Reader, executable bool)
 // The stream is not decompressed or checked here; Open checks it when read.
 // Use AddFile for files that need random access. A failed call can leave blocks
 // in the sink but does not add an entry.
-func (builder *Builder) AddLzipFile(path string, content io.Reader, size int64, executable bool) error {
+func (builder *Builder) AddLzipFile(ctx context.Context, path string, content io.Reader, size int64, executable bool) error {
 	if size < 0 {
 		return ErrInvalidEntry
 	}
-	if err := builder.AddFile(path, content, executable); err != nil {
+	if err := builder.AddFile(ctx, path, content, executable); err != nil {
 		return err
 	}
 	entry := &builder.entries[len(builder.entries)-1]
@@ -84,7 +86,7 @@ func (builder *Builder) AddLzipFile(path string, content io.Reader, size int64, 
 // retain blocks from the incomplete stream. The ERIS-FS recommendation advises
 // compression for small or sequentially read files of at least 1 KiB; the
 // caller selects whether to compress each file.
-func (builder *Builder) AddCompressedFile(path string, content io.Reader, executable bool) error {
+func (builder *Builder) AddCompressedFile(ctx context.Context, path string, content io.Reader, executable bool) error {
 	if builder == nil || builder.sink == nil || content == nil {
 		return ErrInvalidEntry
 	}
@@ -95,14 +97,17 @@ func (builder *Builder) AddCompressedFile(path string, content io.Reader, execut
 	if err := builder.checkPath(components); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	input, output := io.Pipe()
 	done := make(chan int64, 1)
 	go func() {
-		size, err := writeLzip(output, content)
+		size, err := writeLzip(ctx, output, content)
 		_ = output.CloseWithError(err)
 		done <- size
 	}()
-	err = builder.AddLzipFile(path, input, 0, executable)
+	err = builder.AddLzipFile(ctx, path, input, 0, executable)
 	_ = input.CloseWithError(err)
 	size := <-done
 	if err != nil {
@@ -161,11 +166,11 @@ func (builder *Builder) Index() Index {
 }
 
 // Finish encodes the index and returns its ERIS read capability.
-func (builder *Builder) Finish() (eris.Capability, error) {
+func (builder *Builder) Finish(ctx context.Context) (eris.Capability, error) {
 	if builder == nil || builder.sink == nil {
 		return eris.Capability{}, ErrInvalidEntry
 	}
-	return EncodeIndex(builder.Index(), builder.secret, builder.sink)
+	return EncodeIndex(ctx, builder.Index(), builder.secret, builder.sink)
 }
 
 func (builder *Builder) add(entry Entry) error {

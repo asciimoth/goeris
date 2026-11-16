@@ -1,6 +1,7 @@
 package eris_test
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/asciimoth/goeris"
@@ -21,12 +22,12 @@ func ExampleNewCombinedBlockStore() {
 		panic(err)
 	}
 	ref := capability.Root.Reference
-	stored, err := store.PutBlock(blocks[ref], 0, ref)
+	stored, err := store.PutBlock(context.Background(), blocks[ref], 0, ref)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("stored:", stored == ref)
-	got, err := store.GetBlock(ref, 0)
+	got, err := store.GetBlock(context.Background(), ref, 0)
 	if err != nil {
 		panic(err)
 	}

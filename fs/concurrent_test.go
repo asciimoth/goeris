@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"context"
 	stdfs "io/fs"
 	"sync"
 	"testing"
@@ -13,14 +14,14 @@ func TestConcurrentImageReads(t *testing.T) {
 	blocks := make(eris.BlockSet)
 	content := bytes.Repeat([]byte("concurrent image reads\n"), 2048)
 	nested := NewBuilder(blocks, eris.Secret{})
-	if err := nested.AddFile("plain", bytes.NewReader(content), false); err != nil {
+	if err := nested.AddFile(context.Background(), "plain", bytes.NewReader(content), false); err != nil {
 		t.Fatal(err)
 	}
 	legacy := storeV1Index(t, nested.Index(), blocks)
-	if err := nested.AddCompressedFile("packed", bytes.NewReader(content), false); err != nil {
+	if err := nested.AddCompressedFile(context.Background(), "packed", bytes.NewReader(content), false); err != nil {
 		t.Fatal(err)
 	}
-	modern, err := nested.Finish()
+	modern, err := nested.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,11 +34,11 @@ func TestConcurrentImageReads(t *testing.T) {
 	if err := builder.AddSymlink("link", "v1/plain"); err != nil {
 		t.Fatal(err)
 	}
-	capability, err := builder.Finish()
+	capability, err := builder.Finish(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(capability, blocks)
+	image, err := OpenFS(context.Background(), capability, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,24 +50,24 @@ func TestConcurrentImageReads(t *testing.T) {
 		workers.Go(func() {
 			<-start
 			for _, name := range []string{"link", "v1/plain", "v2/plain", "v2/packed"} {
-				info, err := image.Stat(name)
+				info, err := image.Stat(context.Background(), name)
 				if err != nil || info.Size() != int64(len(content)) {
 					t.Errorf("Stat(%s): %v, %v", name, info, err)
 					return
 				}
-				got, err := stdfs.ReadFile(image, name)
+				got, err := stdfs.ReadFile(NewIOFS(context.Background(), image), name)
 				if err != nil || !bytes.Equal(got, content) {
 					t.Errorf("ReadFile(%s): equal=%t, %v", name, bytes.Equal(got, content), err)
 					return
 				}
 			}
 			for _, name := range []string{"v1", "v2"} {
-				sub, err := image.Sub(name)
+				sub, err := image.Sub(context.Background(), name)
 				if err != nil {
 					t.Error(err)
 					return
 				}
-				entries, err := stdfs.ReadDir(sub, ".")
+				entries, err := stdfs.ReadDir(NewIOFS(context.Background(), sub), ".")
 				want := "plain"
 				if name == "v2" {
 					want = "packed,plain"
@@ -75,7 +76,7 @@ func TestConcurrentImageReads(t *testing.T) {
 					t.Errorf("ReadDir(%s): %s, %v", name, names(entries), err)
 					return
 				}
-				file, err := image.OpenFile(name + "/plain")
+				file, err := image.OpenFile(context.Background(), name+"/plain")
 				if err != nil {
 					t.Error(err)
 					return

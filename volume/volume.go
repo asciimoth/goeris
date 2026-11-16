@@ -26,6 +26,8 @@ var ErrNotDirectory = errors.New("eris-volume: root is not a directory")
 // Block operations support concurrent calls, including calls through separate
 // handles to the same directory. Close only after all operations have finished.
 // Volume is a terminal store: it ignores TTL and does not expire blocks.
+// It checks cancellation between file operations. Cancellation cannot stop
+// a file-system call that is already in progress.
 type Volume struct {
 	root    *os.Root
 	archive *os.File
@@ -91,14 +93,10 @@ func BlockPath(ref eris.Reference) string {
 
 // GetBlock reads and verifies a block. It tries the flat path only when the
 // canonical path is absent. For a file root, it searches the ERIS CBOR contents.
-// Missing blocks match eris.ErrMissingBlock.
-func (v *Volume) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return v.GetBlockContext(context.Background(), ref, ttl)
-}
-
-// GetBlockContext is GetBlock with cancellation checks between file operations.
+// Missing blocks match eris.ErrMissingBlock. It ignores ttl.
+// It checks cancellation between file operations.
 // Cancellation cannot interrupt a file-system call that is already in progress.
-func (v *Volume) GetBlockContext(ctx context.Context, ref eris.Reference, _ eris.TTL) ([]byte, error) {
+func (v *Volume) GetBlock(ctx context.Context, ref eris.Reference, _ eris.TTL) ([]byte, error) {
 	if err := v.check(ctx); err != nil {
 		return nil, err
 	}
@@ -183,14 +181,10 @@ func (v *Volume) read(ctx context.Context, name string, ref eris.Reference) ([]b
 // A regular file root returns ErrNotDirectory and is never changed.
 // It syncs the block before rename and the directories afterward where supported.
 // A directory-sync error can be returned after the complete block is visible.
-func (v *Volume) PutBlock(block []byte, ttl eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
-	return v.PutBlockContext(context.Background(), block, ttl, expected...)
-}
-
-// PutBlockContext is PutBlock with cancellation checks between file operations.
+// It ignores ttl and checks cancellation between file operations.
 // Cancellation cannot interrupt a file-system call that is already in progress.
 // Once the final rename starts, the block can be stored despite cancellation.
-func (v *Volume) PutBlockContext(ctx context.Context, block []byte, _ eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
+func (v *Volume) PutBlock(ctx context.Context, block []byte, _ eris.TTL, expected ...eris.Reference) (eris.Reference, error) {
 	if err := v.check(ctx); err != nil {
 		return eris.Reference{}, err
 	}
@@ -290,8 +284,6 @@ func (v *Volume) check(ctx context.Context) error {
 }
 
 var (
-	_ eris.BlockStore         = (*Volume)(nil)
-	_ eris.ContextBlockSource = (*Volume)(nil)
-	_ eris.ContextBlockSink   = (*Volume)(nil)
-	_ io.Closer               = (*Volume)(nil)
+	_ eris.BlockStore = (*Volume)(nil)
+	_ io.Closer       = (*Volume)(nil)
 )

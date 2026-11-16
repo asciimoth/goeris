@@ -2,6 +2,7 @@ package link_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -21,7 +22,7 @@ type countingSource struct {
 	err   error
 }
 
-func (source *countingSource) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (source *countingSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	source.calls.Add(1)
 	if ttl != eris.NoTTL {
 		return nil, errors.New("unexpected TTL")
@@ -29,7 +30,7 @@ func (source *countingSource) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte
 	if source.err != nil {
 		return nil, source.err
 	}
-	return source.BlockSource.GetBlock(ref, ttl)
+	return source.BlockSource.GetBlock(ctx, ref, ttl)
 }
 
 func encodeFSLink(t *testing.T, payload []byte) ([]byte, eris.BlockSet) {
@@ -64,7 +65,7 @@ func TestFS(t *testing.T) {
 		"dir/content": {Data: encoded, Mode: 0o755, ModTime: time.Unix(1234, 0)},
 	}
 	wrapped := newLinkFS(t, base, blocks)
-	if err := fstest.TestFS(wrapped, "plain.eris", "short", "empty", "dir/content"); err != nil {
+	if err := fstest.TestFS(link.NewIOFS(context.Background(), wrapped), "plain.eris", "short", "empty", "dir/content"); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"plain.eris", "short", "empty", "dir/content"} {
@@ -72,12 +73,12 @@ func TestFS(t *testing.T) {
 		if name == "dir/content" {
 			want = payload
 		}
-		got, err := fs.ReadFile(wrapped, name)
+		got, err := fs.ReadFile(link.NewIOFS(context.Background(), wrapped), name)
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("ReadFile(%q): %d bytes, %v", name, len(got), err)
 		}
 	}
-	sub, err := fs.Sub(wrapped, "dir")
+	sub, err := fs.Sub(link.NewIOFS(context.Background(), wrapped), "dir")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestFSMetadataAndLazyReads(t *testing.T) {
 	source := &countingSource{BlockSource: blocks}
 	base := fstest.MapFS{"content.eris": {Data: encoded, Mode: 0o751, ModTime: time.Unix(1234, 0)}}
 	wrapped := newLinkFS(t, base, source)
-	file, err := wrapped.Open("content.eris")
+	file, err := wrapped.Open(context.Background(), "content.eris")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,13 +113,13 @@ func TestFSMetadataAndLazyReads(t *testing.T) {
 		}
 	}
 	checkInfo(file.Stat())
-	checkInfo(fs.Stat(wrapped, "content.eris"))
-	entries, err := fs.ReadDir(wrapped, ".")
+	checkInfo(fs.Stat(link.NewIOFS(context.Background(), wrapped), "content.eris"))
+	entries, err := fs.ReadDir(link.NewIOFS(context.Background(), wrapped), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	checkInfo(entries[0].Info())
-	dir, err := wrapped.Open(".")
+	dir, err := wrapped.Open(context.Background(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +190,7 @@ func TestFSLinkErrors(t *testing.T) {
 				t.Fatal(err)
 			}
 			wrapped := newLinkFS(t, fstest.MapFS{"bad": {Data: data}}, blocks)
-			_, err = fs.ReadFile(wrapped, "bad")
+			_, err = fs.ReadFile(link.NewIOFS(context.Background(), wrapped), "bad")
 			if !errors.Is(err, test.want) {
 				t.Fatalf("got %v, want %v", err, test.want)
 			}
@@ -201,10 +202,10 @@ func TestFSLinkErrors(t *testing.T) {
 	}
 	base := fstest.MapFS{"bad": {Data: []byte(link.MagicPrefix)}, "good": {Data: encoded}}
 	wrapped := newLinkFS(t, base, blocks)
-	if _, err := wrapped.Open("bad"); !errors.Is(err, link.ErrInvalidLink) {
+	if _, err := wrapped.Open(context.Background(), "bad"); !errors.Is(err, link.ErrInvalidLink) {
 		t.Fatalf("malformed link: %v", err)
 	}
-	entries, err := wrapped.ReadDir(".")
+	entries, err := wrapped.ReadDir(context.Background(), ".")
 	if err != nil || len(entries) != 2 {
 		t.Fatalf("ReadDir: %v", err)
 	}
@@ -214,7 +215,7 @@ func TestFSLinkErrors(t *testing.T) {
 	for _, sourceErr := range []error{eris.ErrMissingBlock, io.EOF} {
 		source := &countingSource{err: sourceErr}
 		wrapped := newLinkFS(t, base, source)
-		file, err := wrapped.Open("good")
+		file, err := wrapped.Open(context.Background(), "good")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -238,7 +239,7 @@ func TestFSLinkLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = fs.ReadFile(wrapped, "link")
+		_, err = fs.ReadFile(link.NewIOFS(context.Background(), wrapped), "link")
 		if limit < int64(len(encoded)) {
 			if !errors.Is(err, link.ErrLinkTooLarge) {
 				t.Fatalf("limit %d: %v", limit, err)
@@ -246,7 +247,7 @@ func TestFSLinkLimit(t *testing.T) {
 		} else if err != nil {
 			t.Fatal(err)
 		}
-		if got, err := fs.ReadFile(wrapped, "plain"); err != nil || len(got) != 1000 {
+		if got, err := fs.ReadFile(link.NewIOFS(context.Background(), wrapped), "plain"); err != nil || len(got) != 1000 {
 			t.Fatalf("limit applied to ordinary file: %v", err)
 		}
 	}
@@ -260,7 +261,7 @@ func TestFSLinkLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrapped := newLinkFS(t, fstest.MapFS{"large": {Data: data}}, blocks)
-	if _, err := wrapped.Open("large"); !errors.Is(err, link.ErrLinkTooLarge) {
+	if _, err := wrapped.Open(context.Background(), "large"); !errors.Is(err, link.ErrLinkTooLarge) {
 		t.Fatalf("default limit: %v", err)
 	}
 }
@@ -269,14 +270,14 @@ func TestFSOneLayer(t *testing.T) {
 	inner, _ := encodeFSLink(t, []byte("target"))
 	outer, blocks := encodeFSLink(t, inner)
 	wrapped := newLinkFS(t, fstest.MapFS{"link": {Data: outer}}, blocks)
-	got, err := fs.ReadFile(wrapped, "link")
+	got, err := fs.ReadFile(link.NewIOFS(context.Background(), wrapped), "link")
 	if err != nil || !bytes.Equal(got, inner) {
 		t.Fatalf("nested link changed: %v", err)
 	}
 	for _, payload := range [][]byte{nil, make([]byte, 1024)} {
 		encoded, blocks := encodeFSLink(t, payload)
 		wrapped := newLinkFS(t, fstest.MapFS{"link": {Data: encoded}}, blocks)
-		got, err := fs.ReadFile(wrapped, "link")
+		got, err := fs.ReadFile(link.NewIOFS(context.Background(), wrapped), "link")
 		if err != nil || !bytes.Equal(got, payload) {
 			t.Fatalf("boundary length %d: %v", len(payload), err)
 		}
@@ -297,7 +298,7 @@ func (base plainFS) Open(name string) (fs.File, error) {
 func TestFSNonSeekingBase(t *testing.T) {
 	for _, data := range [][]byte{nil, []byte("abc"), []byte(link.MagicPrefix[:8]), bytes.Repeat([]byte("x"), 100)} {
 		wrapped := newLinkFS(t, plainFS{fstest.MapFS{"plain": {Data: data}}}, eris.BlockSet{})
-		file, err := wrapped.Open("plain")
+		file, err := wrapped.Open(context.Background(), "plain")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -308,7 +309,7 @@ func TestFSNonSeekingBase(t *testing.T) {
 		_ = file.Close()
 	}
 	wrapped := newLinkFS(t, plainFS{fstest.MapFS{"plain": {Data: []byte("abc")}}}, eris.BlockSet{})
-	file, err := wrapped.Open("plain")
+	file, err := wrapped.Open(context.Background(), "plain")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +319,7 @@ func TestFSNonSeekingBase(t *testing.T) {
 	}
 	encoded, blocks := encodeFSLink(t, []byte("resolved"))
 	wrapped = newLinkFS(t, plainFS{fstest.MapFS{"link": {Data: encoded}}}, blocks)
-	if got, err := fs.ReadFile(wrapped, "link"); err != nil || string(got) != "resolved" {
+	if got, err := fs.ReadFile(link.NewIOFS(context.Background(), wrapped), "link"); err != nil || string(got) != "resolved" {
 		t.Fatalf("non-seeking link: %v", err)
 	}
 }
@@ -339,16 +340,16 @@ func TestFSInvalidArguments(t *testing.T) {
 	}
 	for _, wrapped := range []*link.FS{newLinkFS(t, base, blocks), {}, nil} {
 		for _, name := range []string{"", "/absolute", "a/../b", "a//b"} {
-			if _, err := wrapped.Open(name); !errors.Is(err, fs.ErrInvalid) {
+			if _, err := wrapped.Open(context.Background(), name); !errors.Is(err, fs.ErrInvalid) {
 				t.Fatalf("Open(%q): %v", name, err)
 			}
-			if _, err := wrapped.ReadDir(name); !errors.Is(err, fs.ErrInvalid) {
+			if _, err := wrapped.ReadDir(context.Background(), name); !errors.Is(err, fs.ErrInvalid) {
 				t.Fatalf("ReadDir(%q): %v", name, err)
 			}
-			if _, err := wrapped.Lstat(name); !errors.Is(err, fs.ErrInvalid) {
+			if _, err := wrapped.Lstat(context.Background(), name); !errors.Is(err, fs.ErrInvalid) {
 				t.Fatalf("Lstat(%q): %v", name, err)
 			}
-			if _, err := wrapped.ReadLink(name); !errors.Is(err, fs.ErrInvalid) {
+			if _, err := wrapped.ReadLink(context.Background(), name); !errors.Is(err, fs.ErrInvalid) {
 				t.Fatalf("ReadLink(%q): %v", name, err)
 			}
 		}
@@ -359,14 +360,14 @@ func TestFSSymlinkMethodsWithoutBaseSupport(t *testing.T) {
 	encoded, blocks := encodeFSLink(t, []byte("hello"))
 	base := plainFS{fstest.MapFS{"file": {Data: encoded}}}
 	wrapped := newLinkFS(t, base, blocks)
-	info, err := wrapped.Lstat("file")
+	info, err := wrapped.Lstat(context.Background(), "file")
 	if err != nil || info.Size() != 5 {
 		t.Fatalf("Lstat fallback: %v, %v", info, err)
 	}
-	if _, err := wrapped.ReadLink("file"); !errors.Is(err, fs.ErrInvalid) {
+	if _, err := wrapped.ReadLink(context.Background(), "file"); !errors.Is(err, fs.ErrInvalid) {
 		t.Fatalf("unsupported ReadLink: %v", err)
 	}
-	_, err = wrapped.Lstat("missing")
+	_, err = wrapped.Lstat(context.Background(), "missing")
 	var pathErr *fs.PathError
 	if !errors.Is(err, fs.ErrNotExist) || !errors.As(err, &pathErr) || pathErr.Op != "lstat" || pathErr.Path != "missing" {
 		t.Fatalf("Lstat error context: %v", err)

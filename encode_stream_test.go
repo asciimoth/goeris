@@ -2,6 +2,7 @@ package eris
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"reflect"
@@ -18,7 +19,7 @@ func TestEncodeContentMatchesCoreEncoder(t *testing.T) {
 				t.Fatal(err)
 			}
 			blocks := make(BlockSet)
-			gotCap, err := EncodeContent(bytes.NewReader(content), Secret{1, 2, 3}, size, blocks)
+			gotCap, err := EncodeContent(context.Background(), bytes.NewReader(content), Secret{1, 2, 3}, size, blocks)
 			if err != nil || gotCap != wantCap || !reflect.DeepEqual(blocks, wantBlocks) {
 				t.Fatalf("size %d length %d mismatch: %v", size, length, err)
 			}
@@ -34,7 +35,7 @@ func TestIncrementalEncoderMatchesMultiLevelCoreTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocks := make(BlockSet)
-	gotCap, err := EncodeContent(bytes.NewReader(content), Secret{9}, BlockSize1KiB, blocks)
+	gotCap, err := EncodeContent(context.Background(), bytes.NewReader(content), Secret{9}, BlockSize1KiB, blocks)
 	if err != nil || gotCap != wantCap || !reflect.DeepEqual(blocks, wantBlocks) {
 		t.Fatalf("multi-level encoding mismatch: %v", err)
 	}
@@ -42,34 +43,34 @@ func TestIncrementalEncoderMatchesMultiLevelCoreTree(t *testing.T) {
 
 func TestEncodeContentErrors(t *testing.T) {
 	sentinel := errors.New("sentinel")
-	if _, err := EncodeContent(nil, Secret{}, BlockSize1KiB, make(BlockSet)); !errors.Is(err, ErrInvalidInput) {
+	if _, err := EncodeContent(context.Background(), nil, Secret{}, BlockSize1KiB, make(BlockSet)); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("nil reader error = %v", err)
 	}
-	if _, err := EncodeContent(bytes.NewReader(nil), Secret{}, BlockSize1KiB, nil); !errors.Is(err, ErrInvalidInput) {
+	if _, err := EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, BlockSize1KiB, nil); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("nil sink error = %v", err)
 	}
-	if _, err := EncodeContent(bytes.NewReader(nil), Secret{}, 1, make(BlockSet)); !errors.Is(err, ErrInvalidBlockSize) {
+	if _, err := EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, 1, make(BlockSet)); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Fatalf("invalid size error = %v", err)
 	}
-	if _, err := EncodeContent(errorReader{sentinel}, Secret{}, BlockSize1KiB, make(BlockSet)); !errors.Is(err, sentinel) {
+	if _, err := EncodeContent(context.Background(), errorReader{sentinel}, Secret{}, BlockSize1KiB, make(BlockSet)); !errors.Is(err, sentinel) {
 		t.Fatalf("reader error = %v", err)
 	}
-	if _, err := EncodeContent(bytes.NewReader(nil), Secret{}, BlockSize1KiB, errorSink{sentinel}); !errors.Is(err, sentinel) {
+	if _, err := EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, BlockSize1KiB, errorSink{sentinel}); !errors.Is(err, sentinel) {
 		t.Fatalf("sink error = %v", err)
 	}
-	if _, err := EncodeContent(bytes.NewReader(make([]byte, BlockSize1KiB)), Secret{}, BlockSize1KiB, &countingSink{failAt: 2, err: sentinel}); !errors.Is(err, sentinel) {
+	if _, err := EncodeContent(context.Background(), bytes.NewReader(make([]byte, BlockSize1KiB)), Secret{}, BlockSize1KiB, &countingSink{failAt: 2, err: sentinel}); !errors.Is(err, sentinel) {
 		t.Fatalf("second leaf sink error = %v", err)
 	}
-	if _, err := EncodeContent(bytes.NewReader(make([]byte, BlockSize1KiB*2)), Secret{}, BlockSize1KiB, &countingSink{failAt: 4, err: sentinel}); !errors.Is(err, sentinel) {
+	if _, err := EncodeContent(context.Background(), bytes.NewReader(make([]byte, BlockSize1KiB*2)), Secret{}, BlockSize1KiB, &countingSink{failAt: 4, err: sentinel}); !errors.Is(err, sentinel) {
 		t.Fatalf("parent sink error = %v", err)
 	}
-	if _, err := EncodeContent(bytes.NewReader(make([]byte, BlockSize1KiB*16)), Secret{}, BlockSize1KiB, &countingSink{failAt: 17, err: sentinel}); !errors.Is(err, sentinel) {
+	if _, err := EncodeContent(context.Background(), bytes.NewReader(make([]byte, BlockSize1KiB*16)), Secret{}, BlockSize1KiB, &countingSink{failAt: 17, err: sentinel}); !errors.Is(err, sentinel) {
 		t.Fatalf("full parent sink error = %v", err)
 	}
-	if _, err := EncodeContent(bytes.NewReader(make([]byte, BlockSize1KiB*15)), Secret{}, BlockSize1KiB, &countingSink{failAt: 17, err: sentinel}); !errors.Is(err, sentinel) {
+	if _, err := EncodeContent(context.Background(), bytes.NewReader(make([]byte, BlockSize1KiB*15)), Secret{}, BlockSize1KiB, &countingSink{failAt: 17, err: sentinel}); !errors.Is(err, sentinel) {
 		t.Fatalf("final leaf parent sink error = %v", err)
 	}
-	if _, err := putNode(nil, Secret{}, 0, make(BlockSet)); !errors.Is(err, ErrInvalidBlockSize) {
+	if _, err := putNode(context.Background(), nil, Secret{}, 0, make(BlockSet)); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Fatalf("invalid node error = %v", err)
 	}
 	encoder := treeEncoder{blockSize: BlockSize1KiB, sink: make(BlockSet)}
@@ -79,7 +80,7 @@ func TestEncodeContentErrors(t *testing.T) {
 	if _, err := encoder.parent(255); !errors.Is(err, ErrInvalidTree) {
 		t.Fatalf("excessive parent level error = %v", err)
 	}
-	if _, err := NewReader(Capability{}, make(BlockSet)); !errors.Is(err, ErrInvalidCapability) {
+	if _, err := NewReader(context.Background(), Capability{}, make(BlockSet)); !errors.Is(err, ErrInvalidCapability) {
 		t.Fatalf("invalid capability error = %v", err)
 	}
 }
@@ -98,7 +99,7 @@ func TestEncodeContentRecommended(t *testing.T) {
 			smallChunkReader{Reader: bytes.NewReader(content), max: 37},
 		} {
 			blocks := make(BlockSet)
-			got, err := EncodeContentRecommended(input, secret, blocks)
+			got, err := EncodeContentRecommended(context.Background(), input, secret, blocks)
 			if err != nil || got != want || !reflect.DeepEqual(blocks, wantBlocks) {
 				t.Fatalf("size %d, input %T: capability or blocks differ: %v", size, input, err)
 			}
@@ -112,13 +113,13 @@ func TestEncodeContentRecommendedErrors(t *testing.T) {
 		if input == nil {
 			sink = make(BlockSet)
 		}
-		if _, err := EncodeContentRecommended(input, Secret{}, sink); !errors.Is(err, ErrInvalidInput) {
+		if _, err := EncodeContentRecommended(context.Background(), input, Secret{}, sink); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("nil input or sink: %v", err)
 		}
 	}
 	sentinel := errors.New("storage failed")
 	for _, size := range []int{0, 16384, 65536} {
-		capability, err := EncodeContentRecommended(bytes.NewReader(make([]byte, size)), Secret{}, errorSink{sentinel})
+		capability, err := EncodeContentRecommended(context.Background(), bytes.NewReader(make([]byte, size)), Secret{}, errorSink{sentinel})
 		if !errors.Is(err, sentinel) || capability != (Capability{}) {
 			t.Fatalf("size %d: failed write returned %v, %v", size, capability, err)
 		}
@@ -128,7 +129,7 @@ func TestEncodeContentRecommendedErrors(t *testing.T) {
 func TestEncodeContentFinalParentError(t *testing.T) {
 	sentinel := errors.New("storage failed")
 	// Completing the last partial subtree can fill and flush its parent.
-	if _, err := EncodeContent(bytes.NewReader(make([]byte, 240*1024)), Secret{}, BlockSize1KiB, &countingSink{failAt: 258, err: sentinel}); !errors.Is(err, sentinel) {
+	if _, err := EncodeContent(context.Background(), bytes.NewReader(make([]byte, 240*1024)), Secret{}, BlockSize1KiB, &countingSink{failAt: 258, err: sentinel}); !errors.Is(err, sentinel) {
 		t.Fatalf("final parent: %v", err)
 	}
 }
@@ -139,7 +140,7 @@ type countingSink struct {
 	err    error
 }
 
-func (sink *countingSink) PutBlock(block []byte, ttl TTL, _ ...Reference) (Reference, error) {
+func (sink *countingSink) PutBlock(ctx context.Context, block []byte, ttl TTL, _ ...Reference) (Reference, error) {
 	sink.calls++
 	if sink.calls == sink.failAt {
 		return Reference{}, sink.err
@@ -153,6 +154,6 @@ func (reader errorReader) Read([]byte) (int, error) { return 0, reader.err }
 
 type errorSink struct{ err error }
 
-func (sink errorSink) PutBlock([]byte, TTL, ...Reference) (Reference, error) {
+func (sink errorSink) PutBlock(context.Context, []byte, TTL, ...Reference) (Reference, error) {
 	return Reference{}, sink.err
 }

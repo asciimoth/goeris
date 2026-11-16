@@ -348,9 +348,8 @@ rename on platforms where it is unavailable.
 - `DefaultChainPaths() ([]string, error)` to resolve the platform's default
   paths without opening or creating roots;
 - `BlockPath(ref) string` to compute the canonical relative host path;
-- `GetBlock` and `PutBlock`, with the corresponding context methods, to
-  implement `eris.BlockStore`, `eris.ContextBlockSource`, and
-  `eris.ContextBlockSink`; and
+- `GetBlock(ctx, ref, ttl)` and `PutBlock(ctx, block, ttl, expected...)` to
+  implement `eris.BlockStore`; and
 - `Close()` to release the root handle.
 
 `PutBlock` accepts zero or one expected reference. Invalid size, a reference
@@ -390,11 +389,11 @@ processes. The caller MUST finish operations before closing their handle. A nil
 or zero-value `Volume` returns `fs.ErrClosed`. Methods on a closed handle return
 file-system errors.
 
-Context methods check cancellation between file operations. They cannot
-interrupt a file-system call already in progress. Cancellation detected before
-the final rename prevents publication, but can leave empty directories. After
-the final cancellation check, a write can succeed despite cancellation. A
-non-nil context is required.
+Block methods check cancellation between file operations. They cannot interrupt
+a file-system call already in progress. Cancellation detected before the final
+rename prevents publication, but can leave empty directories. After the final
+cancellation check, a write can succeed despite cancellation. A non-nil context
+is required.
 
 A volume is terminal storage. It ignores TTL, does not forward requests, and
 does not expire blocks.

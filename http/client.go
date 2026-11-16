@@ -124,17 +124,10 @@ func (client *Client) Resolve(ctx context.Context, urn string, ttl eris.TTL) (*n
 	return response, nil
 }
 
-// GetBlock retrieves and verifies one encrypted ERIS block. It uses a
-// background context so Client implements the block-source interfaces in this
-// module. Use GetBlockContext when a call needs cancellation or a deadline.
-func (client *Client) GetBlock(ref eris.Reference, ttl eris.TTL) ([]byte, error) {
-	return client.GetBlockContext(context.Background(), ref, ttl)
-}
-
-// GetBlockContext retrieves and verifies one encrypted ERIS block.
+// GetBlock retrieves and verifies one encrypted ERIS block.
 // It requires a 200 OK response with the application/octet-stream media type.
 // Request and body read errors omit transport text but retain their causes.
-func (client *Client) GetBlockContext(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
+func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL) ([]byte, error) {
 	response, err := client.Resolve(ctx, ref.URN(), ttl)
 	if err != nil {
 		return nil, err
@@ -200,7 +193,4 @@ func cloneURL(input *url.URL) *url.URL {
 	return &clone
 }
 
-var (
-	_ eris.BlockSource        = (*Client)(nil)
-	_ eris.ContextBlockSource = (*Client)(nil)
-)
+var _ eris.BlockSource = (*Client)(nil)

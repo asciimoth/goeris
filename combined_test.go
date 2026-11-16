@@ -21,41 +21,26 @@ type combinedProbe struct {
 	ref   Reference
 }
 
-func (probe *combinedProbe) GetBlock(ref Reference, ttl TTL) ([]byte, error) {
-	return probe.block, probe.call("GetBlock", nil, ref, nil, nil)
+func (probe *combinedProbe) GetBlock(ctx context.Context, ref Reference, ttl TTL) ([]byte, error) {
+	return probe.block, probe.call("GetBlock", ctx, ref, nil, nil)
 }
 
-func (probe *combinedProbe) PutBlock(block []byte, ttl TTL, expected ...Reference) (Reference, error) {
-	return probe.ref, probe.call("PutBlock", nil, Reference{}, block, expected)
-}
-
-func (probe *combinedProbe) GetBlockContext(ctx context.Context, ref Reference, ttl TTL) ([]byte, error) {
-	return probe.block, probe.call("GetBlockContext", ctx, ref, nil, nil)
-}
-
-func (probe *combinedProbe) PutBlockContext(ctx context.Context, block []byte, ttl TTL, expected ...Reference) (Reference, error) {
-	return probe.ref, probe.call("PutBlockContext", ctx, Reference{}, block, expected)
+func (probe *combinedProbe) PutBlock(ctx context.Context, block []byte, ttl TTL, expected ...Reference) (Reference, error) {
+	return probe.ref, probe.call("PutBlock", ctx, Reference{}, block, expected)
 }
 
 type combinedOperation struct {
-	name    string
-	write   bool
-	context bool
-	call    func(*CombinedBlockStore, context.Context, []byte, Reference, []Reference) (any, error)
+	name  string
+	write bool
+	call  func(*CombinedBlockStore, context.Context, []byte, Reference, []Reference) (any, error)
 }
 
 var combinedOperations = []combinedOperation{
-	{"GetBlock", false, false, func(store *CombinedBlockStore, _ context.Context, _ []byte, ref Reference, _ []Reference) (any, error) {
-		return store.GetBlock(ref, 0)
+	{"GetBlock", false, func(store *CombinedBlockStore, ctx context.Context, _ []byte, ref Reference, _ []Reference) (any, error) {
+		return store.GetBlock(ctx, ref, 0)
 	}},
-	{"PutBlock", true, false, func(store *CombinedBlockStore, _ context.Context, block []byte, _ Reference, expected []Reference) (any, error) {
-		return store.PutBlock(block, 0, expected...)
-	}},
-	{"GetBlockContext", false, true, func(store *CombinedBlockStore, ctx context.Context, _ []byte, ref Reference, _ []Reference) (any, error) {
-		return store.GetBlockContext(ctx, ref, 0)
-	}},
-	{"PutBlockContext", true, true, func(store *CombinedBlockStore, ctx context.Context, block []byte, _ Reference, expected []Reference) (any, error) {
-		return store.PutBlockContext(ctx, block, 0, expected...)
+	{"PutBlock", true, func(store *CombinedBlockStore, ctx context.Context, block []byte, _ Reference, expected []Reference) (any, error) {
+		return store.PutBlock(ctx, block, 0, expected...)
 	}},
 }
 
@@ -182,7 +167,7 @@ func TestCombinedBlockStoreFallback(t *testing.T) {
 								if method != operation.name {
 									t.Fatalf("called %s, want %s", method, operation.name)
 								}
-								if operation.context && gotCtx != ctx || !operation.context && gotCtx != nil {
+								if gotCtx != ctx {
 									t.Fatal("context was changed or supplied to the wrong method")
 								}
 								if operation.write {
@@ -248,16 +233,14 @@ func TestCombinedBlockStoreCapabilities(t *testing.T) {
 		}{
 			{"source", func(p *combinedProbe) any { return struct{ BlockSource }{p} }, []string{"GetBlock"}},
 			{"sink", func(p *combinedProbe) any { return struct{ BlockSink }{p} }, []string{"PutBlock"}},
-			{"context source", func(p *combinedProbe) any { return struct{ ContextBlockSource }{p} }, []string{"GetBlockContext"}},
-			{"context sink", func(p *combinedProbe) any { return struct{ ContextBlockSink }{p} }, []string{"PutBlockContext"}},
 			{"store", func(p *combinedProbe) any { return struct{ BlockStore }{p} }, []string{"GetBlock", "PutBlock"}},
-			{"context store", func(p *combinedProbe) any {
+			{"separate interfaces", func(p *combinedProbe) any {
 				return struct {
-					ContextBlockSource
-					ContextBlockSink
+					BlockSource
+					BlockSink
 				}{p, p}
-			}, []string{"GetBlockContext", "PutBlockContext"}},
-			{"all", func(p *combinedProbe) any { return p }, []string{"GetBlock", "PutBlock", "GetBlockContext", "PutBlockContext"}},
+			}, []string{"GetBlock", "PutBlock"}},
+			{"all", func(p *combinedProbe) any { return p }, []string{"GetBlock", "PutBlock"}},
 		} {
 			t.Run(operation.name+"/"+test.name, func(t *testing.T) {
 				t.Parallel()
@@ -279,13 +262,6 @@ func TestCombinedBlockStoreCapabilities(t *testing.T) {
 				wantErr := ErrNoBlockStorage
 				var wantEvents []string
 				calledMethod := operation.name
-				if operation.context && !slices.Contains(test.methods, calledMethod) {
-					if operation.write {
-						calledMethod = "PutBlock"
-					} else {
-						calledMethod = "GetBlock"
-					}
-				}
 				if slices.Contains(test.methods, calledMethod) {
 					wantErr = failure
 					wantEvents = []string{calledMethod, "error", calledMethod}
@@ -337,10 +313,8 @@ func TestCombinedBlockStoreMixedCapabilities(t *testing.T) {
 		operation combinedOperation
 		indexes   []int
 	}{
-		{combinedOperations[0], []int{1, 5, 6}},
-		{combinedOperations[1], []int{3, 5, 6}},
-		{combinedOperations[2], []int{0, 1, 5, 6}},
-		{combinedOperations[3], []int{3, 4, 5, 6}},
+		{combinedOperations[0], []int{0, 1, 5, 6}},
+		{combinedOperations[1], []int{3, 4, 5, 6}},
 	} {
 		t.Run(test.operation.name, func(t *testing.T) {
 			t.Parallel()
@@ -351,13 +325,6 @@ func TestCombinedBlockStoreMixedCapabilities(t *testing.T) {
 				return &combinedProbe{block: block, ref: ref, call: func(method string, _ context.Context, _ Reference, _ []byte, _ []Reference) error {
 					calls = append(calls, index)
 					wantMethod := test.operation.name
-					if test.operation.context && (index == 1 || index == 3 || index == 5) {
-						if test.operation.write {
-							wantMethod = "PutBlock"
-						} else {
-							wantMethod = "GetBlock"
-						}
-					}
 					if method != wantMethod {
 						t.Fatalf("called %s, want %s", method, wantMethod)
 					}
@@ -368,11 +335,11 @@ func TestCombinedBlockStoreMixedCapabilities(t *testing.T) {
 				}}
 			}
 			store := NewCombinedBlockStore(
-				struct{ ContextBlockSource }{probe(0)},
+				struct{ BlockSource }{probe(0)},
 				struct{ BlockSource }{probe(1)},
 				nil,
 				struct{ BlockSink }{probe(3)},
-				struct{ ContextBlockSink }{probe(4)},
+				struct{ BlockSink }{probe(4)},
 				struct{ BlockStore }{probe(5)},
 				probe(6),
 				probe(7),
@@ -397,9 +364,6 @@ func TestCombinedBlockStoreMixedCapabilities(t *testing.T) {
 func TestCombinedBlockStoreCanceledContext(t *testing.T) {
 	t.Parallel()
 	for _, operation := range combinedOperations {
-		if !operation.context {
-			continue
-		}
 		for _, expired := range []bool{false, true} {
 			for _, empty := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/expired=%t/empty=%t", operation.name, expired, empty), func(t *testing.T) {
@@ -434,9 +398,6 @@ func TestCombinedBlockStoreCanceledContext(t *testing.T) {
 func TestCombinedBlockStoreCancellationBetweenAttempts(t *testing.T) {
 	t.Parallel()
 	for _, operation := range combinedOperations {
-		if !operation.context {
-			continue
-		}
 		for _, cancelInCallback := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/callback=%t", operation.name, cancelInCallback), func(t *testing.T) {
 				t.Parallel()
@@ -477,9 +438,6 @@ func TestCombinedBlockStoreCancellationAtCompletion(t *testing.T) {
 	t.Parallel()
 	failure := errors.New("final store failure")
 	for _, operation := range combinedOperations {
-		if !operation.context {
-			continue
-		}
 		for _, test := range []struct {
 			name string
 			err  error
@@ -515,13 +473,10 @@ func TestCombinedBlockStoreCancellationAtCompletion(t *testing.T) {
 	}
 }
 
-func TestCombinedBlockStorePlainContextCancellation(t *testing.T) {
+func TestCombinedBlockStoreWrappedCancellation(t *testing.T) {
 	t.Parallel()
-	failure := errors.New("plain method failed")
+	failure := errors.New("wrapped store failed")
 	for _, operation := range combinedOperations {
-		if !operation.context {
-			continue
-		}
 		for _, test := range []struct {
 			name       string
 			canceled   bool
@@ -545,15 +500,15 @@ func TestCombinedBlockStorePlainContextCancellation(t *testing.T) {
 				calls, reports := 0, 0
 				probe := &combinedProbe{block: block, ref: ref, call: func(method string, gotCtx context.Context, gotRef Reference, gotBlock []byte, expected []Reference) error {
 					calls++
-					if gotCtx != nil {
-						t.Fatal("called a context method")
+					if gotCtx != ctx {
+						t.Fatal("context changed")
 					}
 					if operation.write {
 						if method != "PutBlock" || !bytes.Equal(gotBlock, block) || !slices.Equal(expected, []Reference{ref}) {
-							t.Fatal("incorrect plain write call")
+							t.Fatal("incorrect wrapped write call")
 						}
 					} else if method != "GetBlock" || gotRef != ref {
-						t.Fatal("incorrect plain read call")
+						t.Fatal("incorrect wrapped read call")
 					}
 					cancel()
 					return test.attemptErr
@@ -587,9 +542,6 @@ func TestCombinedBlockStorePlainContextCancellation(t *testing.T) {
 func TestCombinedBlockStoreBackendContextError(t *testing.T) {
 	t.Parallel()
 	for _, operation := range combinedOperations {
-		if !operation.context {
-			continue
-		}
 		t.Run(operation.name, func(t *testing.T) {
 			t.Parallel()
 			// An individual store can time out while the caller's context remains
@@ -683,7 +635,7 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 				t.Fatalf("unexpected callback: (%d, %v)", index, err)
 			}
 		}
-		got, err := store.GetBlock(pair.Reference, 0)
+		got, err := store.GetBlock(context.Background(), pair.Reference, 0)
 		if err != nil || !bytes.Equal(got, block) || !slices.Equal(indexes, []int{0, 1}) {
 			t.Fatalf("read error = %v, callback indexes = %v", err, indexes)
 		}
@@ -700,7 +652,7 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 			}
 		}
 		input := append([]byte(nil), block...)
-		ref, err := store.PutBlock(input, 0, pair.Reference)
+		ref, err := store.PutBlock(context.Background(), input, 0, pair.Reference)
 		if err != nil || ref != pair.Reference || !slices.Equal(indexes, []int{1}) {
 			t.Fatalf("write = (%v, %v), callback indexes = %v", ref, err, indexes)
 		}
@@ -721,7 +673,7 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 		} {
 			first, second := make(BlockSet), make(BlockSet)
 			store := NewCombinedBlockStore(first, second)
-			ref, err := store.PutBlock(test.block, 0, test.expected...)
+			ref, err := store.PutBlock(context.Background(), test.block, 0, test.expected...)
 			if !errors.Is(err, ErrInvalidBlock) || ref != (Reference{}) || len(first) != 0 || len(second) != 0 {
 				t.Fatalf("invalid write = (%v, %v), store lengths = %d, %d", ref, err, len(first), len(second))
 			}
@@ -732,9 +684,6 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 func TestCombinedBlockStoreInFlightCancellation(t *testing.T) {
 	t.Parallel()
 	for _, operation := range combinedOperations {
-		if !operation.context {
-			continue
-		}
 		t.Run(operation.name, func(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithCancel(context.Background())

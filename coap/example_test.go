@@ -20,10 +20,10 @@ func ExampleClient() {
 
 	encoded, encodedBlocks, _ := eris.Encode([]byte("hello"), eris.Secret{}, eris.BlockSize1KiB)
 	reference := encoded.Root.Reference
-	block, _ := encodedBlocks.GetBlock(reference, 0)
+	block, _ := encodedBlocks.GetBlock(context.Background(), reference, 0)
 
-	_, _ = client.PutBlock(block, 0, reference)
-	received, _ := client.GetBlock(reference, 0)
+	_, _ = client.PutBlock(context.Background(), block, 0, reference)
+	received, _ := client.GetBlock(context.Background(), reference, 0)
 	fmt.Println(len(received))
 	// Output: 1024
 }

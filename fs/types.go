@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"errors"
 	"io"
 	stdfs "io/fs"
@@ -49,17 +50,17 @@ var (
 )
 
 // FileSystem is the high-level, read-only ERIS-FS interface. It includes the
-// standard library file-system operations, link metadata, and typed access to
+// file-system operations with context, link metadata, and typed access to
 // regular files that support seeking and random-access reads.
 type FileSystem interface {
-	stdfs.FS
-	stdfs.ReadDirFS
-	stdfs.ReadLinkFS
-	stdfs.StatFS
-	stdfs.SubFS
-
-	Lstat(name string) (stdfs.FileInfo, error)
-	OpenFile(name string) (ReadSeekCloser, error)
+	Open(ctx context.Context, name string) (stdfs.File, error)
+	OpenFile(ctx context.Context, name string) (ReadSeekCloser, error)
+	ReadFile(ctx context.Context, name string) ([]byte, error)
+	ReadDir(ctx context.Context, name string) ([]stdfs.DirEntry, error)
+	Stat(ctx context.Context, name string) (stdfs.FileInfo, error)
+	Lstat(ctx context.Context, name string) (stdfs.FileInfo, error)
+	ReadLink(ctx context.Context, name string) (string, error)
+	Sub(ctx context.Context, name string) (*FS, error)
 }
 
 // Entry describes one item in an Index. Path contains separate path
