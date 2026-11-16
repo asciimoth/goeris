@@ -15,7 +15,6 @@ import (
 
 	"github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/internal/cborwire"
-	"github.com/asciimoth/goeris/internal/erisreader"
 )
 
 func TestIndexCanonicalRoundTrip(t *testing.T) {
@@ -231,38 +230,6 @@ func TestCBORRejectsMalformedEntries(t *testing.T) {
 	}
 }
 
-func TestEncodeContentMatchesCoreEncoder(t *testing.T) {
-	t.Parallel()
-	for _, size := range []eris.BlockSize{eris.BlockSize1KiB, eris.BlockSize32KiB} {
-		for _, length := range []int{0, 1, int(size), int(size) + 17, int(size)*17 + 3} {
-			content := deterministicBytes(length)
-			wantCap, wantBlocks, err := eris.Encode(content, eris.Secret{1, 2, 3}, size)
-			if err != nil {
-				t.Fatal(err)
-			}
-			blocks := make(eris.BlockSet)
-			gotCap, err := EncodeContent(bytes.NewReader(content), eris.Secret{1, 2, 3}, size, blocks)
-			if err != nil || gotCap != wantCap || !reflect.DeepEqual(blocks, wantBlocks) {
-				t.Fatalf("size %d length %d mismatch: %v", size, length, err)
-			}
-		}
-	}
-}
-
-func TestIncrementalEncoderMatchesMultiLevelCoreTree(t *testing.T) {
-	t.Parallel()
-	content := deterministicBytes(int(eris.BlockSize1KiB)*257 + 3)
-	wantCap, wantBlocks, err := eris.Encode(content, eris.Secret{9}, eris.BlockSize1KiB)
-	if err != nil {
-		t.Fatal(err)
-	}
-	blocks := make(eris.BlockSet)
-	gotCap, err := EncodeContent(bytes.NewReader(content), eris.Secret{9}, eris.BlockSize1KiB, blocks)
-	if err != nil || gotCap != wantCap || !reflect.DeepEqual(blocks, wantBlocks) {
-		t.Fatalf("multi-level encoding mismatch: %v", err)
-	}
-}
-
 func TestIndexDecodeLimits(t *testing.T) {
 	t.Parallel()
 	index := Index{Entries: []Entry{{Path: []string{"link"}, Type: Symlink, Target: "target"}}}
@@ -437,7 +404,7 @@ func TestBuilderBlockSizeBoundary(t *testing.T) {
 		if entry.Capability.BlockSize != eris.ChooseBlockSize(length) {
 			t.Errorf("length %d block size = %d", length, entry.Capability.BlockSize)
 		}
-		reader, err := erisreader.NewReader(entry.Capability, blocks)
+		reader, err := eris.NewReader(entry.Capability, blocks)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -670,60 +637,9 @@ func (sink errorSink) PutBlock([]byte, eris.TTL, ...eris.Reference) (eris.Refere
 	return eris.Reference{}, sink.err
 }
 
-type countingSink struct {
-	calls  int
-	failAt int
-	err    error
-}
-
-func (sink *countingSink) PutBlock(block []byte, ttl eris.TTL, _ ...eris.Reference) (eris.Reference, error) {
-	sink.calls++
-	if sink.calls == sink.failAt {
-		return eris.Reference{}, sink.err
-	}
-	return eris.ReferenceOf(block)
-}
-
 func TestCodecErrors(t *testing.T) {
 	t.Parallel()
 	sentinel := errors.New("sentinel")
-	if _, err := EncodeContent(nil, eris.Secret{}, eris.BlockSize1KiB, make(eris.BlockSet)); !errors.Is(err, ErrInvalidEntry) {
-		t.Fatalf("nil reader error = %v", err)
-	}
-	if _, err := EncodeContent(bytes.NewReader(nil), eris.Secret{}, 1, make(eris.BlockSet)); !errors.Is(err, eris.ErrInvalidBlockSize) {
-		t.Fatalf("invalid size error = %v", err)
-	}
-	if _, err := EncodeContent(errorReader{sentinel}, eris.Secret{}, eris.BlockSize1KiB, make(eris.BlockSet)); !errors.Is(err, sentinel) {
-		t.Fatalf("reader error = %v", err)
-	}
-	if _, err := EncodeContent(bytes.NewReader(nil), eris.Secret{}, eris.BlockSize1KiB, errorSink{sentinel}); !errors.Is(err, sentinel) {
-		t.Fatalf("sink error = %v", err)
-	}
-	if _, err := EncodeContent(bytes.NewReader(make([]byte, eris.BlockSize1KiB)), eris.Secret{}, eris.BlockSize1KiB, &countingSink{failAt: 2, err: sentinel}); !errors.Is(err, sentinel) {
-		t.Fatalf("second leaf sink error = %v", err)
-	}
-	if _, err := EncodeContent(bytes.NewReader(make([]byte, eris.BlockSize1KiB*2)), eris.Secret{}, eris.BlockSize1KiB, &countingSink{failAt: 4, err: sentinel}); !errors.Is(err, sentinel) {
-		t.Fatalf("parent sink error = %v", err)
-	}
-	if _, err := EncodeContent(bytes.NewReader(make([]byte, eris.BlockSize1KiB*16)), eris.Secret{}, eris.BlockSize1KiB, &countingSink{failAt: 17, err: sentinel}); !errors.Is(err, sentinel) {
-		t.Fatalf("full parent sink error = %v", err)
-	}
-	if _, err := EncodeContent(bytes.NewReader(make([]byte, eris.BlockSize1KiB*15)), eris.Secret{}, eris.BlockSize1KiB, &countingSink{failAt: 17, err: sentinel}); !errors.Is(err, sentinel) {
-		t.Fatalf("final leaf parent sink error = %v", err)
-	}
-	if _, err := putNode(nil, eris.Secret{}, 0, make(eris.BlockSet)); !errors.Is(err, eris.ErrInvalidBlockSize) {
-		t.Fatalf("invalid node error = %v", err)
-	}
-	encoder := treeEncoder{blockSize: eris.BlockSize1KiB, sink: make(eris.BlockSet)}
-	if err := encoder.add(256, eris.Pair{}); !errors.Is(err, ErrInvalidEntry) {
-		t.Fatalf("excessive encoder level error = %v", err)
-	}
-	if _, err := encoder.parent(255); !errors.Is(err, ErrInvalidEntry) {
-		t.Fatalf("excessive parent level error = %v", err)
-	}
-	if _, err := erisreader.NewReader(eris.Capability{}, make(eris.BlockSet)); !errors.Is(err, eris.ErrInvalidCapability) {
-		t.Fatalf("invalid capability error = %v", err)
-	}
 	if _, err := DecodeIndex(eris.Capability{}, make(eris.BlockSet)); err == nil {
 		t.Fatal("invalid index capability accepted")
 	}
@@ -752,6 +668,24 @@ func TestCodecErrors(t *testing.T) {
 	}
 	if _, err := builder.Finish(); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatalf("nil builder Finish error = %v", err)
+	}
+}
+
+func TestEncodeIndexNilSink(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		index Index
+		want  error
+	}{
+		{"valid index", Index{}, ErrInvalidEntry},
+		{"invalid index", Index{Entries: []Entry{{Type: Symlink}}}, ErrInvalidPath},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capability, err := EncodeIndex(test.index, eris.Secret{}, nil)
+			if !errors.Is(err, test.want) || capability != (eris.Capability{}) {
+				t.Fatalf("EncodeIndex with nil sink = %v, %v; want zero capability, %v", capability, err, test.want)
+			}
+		})
 	}
 }
 
@@ -797,7 +731,7 @@ func TestFileSystemErrorsAndMetadata(t *testing.T) {
 	if _, err := OpenFS(eris.Capability{}, blocks); err == nil {
 		t.Fatal("OpenFS accepted invalid capability")
 	}
-	invalidIndexCap, _ := EncodeContent(bytes.NewBufferString("not an index"), eris.Secret{}, eris.BlockSize1KiB, blocks)
+	invalidIndexCap, _ := eris.EncodeContent(bytes.NewBufferString("not an index"), eris.Secret{}, eris.BlockSize1KiB, blocks)
 	if _, err := OpenFS(invalidIndexCap, blocks); !errors.Is(err, ErrInvalidIndex) {
 		t.Fatalf("OpenFS invalid index error = %v", err)
 	}

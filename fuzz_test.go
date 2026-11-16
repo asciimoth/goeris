@@ -3,6 +3,7 @@ package eris
 import (
 	"bytes"
 	"errors"
+	"maps"
 	"testing"
 )
 
@@ -191,6 +192,9 @@ func FuzzNodeCrypto(f *testing.F) {
 func FuzzEncodeDecode(f *testing.F) {
 	f.Add([]byte(""), make([]byte, 32), uint8(0))
 	f.Add([]byte("content"), []byte{1}, uint8(1))
+	for _, length := range []int{1023, 1024, 16383, 16384, 32768} {
+		f.Add(deterministicBytes(length), []byte{1, 2, 3}, uint8(36))
+	}
 	f.Fuzz(func(t *testing.T, content, secretBytes []byte, sizeCode uint8) {
 		if len(content) > 1<<20 {
 			t.Skip()
@@ -208,6 +212,24 @@ func FuzzEncodeDecode(f *testing.F) {
 		decoded, err := Decode(capability, blocks)
 		if err != nil || !bytes.Equal(decoded, content) {
 			t.Fatalf("encoding round trip failed: %v", err)
+		}
+		// The streaming APIs must produce the same complete tree even when
+		// input arrives in small chunks and the final read includes EOF.
+		input := smallChunkReader{Reader: &terminalEOFReader{data: content}, max: int(sizeCode) + 1}
+		streamed := make(BlockSet)
+		streamCap, err := EncodeContent(input, secret, size, streamed)
+		if err != nil || streamCap != capability || !maps.EqualFunc(streamed, blocks, bytes.Equal) {
+			t.Fatalf("streaming encoding differs: %v", err)
+		}
+		capability, blocks, err = EncodeRecommended(content, secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input.Reader = &terminalEOFReader{data: content}
+		streamed = make(BlockSet)
+		streamCap, err = EncodeContentRecommended(input, secret, streamed)
+		if err != nil || streamCap != capability || !maps.EqualFunc(streamed, blocks, bytes.Equal) {
+			t.Fatalf("recommended streaming encoding differs: %v", err)
 		}
 	})
 }

@@ -5,7 +5,7 @@ package eris
 // can follow the pairs, but no nonzero slot can follow an empty slot.
 // It returns ErrInvalidNode if the node is not valid.
 func ParseInternalNode(node []byte) ([]Pair, error) {
-	if !validBlockLength(len(node)) {
+	if !ValidBlockLength(len(node)) {
 		return nil, ErrInvalidNode
 	}
 	pairs := make([]Pair, 0, len(node)/PairSize)

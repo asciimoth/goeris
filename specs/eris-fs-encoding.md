@@ -75,7 +75,7 @@ Here `eris` is `github.com/asciimoth/goeris` and `erisfs` is
 `github.com/asciimoth/goeris/fs`. Another implementation must select the same
 settings; its defaults or a claim of ERIS-FS compliance are not sufficient. File
 insertion order does not matter. The builder sorts the encoded map keys. With
-the low-level API, pass the required block size to `EncodeContent`, set
+the low-level API, pass the required block size to `eris.EncodeContent`, set
 `Entry.Size` and `Entry.Type`, leave `Entry.Compression` as `Uncompressed`, and
 use `EncodeIndex`.
 
@@ -159,8 +159,8 @@ does not normalize Unicode names or symlink targets.
 The builder uses 1 KiB ERIS blocks for stored content shorter than 16384 bytes,
 and 32 KiB blocks for other content. The same rule applies to index bytes. For
 compressed files, the stored content is the Lzip stream; the index still records
-the length before compression. Explicit `EncodeContent` calls use the block size
-supplied by the caller.
+the length before compression. Explicit `eris.EncodeContent` calls use the block
+size supplied by the caller.
 
 The convergence secret is supplied by the caller. No random secret, timestamp,
 host name, file name, or operating system field is added during encoding. Nested
@@ -239,8 +239,8 @@ encoder algorithm, or use exactly the same precompressed bytes.
 
 - `TestERISOfficialVectors` uses all 13 positive and 12 negative vectors linked
   by ERIS 1.0.0 section 2.8.6. It checks exact capabilities and block bytes with
-  both the base encoder and the streaming FS encoder. Both readers must reject
-  the negative vectors.
+  both the in-memory encoder and the streaming ERIS encoder. Both readers must
+  reject the negative vectors.
 - `TestV2WireVectors` and `TestV2CanonicalMapVector` use hand-written CBOR bytes
   derived from the local CDDL. They cover every entry type, the compression tag,
   symlink components, and bytewise key order. These are library fixtures, not

@@ -118,7 +118,7 @@ func (handler Handler) get(ctx context.Context, request *protocol.Message) *prot
 	if err != nil {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
-	if size, present, sizeErr := oneUintOption(request, protocol.OptionSize1); sizeErr != nil || present && size != uint32(eris.BlockSize1KiB) && size != uint32(eris.BlockSize32KiB) {
+	if size, present, sizeErr := oneUintOption(request, protocol.OptionSize1); sizeErr != nil || present && !eris.BlockSize(size).Valid() {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
 	block, err := handler.getBlock(ctx, ref, requestTTL(request))
@@ -168,7 +168,7 @@ func (handler Handler) put(ctx context.Context, request *protocol.Message) *prot
 	if size, present, err := oneUintOption(request, protocol.OptionSize1); err != nil || present && uint64(size) != uint64(len(request.Payload)) {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
-	if !validBlockLength(len(request.Payload)) {
+	if !eris.ValidBlockLength(len(request.Payload)) {
 		return &protocol.Message{Code: protocol.BadRequest}
 	}
 	if !handler.writable() {

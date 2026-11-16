@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/asciimoth/goeris"
-	"github.com/asciimoth/goeris/internal/erisreader"
 )
 
 type smallChunkReader struct {
@@ -80,7 +79,7 @@ func TestCompressedFileRoundTripAndDeterminism(t *testing.T) {
 			if fileEntry.Compression != Lzip || fileEntry.Size != int64(len(content)) {
 				t.Fatalf("compressed metadata = %#v", index)
 			}
-			raw, err := erisreader.NewReader(fileEntry.Capability, blocks)
+			raw, err := eris.NewReader(fileEntry.Capability, blocks)
 			if err != nil {
 				t.Fatal(err)
 			}

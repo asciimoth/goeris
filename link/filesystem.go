@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/asciimoth/goeris"
-	"github.com/asciimoth/goeris/internal/erisreader"
 )
 
 // DefaultMaxLinkSize limits each encoded link file to 1 MiB.
@@ -21,7 +20,7 @@ var (
 	// ErrLinkTooLarge means that an encoded link exceeds the configured limit.
 	ErrLinkTooLarge = errors.New("eris link: link file too large")
 	// ErrSizeMismatch means that content does not match the size in its link.
-	ErrSizeMismatch = erisreader.ErrSizeMismatch
+	ErrSizeMismatch = eris.ErrSizeMismatch
 )
 
 // FS wraps a file system and resolves ERIS link files through a block source.
@@ -171,7 +170,7 @@ func (fileSystem *FS) open(file fs.File, name string) (fs.File, error) {
 	if link.size > math.MaxInt64 {
 		return nil, ErrInvalidLink
 	}
-	reader, err := erisreader.NewReaderWithSize(link.capability, fileSystem.source, int64(link.size))
+	reader, err := eris.NewReaderWithSize(link.capability, fileSystem.source, int64(link.size))
 	if err != nil {
 		return nil, err
 	}
@@ -409,7 +408,7 @@ type resolvedInfo struct {
 func (info resolvedInfo) Size() int64 { return info.size }
 
 type resolvedFile struct {
-	reader *erisreader.Reader
+	reader *eris.Reader
 	info   resolvedInfo
 	name   string
 }

@@ -77,12 +77,12 @@ func (decoder *decoder) element() (Element, error) {
 		if err != nil {
 			return Element{}, err
 		}
-		switch len(value) {
-		case len(eris.Reference{}):
+		switch {
+		case len(value) == len(eris.Reference{}):
 			var reference eris.Reference
 			copy(reference[:], value)
 			return NewReference(reference), nil
-		case int(eris.BlockSize1KiB), int(eris.BlockSize32KiB):
+		case eris.ValidBlockLength(len(value)):
 			return NewBlock(value)
 		default:
 			return Element{}, ErrInvalidElement

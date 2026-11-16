@@ -12,8 +12,9 @@ The `eris` package implements:
 - BLAKE2b-256 references and ChaCha20 node encryption;
 - read capability binary, URN, and CBOR encodings;
 - deterministic encoding to an in-memory block set;
-- verified decoding from an in-memory block set, with abstract block storage
-  interfaces; and
+- streaming encoding from an `io.Reader` directly to a block store;
+- verified decoding from an in-memory block set or an abstract block source,
+  with sequential and random access; and
 - combined block storage with ordered fallback and optional error reporting.
 
 The `volume` package implements [local block volumes](specs/eris-volume.md). It
@@ -50,7 +51,7 @@ The `fs` package implements [ERIS-FS version 2](specs/eer/eris-fs/index.md),
 with version 1 read support:
 
 - canonical deterministic CBOR index encoding and strict decoding;
-- low-level index codecs and streaming content encoding;
+- low-level index codecs;
 - regular, executable, symbolic-link, and nested-image entries with file
   lengths;
 - host-independent builders that accept `io.Reader` values and abstract block
@@ -190,9 +191,49 @@ The wrapper follows the base FS policy for symbolic links. Network timeouts and
 cancellation must be handled by the supplied block source.
 
 The core `eris` package provides storage interfaces, an in-memory block set, and
-a combined store. The `volume` package supplies local persistent storage.
-Applications supply other storage backends, file or stream I/O, networking, and
+a combined store. It also provides raw content encoding and ERIS tree reading.
+The `volume` package supplies local persistent storage. Applications supply
+other storage backends, input readers, output writers, networking, and
 random-secret generation. ERIS extensions use separate packages.
+
+To store a blob from any `io.Reader`, use `EncodeContentRecommended`. It reads
+the source once, selects the recommended block size with at most 16 KiB of
+lookahead, writes the complete encrypted tree to an `eris.BlockSink`, and
+returns the read capability. This operation creates no file system index.
+
+```go
+capability, err := eris.EncodeContentRecommended(input, secret, store)
+if err != nil {
+	return err
+}
+fmt.Println(capability.String()) // urn:eris:...
+
+reader, err := eris.NewReader(capability, store)
+if err != nil {
+	return err
+}
+defer reader.Close()
+_, err = io.Copy(output, reader)
+```
+
+Use `EncodeContent(input, secret, blockSize, sink)` to select the block size
+explicitly. Both encoders write with `eris.NoTTL`. A read or write error can
+leave blocks in the sink; save the capability only after a successful return.
+
+`NewReader` scans internal nodes and the final leaf to determine the decoded
+size. `NewReaderWithLimit(capability, source, maxBytes, ttl)` applies a size
+limit and passes `ttl` to every block read. A negative limit disables the limit.
+Use `NewReaderWithSize(capability, source, size)` when the decoded size is
+known; it opens without block I/O and checks tree shape and padding as content
+is read. Readers support `Read`, `ReadAt`, `Seek`, and `Close`. Closing a reader
+does not close its block source.
+
+Raw content APIs now belong to the root package. Replace `fs.EncodeContent` with
+`eris.EncodeContent`. The shared reader has moved from `internal/erisreader` to
+`eris`; its size-limit error is `eris.ErrDecodedTooLarge`. The root streaming
+encoders return `eris.ErrInvalidInput` for a nil input reader or block sink.
+
+For content already held in memory, the byte-slice API is also available:
 
 ```go
 secret := eris.Secret{} // The null convergence secret.

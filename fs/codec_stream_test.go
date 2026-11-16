@@ -39,16 +39,6 @@ func (reader *terminalEOFReader) Read(p []byte) (int, error) {
 func TestEncodingStopsAtEOFWithData(t *testing.T) {
 	for _, size := range []int{0, 1023, 1024, 16383, 16384, 32768, 65536} {
 		content := autoRandomBytes(size)
-		for _, blockSize := range []eris.BlockSize{eris.BlockSize1KiB, eris.BlockSize32KiB} {
-			want, _, err := eris.Encode(content, eris.Secret{}, blockSize)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := EncodeContent(&terminalEOFReader{data: content}, eris.Secret{}, blockSize, make(eris.BlockSet))
-			if err != nil || got != want {
-				t.Errorf("size %d, block size %d: %v", size, blockSize, err)
-			}
-		}
 		for _, mode := range []string{"plain", "compressed", "auto", "auto-compressed"} {
 			t.Run(fmt.Sprintf("%s/%d", mode, size), func(t *testing.T) {
 				content := content
@@ -89,45 +79,6 @@ func (reader *intermittentReader) Read(p []byte) (int, error) {
 	}
 	reader.empty = 99
 	return reader.reader.Read(p[:min(len(p), 1)])
-}
-
-func TestEncodeContentReadTermination(t *testing.T) {
-	for _, size := range []int{0, 1, 1023, 1024, 1025, 16384, 32768} {
-		content := autoRandomBytes(size)
-		want, _, err := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
-		if err != nil {
-			t.Fatal(err)
-		}
-		source := &finalErrorReader{data: content, err: io.EOF}
-		got, err := EncodeContent(source, eris.Secret{}, eris.BlockSize1KiB, make(eris.BlockSet))
-		if err != nil || got != want {
-			t.Fatalf("EOF with %d bytes changed encoding: %v", size, err)
-		}
-		for _, cause := range []error{io.ErrUnexpectedEOF, errors.New("read error"), errors.Join(io.EOF, io.ErrUnexpectedEOF), fmt.Errorf("source failed: %w", io.EOF)} {
-			source = &finalErrorReader{data: content, err: cause}
-			if _, err := EncodeContent(source, eris.Secret{}, eris.BlockSize1KiB, make(eris.BlockSet)); !errors.Is(err, cause) {
-				t.Fatalf("%d bytes with %v: %v", size, cause, err)
-			}
-			builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
-			source = &finalErrorReader{data: content, err: cause}
-			if err := builder.AddFile("file", source, false); !errors.Is(err, cause) {
-				t.Fatalf("builder: %v", err)
-			}
-			if len(builder.Index().Entries) != 0 {
-				t.Fatal("read error added an entry")
-			}
-		}
-	}
-	if _, err := EncodeContent(noProgressReader{}, eris.Secret{}, eris.BlockSize1KiB, make(eris.BlockSet)); !errors.Is(err, io.ErrNoProgress) {
-		t.Fatalf("no progress: %v", err)
-	}
-	content := []byte("temporary empty reads")
-	source := &intermittentReader{reader: bytes.NewReader(content), empty: 99}
-	cap, err := EncodeContent(source, eris.Secret{}, eris.BlockSize1KiB, make(eris.BlockSet))
-	want, _, encodeErr := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
-	if err != nil || encodeErr != nil || cap != want {
-		t.Fatalf("empty reads changed encoding: %v", err)
-	}
 }
 
 func TestBuilderPreservesEOFErrors(t *testing.T) {
@@ -199,5 +150,21 @@ func TestCompressionToleratesTemporaryEmptyReads(t *testing.T) {
 	input := &intermittentReader{reader: bytes.NewReader(content), empty: 99}
 	if _, err := writeLzip(&got, input); err != nil || !bytes.Equal(got.Bytes(), want.Bytes()) {
 		t.Fatalf("temporary empty reads changed compression: %v", err)
+	}
+}
+
+func TestBuilderReadErrors(t *testing.T) {
+	for _, size := range []int{0, 1, 1023, 1024, 1025, 16384, 32768} {
+		content := autoRandomBytes(size)
+		for _, cause := range []error{io.ErrUnexpectedEOF, errors.New("read error"), errors.Join(io.EOF, io.ErrUnexpectedEOF), fmt.Errorf("source failed: %w", io.EOF)} {
+			builder := NewBuilder(make(eris.BlockSet), eris.Secret{})
+			source := &finalErrorReader{data: content, err: cause}
+			if err := builder.AddFile("file", source, false); !errors.Is(err, cause) {
+				t.Fatalf("builder: %v", err)
+			}
+			if len(builder.Index().Entries) != 0 {
+				t.Fatal("read error added an entry")
+			}
+		}
 	}
 }

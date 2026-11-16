@@ -41,6 +41,14 @@ var (
 	// ErrDecodedTooLarge means that content exceeds the decoded limit or the
 	// maximum size supported by the current system.
 	ErrDecodedTooLarge = errors.New("eris: decoded content is too large")
+	// ErrInvalidInput means that an encoder received a nil reader or block sink.
+	ErrInvalidInput = errors.New("eris: invalid encoding input")
+	// ErrInvalidSize means that a declared decoded size is negative.
+	ErrInvalidSize = errors.New("eris: invalid decoded size")
+	// ErrInvalidTree means that a tree exceeds the supported depth or decoded size.
+	ErrInvalidTree = errors.New("eris: invalid tree")
+	// ErrSizeMismatch means that content does not match its declared decoded size.
+	ErrSizeMismatch = errors.New("eris: decoded size mismatch")
 )
 
 // BlockSize is one of the two block sizes defined by ERIS.
@@ -60,6 +68,12 @@ const (
 // Valid reports whether s is an ERIS block size.
 func (s BlockSize) Valid() bool {
 	return s == BlockSize1KiB || s == BlockSize32KiB
+}
+
+// ValidBlockLength reports whether length is an ERIS block length in bytes.
+// It checks the full int value without truncating it to BlockSize.
+func ValidBlockLength(length int) bool {
+	return length == int(BlockSize1KiB) || length == int(BlockSize32KiB)
 }
 
 // Arity returns the maximum number of pairs in an internal node.

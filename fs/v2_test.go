@@ -38,7 +38,7 @@ func storeV1Index(t testing.TB, index Index, blocks eris.BlockSet) eris.Capabili
 			data = appendBytes(data, cap)
 		}
 	}
-	cap, err := EncodeContent(bytes.NewReader(data), eris.Secret{}, eris.BlockSize1KiB, blocks)
+	cap, err := eris.EncodeContent(bytes.NewReader(data), eris.Secret{}, eris.BlockSize1KiB, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestV1FilesAndMixedNestedImages(t *testing.T) {
 	for _, kind := range []EntryType{Regular, Executable} {
 		blocks := make(eris.BlockSet)
 		content := bytes.Repeat([]byte("old file\n"), 3000)
-		capability, err := EncodeContent(bytes.NewReader(content), eris.Secret{}, eris.BlockSize1KiB, blocks)
+		capability, err := eris.EncodeContent(bytes.NewReader(content), eris.Secret{}, eris.BlockSize1KiB, blocks)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -301,19 +301,12 @@ func TestV2MetadataWithoutContent(t *testing.T) {
 
 func TestV2AdditionalErrorPaths(t *testing.T) {
 	sentinel := errors.New("storage failed")
-	if _, err := EncodeContent(bytes.NewReader(make([]byte, 1024)), eris.Secret{}, eris.BlockSize1KiB, errorSink{sentinel}); !errors.Is(err, sentinel) {
-		t.Fatal(err)
-	}
 	builder := NewBuilder(errorSink{sentinel}, eris.Secret{})
 	if err := builder.AddFile("file", strings.NewReader("data"), false); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
 	if len(builder.Index().Entries) != 0 {
 		t.Fatal("failed write added a file")
-	}
-	// Completing the last partial subtree can fill and flush its parent.
-	if _, err := EncodeContent(bytes.NewReader(make([]byte, 240*1024)), eris.Secret{}, eris.BlockSize1KiB, &countingSink{failAt: 258, err: sentinel}); !errors.Is(err, sentinel) {
-		t.Fatalf("final parent: %v", err)
 	}
 	for _, wire := range []string{
 		"da657269748202a18161668200", // v2 regular file with only two fields

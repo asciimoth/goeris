@@ -10,7 +10,7 @@ import (
 	stdfs "io/fs"
 	"sync"
 
-	"github.com/asciimoth/goeris/internal/erisreader"
+	"github.com/asciimoth/goeris"
 	"github.com/ulikunitz/xz/lzma"
 )
 
@@ -28,7 +28,7 @@ const MaxLzipDictionarySize = 64 << 20
 type lzipFile struct {
 	mu         sync.Mutex
 	node       *node
-	raw        *erisreader.Reader
+	raw        *eris.Reader
 	input      countReader
 	decoder    *lzma.Reader
 	start      int64
@@ -40,7 +40,7 @@ type lzipFile struct {
 }
 
 func openLzipFile(item *node) (*lzipFile, error) {
-	raw, err := erisreader.NewReader(item.capability, item.source)
+	raw, err := eris.NewReader(item.capability, item.source)
 	if err != nil {
 		return nil, err
 	}

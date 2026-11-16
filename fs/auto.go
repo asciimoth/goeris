@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+
+	"github.com/asciimoth/goeris/internal/streamio"
 )
 
 const (
@@ -55,7 +57,7 @@ func (builder *Builder) AddAutoFile(path string, content io.Reader, executable b
 		return err
 	}
 	prefix := make([]byte, AutoCompressionSampleSize)
-	n, err := readFullContent(content, prefix)
+	n, err := streamio.ReadFull(content, prefix)
 	if err != nil && err != io.EOF {
 		return err
 	}

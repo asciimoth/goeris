@@ -5,8 +5,11 @@
 //
 // The package provides deterministic encoding and decoding, storage interfaces,
 // an in-memory BlockSet, and a CombinedBlockStore that tries caller-supplied
-// stores in order. Applications supply persistent storage, network transports,
-// content I/O, and secret generation.
+// stores in order. EncodeContent and EncodeContentRecommended stream content
+// from an io.Reader to a BlockSink and return its read capability. NewReader
+// decodes content from a BlockSource with sequential and random access.
+// Applications supply persistent storage, network transports, content I/O,
+// and secret generation.
 //
 // [ERIS 1.0.0 specification]: https://github.com/asciimoth/goeris/blob/master/specs/eris-v1.0.0.html
 package eris

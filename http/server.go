@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
-	"github.com/asciimoth/goeris/internal/erisreader"
 	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
@@ -96,9 +95,9 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 	}
 	ctx, cancel := context.WithCancel(request.Context())
 	defer cancel()
-	reader, err := erisreader.NewReaderWithLimit(capability, requestBlockSource{ctx: ctx, source: handler.Blocks}, limit, ttl)
+	reader, err := eris.NewReaderWithLimit(capability, requestBlockSource{ctx: ctx, source: handler.Blocks}, limit, ttl)
 	if err != nil {
-		if errors.Is(err, erisreader.ErrTooLarge) {
+		if errors.Is(err, eris.ErrDecodedTooLarge) {
 			writer.WriteHeader(nethttp.StatusRequestEntityTooLarge)
 			return
 		}

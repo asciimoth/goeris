@@ -11,7 +11,7 @@ import (
 // ReferenceOf computes the reference for an encrypted ERIS block.
 func ReferenceOf(block []byte) (Reference, error) {
 	var ref Reference
-	if !validBlockLength(len(block)) {
+	if !ValidBlockLength(len(block)) {
 		return ref, ErrInvalidBlockSize
 	}
 	digest := blake2b.Sum256(block)
@@ -46,7 +46,7 @@ func EncryptNode(node []byte, secret Secret, level Level) ([]byte, Pair, error) 
 // that stores the block computes its reference.
 func EncryptNodeForStorage(node []byte, secret Secret, level Level) ([]byte, Key, error) {
 	var key Key
-	if !validBlockLength(len(node)) {
+	if !ValidBlockLength(len(node)) {
 		return nil, Key{}, ErrInvalidBlockSize
 	}
 
@@ -73,7 +73,7 @@ func DecryptNode(block []byte, pair Pair, level Level) ([]byte, error) {
 // DecryptNodeFromSource decrypts a block returned by a trusted BlockSource.
 // It checks the block size but does not compute its reference again.
 func DecryptNodeFromSource(block []byte, key Key, level Level) ([]byte, error) {
-	if !validBlockLength(len(block)) {
+	if !ValidBlockLength(len(block)) {
 		return nil, ErrInvalidBlockSize
 	}
 	node := make([]byte, len(block))
@@ -94,8 +94,4 @@ func xorNode(dst, src []byte, key Key, level Level) {
 	nonce[0] = byte(level)
 	cipher, _ := chacha20.NewUnauthenticatedCipher(key[:], nonce[:])
 	cipher.XORKeyStream(dst, src)
-}
-
-func validBlockLength(length int) bool {
-	return length == int(BlockSize1KiB) || length == int(BlockSize32KiB)
 }

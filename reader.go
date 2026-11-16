@@ -1,54 +1,39 @@
-// Package erisreader provides a shared random-access reader for ERIS trees.
-package erisreader
+package eris
 
 import (
 	"crypto/subtle"
-	"errors"
 	"io"
 	stdfs "io/fs"
 	"math"
 	"sync"
-
-	"github.com/asciimoth/goeris"
-	"golang.org/x/crypto/blake2b"
 )
-
-var (
-	ErrInvalidSize  = errors.New("eris reader: invalid decoded size")
-	ErrInvalidTree  = errors.New("eris reader: invalid tree")
-	ErrSizeMismatch = errors.New("eris reader: decoded size mismatch")
-	ErrTooLarge     = errors.New("eris reader: decoded content is too large")
-)
-
-type nodeID struct {
-	pair  eris.Pair
-	level eris.Level
-}
 
 type treeSummary struct {
 	leaves int64
-	last   eris.Pair
+	last   Pair
 }
 
 // Reader decodes one ERIS byte sequence and supports random access. Operations
 // on one reader are safe for concurrent use. At most 64 internal nodes and the
 // most recent leaf are cached. Use NewReaderWithSize to avoid scanning the tree
-// on open.
+// on open. Create a Reader with one of the NewReader functions; its zero value
+// is not ready for use. The source must verify block references as required by
+// BlockSource.
 type Reader struct {
 	mu          sync.Mutex
-	source      eris.BlockSource
-	ttl         eris.TTL
-	capability  eris.Capability
+	source      BlockSource
+	ttl         TTL
+	capability  Capability
 	size        int64
 	position    int64
 	leaves      int64
 	maxSize     int64
-	cache       map[nodeID][]eris.Pair
-	summaries   map[nodeID]treeSummary
+	cache       map[decodeNodeID][]Pair
+	summaries   map[decodeNodeID]treeSummary
 	closed      bool
 	sized       bool
 	lastChecked bool
-	leafID      eris.Pair
+	leafID      Pair
 	leafData    []byte
 }
 
@@ -56,26 +41,27 @@ type Reader struct {
 // scans internal nodes and the final leaf to obtain the decoded length and
 // check the tree shape. The scan keeps one temporary summary per distinct
 // internal node. Other leaf blocks are fetched when read. Use
-// NewReaderWithSize when a v2 index already supplies the decoded length.
-func NewReader(capability eris.Capability, source eris.BlockSource) (*Reader, error) {
-	return NewReaderWithLimit(capability, source, -1, eris.NoTTL)
+// NewReaderWithSize when the decoded length is already known. Reads use NoTTL.
+func NewReader(capability Capability, source BlockSource) (*Reader, error) {
+	return NewReaderWithLimit(capability, source, -1, NoTTL)
 }
 
 // NewReaderWithSize opens content with a known decoded size, without block I/O.
 // It checks tree shape on each visited path and padding when the end is read.
-// Unvisited blocks are not checked. Opening and Stat do not validate content.
-// This is the reader used for uncompressed v2 files. Its cache holds at most
-// 64 internal nodes and one leaf, independent of file size.
-func NewReaderWithSize(capability eris.Capability, source eris.BlockSource, size int64) (*Reader, error) {
+// Unvisited blocks are not checked. Opening and Size do not validate content.
+// Its cache holds at most 64 internal nodes and one leaf, independent of content
+// size. Reads use NoTTL. A negative size returns ErrInvalidSize; content that
+// does not match size returns ErrSizeMismatch when the mismatch is detected.
+func NewReaderWithSize(capability Capability, source BlockSource, size int64) (*Reader, error) {
 	if source == nil || capability.Validate() != nil {
-		return nil, eris.ErrInvalidCapability
+		return nil, ErrInvalidCapability
 	}
 	if size < 0 {
 		return nil, ErrInvalidSize
 	}
 	leaves := size/int64(capability.BlockSize) + 1
-	level := eris.Level(0)
-	for subtreeCapacity(capability.BlockSize, level) < leaves {
+	level := Level(0)
+	for subtreeLeafCapacity(capability.BlockSize, level) < leaves {
 		level++
 	}
 	if level != capability.Level {
@@ -83,19 +69,20 @@ func NewReaderWithSize(capability eris.Capability, source eris.BlockSource, size
 	}
 	return &Reader{
 		source: source, capability: capability, size: size, leaves: leaves,
-		maxSize: -1, sized: true, cache: make(map[nodeID][]eris.Pair),
+		maxSize: -1, sized: true, cache: make(map[decodeNodeID][]Pair),
 	}, nil
 }
 
 // NewReaderWithLimit scans the tree and rejects decoded content above maxSize.
 // A negative maxSize disables the size limit. Every block read uses ttl unchanged.
-func NewReaderWithLimit(capability eris.Capability, source eris.BlockSource, maxSize int64, ttl eris.TTL) (*Reader, error) {
+// Content above the limit returns ErrDecodedTooLarge.
+func NewReaderWithLimit(capability Capability, source BlockSource, maxSize int64, ttl TTL) (*Reader, error) {
 	if source == nil || capability.Validate() != nil {
-		return nil, eris.ErrInvalidCapability
+		return nil, ErrInvalidCapability
 	}
 	reader := &Reader{
 		source: source, capability: capability, maxSize: maxSize, ttl: ttl,
-		cache: make(map[nodeID][]eris.Pair), summaries: make(map[nodeID]treeSummary),
+		cache: make(map[decodeNodeID][]Pair), summaries: make(map[decodeNodeID]treeSummary),
 	}
 	leaves, last, err := reader.inspect(capability.Root, capability.Level, true)
 	if err != nil {
@@ -108,7 +95,7 @@ func NewReaderWithLimit(capability eris.Capability, source eris.BlockSource, max
 	if err != nil {
 		return nil, err
 	}
-	lastLength, err := paddedLength(lastNode)
+	lastLength, err := paddedContentLength(lastNode)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +106,7 @@ func NewReaderWithLimit(capability eris.Capability, source eris.BlockSource, max
 	reader.leaves = leaves
 	reader.size = (leaves-1)*blockSize + int64(lastLength)
 	if maxSize >= 0 && reader.size > maxSize {
-		return nil, ErrTooLarge
+		return nil, ErrDecodedTooLarge
 	}
 	return reader, nil
 }
@@ -242,7 +229,8 @@ func (reader *Reader) Seek(offset int64, whence int) (int64, error) {
 	return reader.position, nil
 }
 
-// Close releases references held by the reader. Close is idempotent.
+// Close releases references held by the reader. It does not close the block
+// source. Close is idempotent.
 func (reader *Reader) Close() error {
 	reader.mu.Lock()
 	defer reader.mu.Unlock()
@@ -254,11 +242,11 @@ func (reader *Reader) Close() error {
 	return nil
 }
 
-func (reader *Reader) inspect(pair eris.Pair, level eris.Level, root bool) (int64, eris.Pair, error) {
+func (reader *Reader) inspect(pair Pair, level Level, root bool) (int64, Pair, error) {
 	if level == 0 {
 		return 1, pair, nil
 	}
-	id := nodeID{pair: pair, level: level}
+	id := decodeNodeID{pair: pair, level: level}
 	if !root {
 		if summary, ok := reader.summaries[id]; ok {
 			return summary.leaves, summary.last, nil
@@ -266,28 +254,28 @@ func (reader *Reader) inspect(pair eris.Pair, level eris.Level, root bool) (int6
 	}
 	pairs, err := reader.internal(pair, level, root)
 	if err != nil {
-		return 0, eris.Pair{}, err
+		return 0, Pair{}, err
 	}
 	if root && len(pairs) < 2 {
-		return 0, eris.Pair{}, eris.ErrInvalidNode
+		return 0, Pair{}, ErrInvalidNode
 	}
-	capacity := subtreeCapacity(reader.capability.BlockSize, level-1)
+	capacity := subtreeLeafCapacity(reader.capability.BlockSize, level-1)
 	var total int64
-	var last eris.Pair
+	var last Pair
 	for i, child := range pairs {
 		count, candidate, inspectErr := reader.inspect(child, level-1, false)
 		if inspectErr != nil {
-			return 0, eris.Pair{}, inspectErr
+			return 0, Pair{}, inspectErr
 		}
 		if i < len(pairs)-1 && count != capacity {
-			return 0, eris.Pair{}, eris.ErrInvalidNode
+			return 0, Pair{}, ErrInvalidNode
 		}
 		if count > math.MaxInt64-total {
-			return 0, eris.Pair{}, eris.ErrInvalidNode
+			return 0, Pair{}, ErrInvalidNode
 		}
 		total += count
 		if reader.maxSize >= 0 && total > reader.maxSize/int64(reader.capability.BlockSize)+1 {
-			return 0, eris.Pair{}, ErrTooLarge
+			return 0, Pair{}, ErrDecodedTooLarge
 		}
 		last = candidate
 	}
@@ -297,8 +285,8 @@ func (reader *Reader) inspect(pair eris.Pair, level eris.Level, root bool) (int6
 	return total, last, nil
 }
 
-func (reader *Reader) internal(pair eris.Pair, level eris.Level, root bool) ([]eris.Pair, error) {
-	id := nodeID{pair: pair, level: level}
+func (reader *Reader) internal(pair Pair, level Level, root bool) ([]Pair, error) {
+	id := decodeNodeID{pair: pair, level: level}
 	if pairs, ok := reader.cache[id]; ok {
 		return pairs, nil
 	}
@@ -307,12 +295,12 @@ func (reader *Reader) internal(pair eris.Pair, level eris.Level, root bool) ([]e
 		return nil, err
 	}
 	if root {
-		digest := blake2b.Sum256(node)
+		digest := blake2bSum(node)
 		if subtle.ConstantTimeCompare(digest[:], pair.Key[:]) != 1 {
-			return nil, eris.ErrInvalidRootKey
+			return nil, ErrInvalidRootKey
 		}
 	}
-	pairs, err := eris.ParseInternalNode(node)
+	pairs, err := ParseInternalNode(node)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +312,7 @@ func (reader *Reader) internal(pair eris.Pair, level eris.Level, root bool) ([]e
 	return pairs, nil
 }
 
-func (reader *Reader) leaf(pair eris.Pair) ([]byte, error) {
+func (reader *Reader) leaf(pair Pair) ([]byte, error) {
 	if reader.leafData != nil && reader.leafID == pair {
 		return reader.leafData, nil
 	}
@@ -337,7 +325,7 @@ func (reader *Reader) leaf(pair eris.Pair) ([]byte, error) {
 }
 
 func (reader *Reader) checkPadding(data []byte) error {
-	length, err := paddedLength(data)
+	length, err := paddedContentLength(data)
 	if err != nil {
 		return err
 	}
@@ -363,7 +351,7 @@ func (reader *Reader) checkLast() error {
 	return reader.checkPadding(data)
 }
 
-func (reader *Reader) decrypt(pair eris.Pair, level eris.Level) ([]byte, error) {
+func (reader *Reader) decrypt(pair Pair, level Level) ([]byte, error) {
 	block, err := reader.source.GetBlock(pair.Reference, reader.ttl)
 	if err != nil {
 		// A block fetch is not the end of the decoded content. Keep a source
@@ -374,63 +362,37 @@ func (reader *Reader) decrypt(pair eris.Pair, level eris.Level) ([]byte, error) 
 		return nil, err
 	}
 	if len(block) != int(reader.capability.BlockSize) {
-		return nil, eris.ErrInvalidBlockSize
+		return nil, ErrInvalidBlockSize
 	}
-	return eris.DecryptNodeFromSource(block, pair.Key, level)
+	return DecryptNodeFromSource(block, pair.Key, level)
 }
 
-func (reader *Reader) leafPair(index int64) (eris.Pair, error) {
+func (reader *Reader) leafPair(index int64) (Pair, error) {
 	if index < 0 || index >= reader.leaves {
-		return eris.Pair{}, io.EOF
+		return Pair{}, io.EOF
 	}
 	pair := reader.capability.Root
 	base := int64(0)
 	for level := reader.capability.Level; level > 0; level-- {
 		pairs, err := reader.internal(pair, level, level == reader.capability.Level)
 		if err != nil {
-			return eris.Pair{}, err
+			return Pair{}, err
 		}
-		span := subtreeCapacity(reader.capability.BlockSize, level-1)
+		span := subtreeLeafCapacity(reader.capability.BlockSize, level-1)
 		if reader.sized {
-			count := min(reader.leaves-base, subtreeCapacity(reader.capability.BlockSize, level))
+			count := min(reader.leaves-base, subtreeLeafCapacity(reader.capability.BlockSize, level))
 			want := (count-1)/span + 1
 			if int64(len(pairs)) != want {
-				return eris.Pair{}, ErrSizeMismatch
+				return Pair{}, ErrSizeMismatch
 			}
 		}
 		child := index / span
 		if child >= int64(len(pairs)) {
-			return eris.Pair{}, eris.ErrInvalidNode
+			return Pair{}, ErrInvalidNode
 		}
 		pair = pairs[child]
 		base += child * span
 		index %= span
 	}
 	return pair, nil
-}
-
-func paddedLength(node []byte) (int, error) {
-	for i := len(node) - 1; i >= 0; i-- {
-		switch node[i] {
-		case 0:
-			continue
-		case 0x80:
-			return i, nil
-		default:
-			return 0, eris.ErrInvalidPadding
-		}
-	}
-	return 0, eris.ErrInvalidPadding
-}
-
-func subtreeCapacity(blockSize eris.BlockSize, level eris.Level) int64 {
-	arity, _ := blockSize.Arity()
-	capacity := int64(1)
-	for range level {
-		if capacity > math.MaxInt64/int64(arity) {
-			return math.MaxInt64
-		}
-		capacity *= int64(arity)
-	}
-	return capacity
 }

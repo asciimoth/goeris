@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 
+	"github.com/asciimoth/goeris/internal/streamio"
 	"github.com/ulikunitz/xz/lzma"
 )
 
@@ -39,7 +40,7 @@ func writeLzip(output io.Writer, content io.Reader) (int64, error) {
 	counted := &countReader{reader: io.TeeReader(content, checksum)}
 	var buffer [32 << 10]byte
 	for {
-		n, err := readFullContent(counted, buffer[:])
+		n, err := streamio.ReadFull(counted, buffer[:])
 		if err != nil && err != io.EOF {
 			return 0, err
 		}

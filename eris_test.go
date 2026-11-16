@@ -606,3 +606,22 @@ func cloneBlocks(source BlockSet) BlockSet {
 	}
 	return clone
 }
+
+func TestBlockLengthDoesNotTruncate(t *testing.T) {
+	t.Parallel()
+	for _, size := range []int{1024, 32768} {
+		if !ValidBlockLength(size) {
+			t.Fatalf("valid block length %d rejected", size)
+		}
+		for _, invalid := range []int{size - 1, size + 1} {
+			if ValidBlockLength(invalid) {
+				t.Fatalf("invalid block length %d accepted", invalid)
+			}
+		}
+		// Check the integer boundary without allocating a multi-gigabyte body.
+		large := int64(1<<32) + int64(size)
+		if int64(int(large)) == large && ValidBlockLength(int(large)) {
+			t.Fatalf("block length %d truncated to %d", large, size)
+		}
+	}
+}

@@ -2,7 +2,9 @@ package volume_test
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/volume"
@@ -21,19 +23,19 @@ func Example() {
 	}
 	defer func() { _ = store.Close() }()
 
-	_, blocks, err := eris.Encode([]byte("Hello, ERIS!"), eris.Secret{}, eris.BlockSize1KiB)
+	capability, err := eris.EncodeContentRecommended(strings.NewReader("Hello, ERIS!"), eris.Secret{}, store)
 	if err != nil {
 		panic(err)
 	}
-	for ref, block := range blocks {
-		if _, err := store.PutBlock(block, eris.NoTTL, ref); err != nil {
-			panic(err)
-		}
-		stored, err := store.GetBlock(ref, eris.NoTTL)
-		if err != nil {
-			panic(err)
-		}
-		fmt.Println(len(stored))
+	reader, err := eris.NewReader(capability, store)
+	if err != nil {
+		panic(err)
 	}
-	// Output: 1024
+	defer func() { _ = reader.Close() }()
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(content))
+	// Output: Hello, ERIS!
 }

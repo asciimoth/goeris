@@ -1,12 +1,10 @@
-package erisreader
+package eris
 
 import (
 	"bytes"
 	"errors"
 	"io"
 	"testing"
-
-	"github.com/asciimoth/goeris"
 )
 
 func FuzzReaderRandomAccess(f *testing.F) {
@@ -18,7 +16,7 @@ func FuzzReaderRandomAccess(f *testing.F) {
 		if len(content) > 1<<18 {
 			t.Skip()
 		}
-		capability, blocks, err := eris.Encode(content, eris.Secret{1}, eris.BlockSize1KiB)
+		capability, blocks, err := Encode(content, Secret{1}, BlockSize1KiB)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,40 +61,40 @@ func FuzzTreeShape(f *testing.F) {
 		if len(counts) > 16 {
 			t.Skip()
 		}
-		blocks := make(eris.BlockSet)
-		store := func(node []byte, level eris.Level) eris.Pair {
-			block, pair, err := eris.EncryptNode(node, eris.Secret{}, level)
+		blocks := make(BlockSet)
+		store := func(node []byte, level Level) Pair {
+			block, pair, err := EncryptNode(node, Secret{}, level)
 			if err != nil {
 				t.Fatal(err)
 			}
 			blocks[pair.Reference] = block
 			return pair
 		}
-		putPair := func(node []byte, index int, pair eris.Pair) {
-			copy(node[index*eris.PairSize:], pair.Reference[:])
-			copy(node[index*eris.PairSize+32:], pair.Key[:])
+		putPair := func(node []byte, index int, pair Pair) {
+			copy(node[index*PairSize:], pair.Reference[:])
+			copy(node[index*PairSize+32:], pair.Key[:])
 		}
-		leaf := make([]byte, eris.BlockSize1KiB)
+		leaf := make([]byte, BlockSize1KiB)
 		leaf[0] = 0x80
 		leafPair := store(leaf, 0)
-		root := make([]byte, eris.BlockSize1KiB)
+		root := make([]byte, BlockSize1KiB)
 		valid := len(counts) >= 2
 		leaves := 0
 		for index, value := range counts {
 			count := int(value % 17)
 			valid = valid && count > 0 && (index == len(counts)-1 || count == 16)
 			leaves += count
-			parent := make([]byte, eris.BlockSize1KiB)
+			parent := make([]byte, BlockSize1KiB)
 			for child := range count {
 				putPair(parent, child, leafPair)
 			}
 			putPair(root, index, store(parent, 1))
 		}
-		capability := eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 2, Root: store(root, 2)}
-		limit := int64(limitBlocks%257) * int64(eris.BlockSize1KiB)
-		wantSize := (leaves - 1) * int(eris.BlockSize1KiB)
+		capability := Capability{BlockSize: BlockSize1KiB, Level: 2, Root: store(root, 2)}
+		limit := int64(limitBlocks%257) * int64(BlockSize1KiB)
+		wantSize := (leaves - 1) * int(BlockSize1KiB)
 		// The size-aware reader must reject malformed visited paths too. It
-		// has no index-size limit, so compare before applying that limit.
+		// has no decoded-size limit, so compare before applying that limit.
 		sized, sizedErr := NewReaderWithSize(capability, blocks, int64(wantSize))
 		if sizedErr == nil {
 			_, sizedErr = io.Copy(io.Discard, sized)
@@ -106,8 +104,8 @@ func FuzzTreeShape(f *testing.F) {
 			t.Fatalf("counts %v: sized reader = %v; valid = %t", counts, sizedErr, valid)
 		}
 		valid = valid && int64(wantSize) <= limit
-		decoded, coreErr := eris.DecodeWithLimit(capability, blocks, limit)
-		reader, readerErr := NewReaderWithLimit(capability, blocks, limit, eris.NoTTL)
+		decoded, coreErr := DecodeWithLimit(capability, blocks, limit)
+		reader, readerErr := NewReaderWithLimit(capability, blocks, limit, NoTTL)
 		if (coreErr == nil) != valid || (readerErr == nil) != valid {
 			t.Fatalf("counts %v, limit %d: core = %v, reader = %v; valid = %t", counts, limit, coreErr, readerErr, valid)
 		}

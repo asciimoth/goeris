@@ -1,85 +1,24 @@
 package fs
 
 import (
+	"bytes"
 	"io"
 
 	"github.com/asciimoth/goeris"
-	"github.com/asciimoth/goeris/internal/erisreader"
 )
 
-// EncodeContent reads content, encodes it with ERIS, and writes each encrypted
-// block to sink. It keeps only one content block and a bounded set of pending
-// tree pairs per level. It does not access host I/O.
-func EncodeContent(content io.Reader, secret eris.Secret, blockSize eris.BlockSize, sink eris.BlockSink) (eris.Capability, error) {
-	if !blockSize.Valid() {
-		return eris.Capability{}, eris.ErrInvalidBlockSize
-	}
-	if content == nil || sink == nil {
-		return eris.Capability{}, ErrInvalidEntry
-	}
-	encoder := treeEncoder{secret: secret, blockSize: blockSize, sink: sink}
-	ended := false
-	for {
-		node := make([]byte, int(blockSize))
-		n := 0
-		if !ended {
-			var err error
-			n, err = readFullContent(content, node)
-			if err != nil && err != io.EOF {
-				return eris.Capability{}, err
-			}
-			ended = err == io.EOF
-		}
-		if n < len(node) {
-			node[n] = 0x80
-		}
-		pair, err := putNode(node, secret, 0, sink)
-		if err != nil {
-			return eris.Capability{}, err
-		}
-		if err = encoder.add(0, pair); err != nil {
-			return eris.Capability{}, err
-		}
-		if ended && n < len(node) {
-			return encoder.finish()
-		}
-		// EOF with a full block needs one more block for padding, but must
-		// not cause another read from the source.
-	}
-}
-
-// readFullContent fills a buffer or returns the source's terminal error.
-// Unlike io.ReadFull, EOF and other errors are preserved even when they
-// accompany a full buffer. Thus a source's ErrUnexpectedEOF cannot be mistaken
-// for a valid file ending.
-// Only io.EOF itself is a normal end; wrapped or joined errors must propagate.
-func readFullContent(content io.Reader, buffer []byte) (int, error) {
-	n, empty := 0, 0
-	for n < len(buffer) {
-		count, err := content.Read(buffer[n:])
-		n += count
-		if err != nil {
-			return n, err
-		}
-		if count == 0 {
-			empty++
-			if empty == 100 {
-				return n, io.ErrNoProgress
-			}
-		} else {
-			empty = 0
-		}
-	}
-	return n, nil
-}
-
 // EncodeIndex encodes a canonical ERIS-FS index and writes its ERIS blocks.
+// It validates the index before checking the sink. A nil sink returns
+// ErrInvalidEntry.
 func EncodeIndex(index Index, secret eris.Secret, sink eris.BlockSink) (eris.Capability, error) {
 	data, err := index.MarshalBinary()
 	if err != nil {
 		return eris.Capability{}, err
 	}
-	return EncodeContent(newSliceReader(data), secret, eris.ChooseBlockSize(len(data)), sink)
+	if sink == nil {
+		return eris.Capability{}, ErrInvalidEntry
+	}
+	return eris.EncodeContent(bytes.NewReader(data), secret, eris.ChooseBlockSize(len(data)), sink)
 }
 
 // DecodeIndex reads and parses an ERIS-FS index from source.
@@ -93,115 +32,14 @@ func DecodeIndexWithLimit(capability eris.Capability, source eris.BlockSource, l
 	if limit <= 0 {
 		return Index{}, ErrInvalidLimit
 	}
-	reader, err := erisreader.NewReaderWithLimit(capability, source, limit, eris.NoTTL)
+	reader, err := eris.NewReaderWithLimit(capability, source, limit, eris.NoTTL)
 	if err != nil {
 		return Index{}, err
 	}
+	defer func() { _ = reader.Close() }()
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return Index{}, err
 	}
 	return ParseIndex(data)
-}
-
-func putNode(node []byte, secret eris.Secret, level eris.Level, sink eris.BlockSink) (eris.Pair, error) {
-	block, key, err := eris.EncryptNodeForStorage(node, secret, level)
-	if err != nil {
-		return eris.Pair{}, err
-	}
-	ref, err := sink.PutBlock(block, eris.NoTTL)
-	if err != nil {
-		return eris.Pair{}, err
-	}
-	return eris.Pair{Reference: ref, Key: key}, nil
-}
-
-type treeEncoder struct {
-	secret    eris.Secret
-	blockSize eris.BlockSize
-	sink      eris.BlockSink
-	levels    [][]eris.Pair
-}
-
-func (encoder *treeEncoder) add(level int, pair eris.Pair) error {
-	if level > int(^eris.Level(0)) {
-		return ErrInvalidEntry
-	}
-	for len(encoder.levels) <= level {
-		encoder.levels = append(encoder.levels, nil)
-	}
-	encoder.levels[level] = append(encoder.levels[level], pair)
-	arity, _ := encoder.blockSize.Arity()
-	if len(encoder.levels[level]) < arity {
-		return nil
-	}
-	parent, err := encoder.parent(level)
-	if err != nil {
-		return err
-	}
-	return encoder.add(level+1, parent)
-}
-
-func (encoder *treeEncoder) parent(level int) (eris.Pair, error) {
-	if level >= int(^eris.Level(0)) {
-		return eris.Pair{}, ErrInvalidEntry
-	}
-	node := make([]byte, int(encoder.blockSize))
-	for i, pair := range encoder.levels[level] {
-		offset := i * eris.PairSize
-		copy(node[offset:offset+32], pair.Reference[:])
-		copy(node[offset+32:offset+eris.PairSize], pair.Key[:])
-	}
-	encoder.levels[level] = encoder.levels[level][:0]
-	return putNode(node, encoder.secret, eris.Level(level+1), encoder.sink)
-}
-
-func (encoder *treeEncoder) finish() (eris.Capability, error) {
-	for {
-		count, rootLevel, root := encoder.pending()
-		if count == 1 {
-			return eris.Capability{BlockSize: encoder.blockSize, Level: eris.Level(rootLevel), Root: root}, nil
-		}
-		level := 0
-		for len(encoder.levels[level]) == 0 {
-			level++
-		}
-		parent, err := encoder.parent(level)
-		if err != nil {
-			return eris.Capability{}, err
-		}
-		if err = encoder.add(level+1, parent); err != nil {
-			return eris.Capability{}, err
-		}
-	}
-}
-
-func (encoder *treeEncoder) pending() (int, int, eris.Pair) {
-	count := 0
-	rootLevel := 0
-	var root eris.Pair
-	for level, pairs := range encoder.levels {
-		count += len(pairs)
-		if len(pairs) != 0 {
-			rootLevel = level
-			root = pairs[0]
-		}
-	}
-	return count, rootLevel, root
-}
-
-type sliceReader struct {
-	data []byte
-	off  int
-}
-
-func newSliceReader(data []byte) *sliceReader { return &sliceReader{data: data} }
-
-func (reader *sliceReader) Read(buffer []byte) (int, error) {
-	if reader.off == len(reader.data) {
-		return 0, io.EOF
-	}
-	n := copy(buffer, reader.data[reader.off:])
-	reader.off += n
-	return n, nil
 }

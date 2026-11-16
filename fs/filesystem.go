@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
-	"github.com/asciimoth/goeris/internal/erisreader"
 )
 
 const directoryType EntryType = 255
@@ -223,15 +222,15 @@ func (fileSystem *FS) ReadFile(name string) ([]byte, error) {
 }
 
 func (fileSystem *FS) openRegular(item *node, path string) (ReadSeekCloser, error) {
-	var reader *erisreader.Reader
+	var reader *eris.Reader
 	var err error
 	item.mu.Lock()
 	size, known := item.size, item.sizeKnown
 	item.mu.Unlock()
 	if known {
-		reader, err = erisreader.NewReaderWithSize(item.capability, fileSystem.source, size)
+		reader, err = eris.NewReaderWithSize(item.capability, fileSystem.source, size)
 	} else {
-		reader, err = erisreader.NewReader(item.capability, fileSystem.source)
+		reader, err = eris.NewReader(item.capability, fileSystem.source)
 	}
 	if err != nil {
 		return nil, pathError("open", path, err)
@@ -369,7 +368,7 @@ func (node *node) contentSize() (int64, error) {
 		return size, nil
 	}
 	node.mu.Unlock()
-	reader, err := erisreader.NewReader(node.capability, node.source)
+	reader, err := eris.NewReader(node.capability, node.source)
 	if err != nil {
 		return 0, err
 	}
@@ -416,7 +415,7 @@ func (node *node) isDir() bool                   { return node.kind == directory
 
 type regularFile struct {
 	node *node
-	*erisreader.Reader
+	*eris.Reader
 }
 
 func (file *regularFile) Stat() (stdfs.FileInfo, error) {

@@ -1,4 +1,4 @@
-package erisreader
+package eris
 
 import (
 	"bytes"
@@ -9,19 +9,17 @@ import (
 	"math"
 	"sync"
 	"testing"
-
-	"github.com/asciimoth/goeris"
 )
 
 func TestSizedReaderBoundaries(t *testing.T) {
-	for _, blockSize := range []eris.BlockSize{eris.BlockSize1KiB, eris.BlockSize32KiB} {
+	for _, blockSize := range []BlockSize{BlockSize1KiB, BlockSize32KiB} {
 		for _, size := range []int{0, 1, int(blockSize) - 1, int(blockSize), int(blockSize) + 1, 16*int(blockSize) - 1, 16 * int(blockSize), 16*int(blockSize) + 1} {
 			t.Run(fmt.Sprintf("%d/%d", blockSize, size), func(t *testing.T) {
 				content := make([]byte, size)
 				for i := range content {
 					content[i] = byte(i * 31)
 				}
-				cap, blocks, err := eris.Encode(content, eris.Secret{}, blockSize)
+				cap, blocks, err := Encode(content, Secret{}, blockSize)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -67,7 +65,7 @@ func TestSizedReaderRandomAccessCostAndCacheBound(t *testing.T) {
 	for i := 0; i+8 <= len(content); i += 1024 {
 		binary.LittleEndian.PutUint64(content[i:], uint64(i))
 	}
-	cap, blocks, err := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
+	cap, blocks, err := Encode(content, Secret{}, BlockSize1KiB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,15 +116,15 @@ func TestSizedReaderRandomAccessCostAndCacheBound(t *testing.T) {
 }
 
 func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
-	blocks := make(eris.BlockSet)
-	cap := eris.Capability{BlockSize: eris.BlockSize1KiB}
+	blocks := make(BlockSet)
+	cap := Capability{BlockSize: BlockSize1KiB}
 	for _, test := range []struct {
-		cap    eris.Capability
-		source eris.BlockSource
+		cap    Capability
+		source BlockSource
 		size   int64
 		want   error
 	}{
-		{eris.Capability{}, blocks, 0, eris.ErrInvalidCapability}, {cap, nil, 0, eris.ErrInvalidCapability},
+		{Capability{}, blocks, 0, ErrInvalidCapability}, {cap, nil, 0, ErrInvalidCapability},
 		{cap, blocks, -1, ErrInvalidSize}, {cap, blocks, math.MaxInt64, ErrSizeMismatch},
 	} {
 		if _, err := NewReaderWithSize(test.cap, test.source, test.size); !errors.Is(err, test.want) {
@@ -135,7 +133,7 @@ func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
 	}
 	for _, actual := range []int{0, 2, 1023, 1024, 1025, 16384, 17000} {
 		content := bytes.Repeat([]byte{'x'}, actual)
-		cap, blocks, err := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
+		cap, blocks, err := Encode(content, Secret{}, BlockSize1KiB)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -155,21 +153,21 @@ func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
 	}
 	// A correctly encrypted but unpadded leaf must fail at the declared end.
 	raw := bytes.Repeat([]byte{'x'}, 1024)
-	pair, err := putNode(raw, eris.Secret{}, 0, blocks)
+	pair, err := storeTestNode(raw, Secret{}, 0, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := NewReaderWithSize(eris.Capability{BlockSize: eris.BlockSize1KiB, Root: pair}, blocks, 1)
+	reader, err := NewReaderWithSize(Capability{BlockSize: BlockSize1KiB, Root: pair}, blocks, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, eris.ErrInvalidPadding) {
+	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, ErrInvalidPadding) {
 		t.Fatal(err)
 	}
 	// Empty-file reads still check the sole padding block.
-	empty, emptyBlocks, _ := eris.Encode(nil, eris.Secret{}, eris.BlockSize1KiB)
-	reader, _ = NewReaderWithSize(empty, make(eris.BlockSet), 0)
-	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, eris.ErrMissingBlock) {
+	empty, emptyBlocks, _ := Encode(nil, Secret{}, BlockSize1KiB)
+	reader, _ = NewReaderWithSize(empty, make(BlockSet), 0)
+	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, ErrMissingBlock) {
 		t.Fatal(err)
 	}
 	reader, _ = NewReaderWithSize(empty, emptyBlocks, 0)
@@ -177,24 +175,24 @@ func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
 		t.Fatalf("empty: %d, %v", n, err)
 	}
 	// End reads of block-aligned files must fetch and validate the padding leaf.
-	cap, blocks, _ = eris.Encode(make([]byte, 1024), eris.Secret{}, eris.BlockSize1KiB)
+	cap, blocks, _ = Encode(make([]byte, 1024), Secret{}, BlockSize1KiB)
 	source := &failAfterSource{BlockSource: blocks, failAt: 3, err: io.ErrUnexpectedEOF}
 	reader, _ = NewReaderWithSize(cap, source, 1024)
 	if n, err := reader.Read(make([]byte, 1024)); n != 1024 || !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("padding fetch: %d, %v", n, err)
 	}
 	// A missing root must fail when checking EOF as well as on a normal read.
-	reader, _ = NewReaderWithSize(cap, make(eris.BlockSet), 1024)
-	if _, err := reader.ReadAt(make([]byte, 1), 1024); !errors.Is(err, eris.ErrMissingBlock) {
+	reader, _ = NewReaderWithSize(cap, make(BlockSet), 1024)
+	if _, err := reader.ReadAt(make([]byte, 1), 1024); !errors.Is(err, ErrMissingBlock) {
 		t.Fatal(err)
 	}
 }
 
 func TestSizedReaderRejectsMalformedVisitedTree(t *testing.T) {
-	blocks := make(eris.BlockSet)
+	blocks := make(BlockSet)
 	leaf := make([]byte, 1024)
 	leaf[0] = 0x80
-	pair, err := putNode(leaf, eris.Secret{}, 0, blocks)
+	pair, err := storeTestNode(leaf, Secret{}, 0, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,19 +200,19 @@ func TestSizedReaderRejectsMalformedVisitedTree(t *testing.T) {
 	copy(internal, pair.Reference[:])
 	copy(internal[32:], pair.Key[:])
 	// Only one child where the advertised size needs two.
-	root, err := putNode(internal, eris.Secret{}, 1, blocks)
+	root, err := storeTestNode(internal, Secret{}, 1, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cap := eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 1, Root: root}
+	cap := Capability{BlockSize: BlockSize1KiB, Level: 1, Root: root}
 	reader, _ := NewReaderWithSize(cap, blocks, 1024)
 	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, ErrSizeMismatch) {
 		t.Fatal(err)
 	}
 	// Reject a forged internal root key on the lazy path.
-	key := eris.Key{1}
+	key := Key{1}
 	// Use the same helper as the core malformed-root tests: ChaCha is symmetric.
-	encrypted, err := eris.DecryptNodeFromSource(internal, key, 1)
+	encrypted, err := DecryptNodeFromSource(internal, key, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,9 +220,9 @@ func TestSizedReaderRejectsMalformedVisitedTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cap.Root = eris.Pair{Reference: ref, Key: key}
+	cap.Root = Pair{Reference: ref, Key: key}
 	reader, _ = NewReaderWithSize(cap, blocks, 1024)
-	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, eris.ErrInvalidRootKey) {
+	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, ErrInvalidRootKey) {
 		t.Fatal(err)
 	}
 }
@@ -233,28 +231,28 @@ func TestReaderSizeOverflow(t *testing.T) {
 	// A small DAG can represent a tree larger than int64 without storing its
 	// expanded content. Both byte-size and leaf-count overflow must be rejected.
 	for _, test := range []struct {
-		level eris.Level
+		level Level
 		want  error
-	}{{14, ErrInvalidTree}, {16, eris.ErrInvalidNode}} {
-		blocks := make(eris.BlockSet)
+	}{{14, ErrInvalidTree}, {16, ErrInvalidNode}} {
+		blocks := make(BlockSet)
 		leaf := make([]byte, 1024)
 		leaf[0] = 0x80
-		pair, err := putNode(leaf, eris.Secret{}, 0, blocks)
+		pair, err := storeTestNode(leaf, Secret{}, 0, blocks)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for level := eris.Level(1); level <= test.level; level++ {
+		for level := Level(1); level <= test.level; level++ {
 			node := make([]byte, 1024)
 			for i := range 16 {
 				copy(node[i*64:], pair.Reference[:])
 				copy(node[i*64+32:], pair.Key[:])
 			}
-			pair, err = putNode(node, eris.Secret{}, level, blocks)
+			pair, err = storeTestNode(node, Secret{}, level, blocks)
 			if err != nil {
 				t.Fatal(err)
 			}
 		}
-		if _, err := NewReader(eris.Capability{BlockSize: eris.BlockSize1KiB, Level: test.level, Root: pair}, blocks); !errors.Is(err, test.want) {
+		if _, err := NewReader(Capability{BlockSize: BlockSize1KiB, Level: test.level, Root: pair}, blocks); !errors.Is(err, test.want) {
 			t.Fatalf("level %d: %v", test.level, err)
 		}
 	}
@@ -265,14 +263,14 @@ func BenchmarkReaderOpenAndRead(b *testing.B) {
 	for i := 0; i < len(content); i += 1024 {
 		binary.LittleEndian.PutUint64(content[i:], uint64(i))
 	}
-	cap, blocks, err := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
+	cap, blocks, err := Encode(content, Secret{}, BlockSize1KiB)
 	if err != nil {
 		b.Fatal(err)
 	}
 	for _, sized := range []bool{false, true} {
-		name := "v1-size-scan"
+		name := "size-scan"
 		if sized {
-			name = "v2-known-size"
+			name = "known-size"
 		}
 		b.Run(name, func(b *testing.B) {
 			source := &failAfterSource{BlockSource: blocks}

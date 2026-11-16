@@ -4,7 +4,9 @@
 //
 // The low-level API contains Index, Entry, and the index codecs. It uses
 // the block source and sink interfaces in the eris package so applications can
-// control storage and transport.
+// control storage and transport. Raw content encoding and ERIS tree reading
+// are provided by eris.EncodeContent, eris.EncodeContentRecommended, and
+// eris.NewReader.
 //
 // The high-level API contains Builder, FileSystem, and OpenFS. It exposes an
 // encoded image through the standard io/fs interfaces without extraction.

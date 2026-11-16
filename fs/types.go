@@ -9,7 +9,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/asciimoth/goeris"
-	"github.com/asciimoth/goeris/internal/erisreader"
 )
 
 // EntryType identifies an ERIS-FS index entry.
@@ -30,7 +29,7 @@ var (
 	// ErrInvalidIndex means that data is not a supported deterministic ERIS-FS index.
 	ErrInvalidIndex = errors.New("eris-fs: invalid index")
 	// ErrIndexTooLarge means that an index exceeds the configured decoded limit.
-	ErrIndexTooLarge = erisreader.ErrTooLarge
+	ErrIndexTooLarge = eris.ErrDecodedTooLarge
 	// ErrInvalidLimit means that a decoded index limit is not positive.
 	ErrInvalidLimit = errors.New("eris-fs: invalid index limit")
 	// ErrInvalidPath means that an entry path is not a valid relative path.
@@ -42,7 +41,7 @@ var (
 	// ErrUnknownSize means that a v1 file needs a size before it can be written as v2.
 	ErrUnknownSize = errors.New("eris-fs: file size is unknown")
 	// ErrSizeMismatch means that file content does not match its declared size.
-	ErrSizeMismatch = erisreader.ErrSizeMismatch
+	ErrSizeMismatch = eris.ErrSizeMismatch
 	// ErrNotSeekable means that a compressed file does not support random access.
 	ErrNotSeekable = errors.New("eris-fs: compressed file is not seekable")
 	// ErrClosed is returned after an opened file is closed.

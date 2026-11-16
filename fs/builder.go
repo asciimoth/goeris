@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"bytes"
 	"io"
 	stdfs "io/fs"
 	"math"
@@ -49,22 +48,8 @@ func (builder *Builder) AddFile(path string, content io.Reader, executable bool)
 	if err = builder.checkPath(components); err != nil {
 		return err
 	}
-	prefix := make([]byte, 1<<14)
-	n, readErr := readFullContent(content, prefix)
-	var input io.Reader
-	var blockSize eris.BlockSize
-	switch readErr {
-	case nil:
-		blockSize = eris.BlockSize32KiB
-		input = io.MultiReader(bytes.NewReader(prefix), content)
-	case io.EOF:
-		blockSize = eris.ChooseBlockSize(n)
-		input = bytes.NewReader(prefix[:n])
-	default:
-		return readErr
-	}
-	counted := &countReader{reader: input}
-	capability, err := EncodeContent(counted, builder.secret, blockSize, builder.sink)
+	counted := &countReader{reader: content}
+	capability, err := eris.EncodeContentRecommended(counted, builder.secret, builder.sink)
 	if err != nil {
 		return err
 	}
