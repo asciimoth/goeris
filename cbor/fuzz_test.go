@@ -9,7 +9,7 @@ import (
 
 func FuzzUnmarshal(f *testing.F) {
 	block, pair, _ := eris.EncryptNode(make([]byte, eris.BlockSize1KiB), eris.Secret{}, 0)
-	element, _ := NewBlockMap(eris.BlockSet{pair.Reference: {Data: block}})
+	element, _ := NewBlockMap(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{pair.Reference: {Data: block}}})
 	valid, _ := Marshal([]Element{element})
 	selfDescribed, _ := MarshalSelfDescribed([]Element{element})
 	untagged, _ := MarshalUntagged([]Element{element})
@@ -81,7 +81,7 @@ func FuzzBlocks(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mapElement, err := NewBlockMap(eris.BlockSet{pair.Reference: {Data: block}})
+		mapElement, err := NewBlockMap(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{pair.Reference: {Data: block}}})
 		if err != nil {
 			t.Fatal(err)
 		}

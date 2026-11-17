@@ -110,7 +110,7 @@ func (decoder *decoder) blockMap() (Element, error) {
 	if err != nil {
 		return Element{}, err
 	}
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	for index := uint64(0); indefinite || index < count; index++ {
 		if indefinite && decoder.consumeByte(0xff) {
 			return Element{kind: BlockMapKind, blockMap: blocks}, nil
@@ -121,7 +121,7 @@ func (decoder *decoder) blockMap() (Element, error) {
 		}
 		var reference eris.Reference
 		copy(reference[:], key)
-		if _, duplicate := blocks[reference]; duplicate {
+		if _, duplicate := blocks.Blocks[reference]; duplicate {
 			return Element{}, ErrInvalidElement
 		}
 		block, blockErr := decoder.byteString()
@@ -131,7 +131,7 @@ func (decoder *decoder) blockMap() (Element, error) {
 		if verifyErr := eris.VerifyBlock(block, reference); verifyErr != nil {
 			return Element{}, ErrInvalidElement
 		}
-		blocks[reference] = eris.Block{Data: cloneBytes(block)}
+		blocks.Blocks[reference] = eris.Block{Data: cloneBytes(block)}
 	}
 	return Element{kind: BlockMapKind, blockMap: blocks}, nil
 }

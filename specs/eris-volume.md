@@ -348,23 +348,25 @@ rename on platforms where it is unavailable.
 - `DefaultChainPaths() ([]string, error)` to resolve the platform's default
   paths without opening or creating roots;
 - `BlockPath(ref) string` to compute the canonical relative host path;
-- `GetBlock(ctx, ref, ttl)` and `PutBlock(ctx, block, ttl, expected...)` to
-  implement `eris.BlockStore`; and
+- `GetBlock(ctx, requests)`, `PutBlock(ctx, requests)`,
+  `UpdateBlockOptions(ctx, requests)`, and `BatchSize()` to implement
+  `eris.BlockStore`; and
 - `Close()` to release the root handle.
 
-`PutBlock` accepts zero or one expected reference. Invalid size, a reference
-mismatch, or multiple expected references produce an error that matches
-`eris.ErrInvalidBlock`, without writing a block. Invalid sizes also match
-`eris.ErrInvalidBlockSize`. Invalid stored data matches `eris.ErrInvalidBlock`.
-Missing blocks match both `eris.ErrMissingBlock` and `fs.ErrNotExist`. Other
-file-system errors retain their underlying error values for `errors.Is`.
-File-root writes match `volume.ErrNotDirectory`. Invalid CBOR containers match
-`cbor.ErrInvalidEncoding`. Unsupported root file types match `fs.ErrInvalid`. A
-canceled call or closed handle returns its context or file-system error before
-checking the root type. Empty entries in a nonempty chain path list match
-`volume.ErrInvalidChain`. Chain open errors identify the entry index and
-preserve the underlying error. Missing or invalid environment values required to
-resolve default paths match `fs.ErrInvalid`.
+Volumes report a batch limit of one. Empty batches succeed without I/O. Larger
+batches return `eris.ErrBatchTooLarge` before processing. Each write request can
+include an expected reference. Invalid size or a reference mismatch produces an
+error that matches `eris.ErrInvalidBlock`, without writing a block. Invalid
+sizes also match `eris.ErrInvalidBlockSize`. Invalid stored data matches
+`eris.ErrInvalidBlock`. Missing blocks match both `eris.ErrMissingBlock` and
+`fs.ErrNotExist`. Other file-system errors retain their underlying error values
+for `errors.Is`. File-root writes match `volume.ErrNotDirectory`. Invalid CBOR
+containers match `cbor.ErrInvalidEncoding`. Unsupported root file types match
+`fs.ErrInvalid`. A canceled call or closed handle returns its context or
+file-system error before checking the root type. Empty entries in a nonempty
+chain path list match `volume.ErrInvalidChain`. Chain open errors identify the
+entry index and preserve the underlying error. Missing or invalid environment
+values required to resolve default paths match `fs.ErrInvalid`.
 
 The package creates directories with mode `0755` and files with mode `0644`,
 subject to the process umask. The caller controls root access permissions. The

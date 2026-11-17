@@ -18,7 +18,7 @@ func (failedReadLinkFS) ReadLink(string) (string, error) {
 }
 
 func TestFSDiscardsFailedReadLinkTarget(t *testing.T) {
-	wrapped := newLinkFS(t, failedReadLinkFS{fstest.MapFS{}}, eris.BlockSet{})
+	wrapped := newLinkFS(t, failedReadLinkFS{fstest.MapFS{}}, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 	if target, err := wrapped.ReadLink(context.Background(), "public"); target != "" || !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("failed ReadLink returned %q, %v", target, err)
 	}
@@ -49,7 +49,7 @@ func TestFSDiscardsFailedMetadata(t *testing.T) {
 			base := openFSFunc(func(string) (fs.File, error) {
 				return &failedStatFile{File: file}, nil
 			})
-			wrapped := newLinkFS(t, base, eris.BlockSet{})
+			wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 			stat := wrapped.Stat
 			if method == "Lstat" {
 				stat = wrapped.Lstat
@@ -96,7 +96,7 @@ func TestFSRejectsMissingBaseResults(t *testing.T) {
 					info:     func() (fs.FileInfo, error) { return nil, nil },
 				}}}
 			}
-			wrapped := newLinkFS(t, base, eris.BlockSet{})
+			wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 			var err error
 			switch method {
 			case "Open", "File.Stat":
@@ -153,7 +153,7 @@ func TestFSRejectsMissingMetadataAfterOpen(t *testing.T) {
 				}
 				observed := &observedFile{File: &changingInfoFile{File: file}, reader: file}
 				base := openFSFunc(func(string) (fs.File, error) { return observed, nil })
-				wrapped := newLinkFS(t, base, eris.BlockSet{})
+				wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 				stat := wrapped.Stat
 				if method == "Lstat" {
 					stat = wrapped.Lstat
@@ -182,7 +182,7 @@ func TestFSNonRegularEntryInfo(t *testing.T) {
 				DirEntry: fs.FileInfoToDirEntry(original),
 				info:     func() (fs.FileInfo, error) { return info, infoErr },
 			}}}
-			wrapped := newLinkFS(t, base, eris.BlockSet{})
+			wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 			readDir := func() ([]fs.DirEntry, error) {
 				return wrapped.ReadDir(context.Background(), "dir")
 			}

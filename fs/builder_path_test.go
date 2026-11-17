@@ -10,7 +10,7 @@ import (
 )
 
 func TestBuilderDeepPathConflicts(t *testing.T) {
-	builder := NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
+	builder := NewBuilder(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, eris.Secret{}, eris.BlockOptions{})
 	prefix := strings.Repeat("d/", 4096)
 	for _, name := range []string{prefix + "a", prefix + "b", "other"} {
 		if err := builder.AddSymlink(name, "target"); err != nil {
@@ -36,7 +36,7 @@ func BenchmarkBuilderDeepPath(b *testing.B) {
 			name := strings.Repeat("d/", depth) + "file"
 			b.ReportAllocs()
 			for b.Loop() {
-				builder := NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
+				builder := NewBuilder(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, eris.Secret{}, eris.BlockOptions{})
 				if err := builder.AddSymlink(name, "target"); err != nil {
 					b.Fatal(err)
 				}

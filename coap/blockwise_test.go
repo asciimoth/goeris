@@ -32,7 +32,7 @@ func uploadFragment(t *testing.T, marker byte, number uint32) *protocol.Message 
 
 func TestBlockWiseTransferLimitAndCompletion(t *testing.T) {
 	t.Parallel()
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	handler, err := (Handler{Blocks: blocks, AllowPut: true, MaxTransfers: 2}).BlockWise(protocol.BlockWiseConfig{BlockSize: 512})
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func TestBlockWiseTransferLimitAndCompletion(t *testing.T) {
 			t.Fatalf("first fragment: %s", response.Code)
 		}
 	}
-	if len(blocks) != 0 || len(handler.transfers) != 2 {
+	if len(blocks.Blocks) != 0 || len(handler.transfers) != 2 {
 		t.Fatal("fragments were stored or transfer limit was not reached")
 	}
 	if response := serve(t, handler, uploadFragment(t, 3, 0)); response.Code != serviceUnavailable {
@@ -51,7 +51,7 @@ func TestBlockWiseTransferLimitAndCompletion(t *testing.T) {
 	if response := serve(t, handler, uploadFragment(t, 1, 1)); response.Code != protocol.Created {
 		t.Fatalf("existing transfer at limit: %s", response.Code)
 	}
-	if len(blocks) != 1 || len(handler.transfers) != 1 {
+	if len(blocks.Blocks) != 1 || len(handler.transfers) != 1 {
 		t.Fatal("completed upload did not store a block and release its state")
 	}
 	if response := serve(t, handler, uploadFragment(t, 3, 0)); response.Code != protocol.Continue {
@@ -60,7 +60,7 @@ func TestBlockWiseTransferLimitAndCompletion(t *testing.T) {
 }
 
 func TestBlockWiseRejectsInvalidBlock2BeforeReassembly(t *testing.T) {
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	handler, err := (Handler{Blocks: blocks, AllowPut: true, MaxTransfers: 1}).BlockWise(protocol.BlockWiseConfig{})
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestBlockWiseRejectsInvalidBlock2BeforeReassembly(t *testing.T) {
 		if response := serve(t, handler, request); response.Code != protocol.BadOption {
 			t.Fatalf("Block2 %x: got %s, want BadOption", value, response.Code)
 		}
-		if len(handler.transfers) != 0 || len(blocks) != 0 {
+		if len(handler.transfers) != 0 || len(blocks.Blocks) != 0 {
 			t.Fatal("invalid fragment retained state or reached storage")
 		}
 	}
@@ -80,7 +80,7 @@ func TestBlockWiseRejectsInvalidBlock2BeforeReassembly(t *testing.T) {
 }
 
 func TestBlockWiseRejectsMalformedUploadFragmentBeforeState(t *testing.T) {
-	handler, err := (Handler{Blocks: make(eris.BlockSet), AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
+	handler, err := (Handler{Blocks: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,19 +106,19 @@ func TestBlockWiseRejectsMalformedUploadFragmentBeforeState(t *testing.T) {
 
 func TestConcurrentBlockWiseUploads(t *testing.T) {
 	t.Parallel()
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	var mu sync.Mutex
 	store := storeFunc{
 		get: func(ref eris.Reference) ([]byte, error) {
 			mu.Lock()
 			defer mu.Unlock()
-			blockResult, blockErr, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+			blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 			return blockResult, blockErr
 		},
 		put: func(ref eris.Reference, block []byte) error {
 			mu.Lock()
 			defer mu.Unlock()
-			_, err := blocks.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, ref)
+			_, err := eris.PutBlock(context.Background(), blocks, block, 0, eris.BlockOptions{}, ref)
 			return err
 		},
 	}
@@ -147,7 +147,7 @@ func TestConcurrentBlockWiseUploads(t *testing.T) {
 	for _, marker := range []byte{11, 12} {
 		block, _ := makeBlock(int(eris.BlockSize1KiB), marker)
 		go func() {
-			_, err := client.PutBlock(context.Background(), block, 0, eris.BlockOptions{})
+			_, err := eris.PutBlock(context.Background(), client, block, 0, eris.BlockOptions{})
 			done <- err
 		}()
 	}
@@ -161,14 +161,14 @@ func TestConcurrentBlockWiseUploads(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	if len(blocks) != 2 {
-		t.Fatalf("stored %d blocks, want 2", len(blocks))
+	if len(blocks.Blocks) != 2 {
+		t.Fatalf("stored %d blocks, want 2", len(blocks.Blocks))
 	}
 }
 
 func TestBlockWiseExpiry(t *testing.T) {
 	t.Parallel()
-	handler, err := (Handler{Blocks: make(eris.BlockSet), AllowPut: true, MaxTransfers: 1}).BlockWise(protocol.BlockWiseConfig{})
+	handler, err := (Handler{Blocks: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, AllowPut: true, MaxTransfers: 1}).BlockWise(protocol.BlockWiseConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestBlockWiseRejectsBeforeReassembly(t *testing.T) {
 		{"nil", nil, false, protocol.BadRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			blocks := make(eris.BlockSet)
+			blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 			handler, err := (Handler{Blocks: blocks, AllowPut: !test.readOnly}).BlockWise(protocol.BlockWiseConfig{})
 			if err != nil {
 				t.Fatal(err)
@@ -218,7 +218,7 @@ func TestBlockWiseRejectsBeforeReassembly(t *testing.T) {
 			if response := serve(t, handler, test.request); response.Code != test.code {
 				t.Fatalf("response = %s, want %s", response.Code, test.code)
 			}
-			if len(handler.transfers) != 0 || len(blocks) != 0 {
+			if len(handler.transfers) != 0 || len(blocks.Blocks) != 0 {
 				t.Fatal("rejected request allocated state or wrote a block")
 			}
 		})
@@ -269,7 +269,7 @@ func TestBlockWiseActiveRequestIsNotExpired(t *testing.T) {
 func TestBlockWiseDownloadLimit(t *testing.T) {
 	t.Parallel()
 	block, ref := makeBlock(int(eris.BlockSize32KiB), 5)
-	handler, err := (Handler{Blocks: eris.BlockSet{ref: {Data: block}}, MaxTransfers: 1}).BlockWise(protocol.BlockWiseConfig{})
+	handler, err := (Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}, MaxTransfers: 1}).BlockWise(protocol.BlockWiseConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestBlockWiseDownloadLimit(t *testing.T) {
 
 func TestBlockWiseExplicitFirstBlock(t *testing.T) {
 	block, ref := makeBlock(int(eris.BlockSize32KiB), 27)
-	handler, err := (Handler{Blocks: eris.BlockSet{ref: {Data: block}}}).BlockWise(protocol.BlockWiseConfig{})
+	handler, err := (Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}}).BlockWise(protocol.BlockWiseConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestBlockWiseExplicitFirstBlock(t *testing.T) {
 
 func TestBlockWiseConfigurationAndRouting(t *testing.T) {
 	t.Parallel()
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	if _, err := (Handler{Blocks: blocks, MaxTransfers: -1}).BlockWise(protocol.BlockWiseConfig{}); err == nil {
 		t.Fatal("negative transfer limit accepted")
 	}
@@ -390,7 +390,7 @@ func TestBlockTransferKey(t *testing.T) {
 }
 
 func TestBlockWiseSeparatesTransportNetworks(t *testing.T) {
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	handler, err := (Handler{Blocks: blocks, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{BlockSize: 512})
 	if err != nil {
 		t.Fatal(err)
@@ -405,7 +405,7 @@ func TestBlockWiseSeparatesTransportNetworks(t *testing.T) {
 	if response := serve(t, handler, other); response.Code != protocol.RequestEntityIncomplete {
 		t.Fatalf("TCP continuation: %s", response.Code)
 	}
-	if len(blocks) != 0 {
+	if len(blocks.Blocks) != 0 {
 		t.Fatal("cross-network fragment reached storage")
 	}
 	last := uploadFragment(t, 28, 1)
@@ -413,15 +413,15 @@ func TestBlockWiseSeparatesTransportNetworks(t *testing.T) {
 	if response := serve(t, handler, last); response.Code != protocol.Created {
 		t.Fatalf("UDP continuation: %s", response.Code)
 	}
-	if len(blocks) != 1 {
-		t.Fatalf("stored %d blocks, want 1", len(blocks))
+	if len(blocks.Blocks) != 1 {
+		t.Fatalf("stored %d blocks, want 1", len(blocks.Blocks))
 	}
 }
 
 func TestBlockWiseRejectsInvalidBodyMetadata(t *testing.T) {
 	t.Parallel()
 	for _, code := range []protocol.Code{protocol.PUT, protocol.GET} {
-		handler, err := (Handler{Blocks: make(eris.BlockSet), AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
+		handler, err := (Handler{Blocks: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -449,7 +449,7 @@ func TestBlockWiseRejectsMetadataBeforeKeepingState(t *testing.T) {
 		addOption(base, protocol.UintOption(protocol.OptionContentFormat, ContentFormatOctetStream)),
 		replaceOption(base, protocol.UintOption(protocol.OptionSize1, 2048)),
 	} {
-		handler, err := (Handler{Blocks: make(eris.BlockSet), AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
+		handler, err := (Handler{Blocks: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -464,7 +464,7 @@ func TestBlockWiseRejectsMetadataBeforeKeepingState(t *testing.T) {
 
 func TestBlockWiseValidatesCachedDownloadRequests(t *testing.T) {
 	block, ref := makeBlock(int(eris.BlockSize32KiB), 5)
-	handler, err := (Handler{Blocks: eris.BlockSet{ref: {Data: block}}}).BlockWise(protocol.BlockWiseConfig{})
+	handler, err := (Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}}).BlockWise(protocol.BlockWiseConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,7 +485,7 @@ func TestBlockWiseValidatesCachedDownloadRequests(t *testing.T) {
 }
 
 func TestBlockWiseBodyLimitCannotExceedERISBlock(t *testing.T) {
-	handler, err := (Handler{Blocks: make(eris.BlockSet), AllowPut: true}).BlockWise(protocol.BlockWiseConfig{MaxBodySize: 1 << 20})
+	handler, err := (Handler{Blocks: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{MaxBodySize: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}

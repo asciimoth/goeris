@@ -72,12 +72,12 @@ func NewReference(reference eris.Reference) Element {
 // identifies its block. Storage options are omitted: the ERIS CBOR format
 // has no field for them.
 func NewBlockMap(blocks eris.BlockSet) (Element, error) {
-	cloned := make(eris.BlockSet, len(blocks))
-	for reference, block := range blocks {
+	cloned := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block, len(blocks.Blocks))}
+	for reference, block := range blocks.Blocks {
 		if err := eris.VerifyBlock(block.Data, reference); err != nil {
 			return Element{}, fmt.Errorf("%w: %w", ErrInvalidElement, err)
 		}
-		cloned[reference] = eris.Block{Data: cloneBytes(block.Data)}
+		cloned.Blocks[reference] = eris.Block{Data: cloneBytes(block.Data)}
 	}
 	return Element{kind: BlockMapKind, blockMap: cloned}, nil
 }
@@ -111,11 +111,11 @@ func (element Element) Reference() (eris.Reference, bool) {
 // BlockMap returns a copy of the map and true for a block-map element.
 func (element Element) BlockMap() (eris.BlockSet, bool) {
 	if element.kind != BlockMapKind {
-		return nil, false
+		return eris.BlockSet{}, false
 	}
-	cloned := make(eris.BlockSet, len(element.blockMap))
-	for reference, block := range element.blockMap {
-		cloned[reference] = eris.Block{Data: cloneBytes(block.Data)}
+	cloned := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block, len(element.blockMap.Blocks))}
+	for reference, block := range element.blockMap.Blocks {
+		cloned.Blocks[reference] = eris.Block{Data: cloneBytes(block.Data)}
 	}
 	return cloned, true
 }
@@ -133,7 +133,7 @@ func (element Element) validate() error {
 	case ReferenceKind:
 		return nil
 	case BlockMapKind:
-		for reference, block := range element.blockMap {
+		for reference, block := range element.blockMap.Blocks {
 			if err := eris.VerifyBlock(block.Data, reference); err != nil {
 				return err
 			}

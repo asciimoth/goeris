@@ -2,17 +2,18 @@ package eris
 
 // Encode transforms content into an ERIS capability and an in-memory set of
 // encrypted blocks. It is deterministic for a given content, secret, and size.
+// The capability's root block has BlockOptions.Root set to true.
 func Encode(content []byte, secret Secret, blockSize BlockSize) (Capability, BlockSet, error) {
 	if !blockSize.Valid() {
-		return Capability{}, nil, ErrInvalidBlockSize
+		return Capability{}, BlockSet{}, ErrInvalidBlockSize
 	}
 	padded, _ := Pad(content, blockSize)
 
-	blocks := make(BlockSet)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
 	pairs := make([]Pair, 0, len(padded)/int(blockSize))
 	for offset := 0; offset < len(padded); offset += int(blockSize) {
 		block, pair, _ := EncryptNode(padded[offset:offset+int(blockSize)], secret, 0)
-		blocks[pair.Reference] = Block{Data: block}
+		blocks.Blocks[pair.Reference] = Block{Data: block}
 		pairs = append(pairs, pair)
 	}
 
@@ -22,6 +23,9 @@ func Encode(content []byte, secret Secret, blockSize BlockSize) (Capability, Blo
 		pairs = encodeLevel(pairs, secret, blockSize, level, blocks)
 	}
 
+	root := blocks.Blocks[pairs[0].Reference]
+	root.Options.Root = true
+	blocks.Blocks[pairs[0].Reference] = root
 	return Capability{BlockSize: blockSize, Level: level, Root: pairs[0]}, blocks, nil
 }
 
@@ -42,7 +46,7 @@ func encodeLevel(pairs []Pair, secret Secret, blockSize BlockSize, level Level, 
 			copy(node[pairOffset+32:pairOffset+PairSize], pair.Key[:])
 		}
 		block, pair, _ := EncryptNode(node, secret, level)
-		blocks[pair.Reference] = Block{Data: block}
+		blocks.Blocks[pair.Reference] = Block{Data: block}
 		parents = append(parents, pair)
 	}
 	return parents

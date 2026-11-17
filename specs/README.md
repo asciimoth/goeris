@@ -24,7 +24,8 @@ repository's CC0 license:
 - [ERIS-FS automatic compression policy v1](eris-fs-auto-compression.md)
 - [ERIS-FS v2 encoding and reproducibility](eris-fs-encoding.md)
 - [ERIS file-system volume v1](eris-volume.md)
-- [ERIS block priority extension](../spec/priority.md)
+- [ERIS block priority extension](priority.md)
+- [ERIS root block extension](root.md)
 
 The ERIS 1.0.0 HTML file comes from the
 [ERIS specification repository](https://codeberg.org/eris/spec) at commit

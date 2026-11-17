@@ -11,7 +11,7 @@ import (
 )
 
 func TestConcurrentImageReads(t *testing.T) {
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	content := bytes.Repeat([]byte("concurrent image reads\n"), 2048)
 	nested := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := nested.AddFile(context.Background(), "plain", bytes.NewReader(content), false); err != nil {

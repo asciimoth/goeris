@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/batch"
 	"github.com/asciimoth/goeris/link"
 )
 
@@ -22,8 +23,8 @@ type countingSource struct {
 	err   error
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (source *countingSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (source *countingSource) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	source.calls.Add(1)
 	if ttl != eris.NoTTL {
 		return nil, errors.New("unexpected TTL"), eris.BlockOptions{}
@@ -31,7 +32,7 @@ func (source *countingSource) GetBlock(ctx context.Context, ref eris.Reference, 
 	if source.err != nil {
 		return nil, source.err, eris.BlockOptions{}
 	}
-	return source.BlockSource.GetBlock(ctx, ref, ttl, eris.BlockOptions{})
+	return eris.GetBlock(ctx, source.BlockSource, ref, ttl, eris.BlockOptions{})
 }
 
 func encodeFSLink(t *testing.T, payload []byte) ([]byte, eris.BlockSet) {
@@ -298,7 +299,7 @@ func (base plainFS) Open(name string) (fs.File, error) {
 
 func TestFSNonSeekingBase(t *testing.T) {
 	for _, data := range [][]byte{nil, []byte("abc"), []byte(link.MagicPrefix[:8]), bytes.Repeat([]byte("x"), 100)} {
-		wrapped := newLinkFS(t, plainFS{fstest.MapFS{"plain": {Data: data}}}, eris.BlockSet{})
+		wrapped := newLinkFS(t, plainFS{fstest.MapFS{"plain": {Data: data}}}, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 		file, err := wrapped.Open(context.Background(), "plain")
 		if err != nil {
 			t.Fatal(err)
@@ -309,7 +310,7 @@ func TestFSNonSeekingBase(t *testing.T) {
 		}
 		_ = file.Close()
 	}
-	wrapped := newLinkFS(t, plainFS{fstest.MapFS{"plain": {Data: []byte("abc")}}}, eris.BlockSet{})
+	wrapped := newLinkFS(t, plainFS{fstest.MapFS{"plain": {Data: []byte("abc")}}}, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 	file, err := wrapped.Open(context.Background(), "plain")
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +328,7 @@ func TestFSNonSeekingBase(t *testing.T) {
 
 func TestFSInvalidArguments(t *testing.T) {
 	base := fstest.MapFS{}
-	blocks := eris.BlockSet{}
+	blocks := eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}
 	if _, err := link.NewFS(nil, blocks, eris.BlockOptions{}); !errors.Is(err, fs.ErrInvalid) {
 		t.Fatal(err)
 	}
@@ -373,4 +374,16 @@ func TestFSSymlinkMethodsWithoutBaseSupport(t *testing.T) {
 	if !errors.Is(err, fs.ErrNotExist) || !errors.As(err, &pathErr) || pathErr.Op != "lstat" || pathErr.Path != "missing" {
 		t.Fatalf("Lstat error context: %v", err)
 	}
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s *countingSource) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s *countingSource) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
 }

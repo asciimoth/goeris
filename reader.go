@@ -3,10 +3,13 @@ package eris
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"io"
 	stdfs "io/fs"
 	"math"
 	"sync"
+
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 type treeSummary struct {
@@ -16,8 +19,9 @@ type treeSummary struct {
 
 // Reader decodes one ERIS byte sequence and supports random access. Operations
 // on one reader are safe for concurrent use. At most 64 internal nodes and the
-// most recent leaf are cached. Use NewReaderWithSize to avoid scanning the tree
-// on open. Create a Reader with one of the NewReader functions; its zero value
+// most recent leaf are cached. Reads fetch at most 64 requested leaves per batch
+// (at most 2 MiB of encrypted block data). Use NewReaderWithSize to avoid scanning
+// the tree on open. Create a Reader with one of the NewReader functions; its zero value
 // is not ready for use. The source must verify block references as required by
 // BlockSource. Every block read uses the context supplied at construction,
 // unchanged. Each block read receives a copy of the construction options.
@@ -182,6 +186,21 @@ func (reader *Reader) readAt(buffer []byte, offset int64) (int, error) {
 	written := 0
 	blockSize := int64(reader.capability.BlockSize)
 	for written < requested {
+		if err := reader.ctx.Err(); err != nil {
+			return written, err
+		}
+		// Batch only leaves needed by this read. Resolve internal paths through
+		// the existing bounded cache and keep no additional leaves between calls.
+		count := min(batch.Limit(reader.source.BatchSize()), 1+(int(offset%blockSize)+requested-written-1)/int(blockSize))
+		if count > 1 {
+			n, err := reader.readBatch(buffer[written:requested], offset, count)
+			written += n
+			offset += int64(n)
+			if err != nil {
+				return written, err
+			}
+			continue
+		}
 		leafIndex := offset / blockSize
 		within := int(offset % blockSize)
 		pair, err := reader.leafPair(leafIndex)
@@ -211,6 +230,66 @@ func (reader *Reader) readAt(buffer []byte, offset int64) (int, error) {
 		return written, io.EOF
 	}
 	return written, nil
+}
+
+// readBatch returns all bytes completed before a path, fetch, or decode error.
+// A storage failure must never look like the end of the decoded stream.
+func (reader *Reader) readBatch(buffer []byte, offset int64, count int) (int, error) {
+	pairs := make([]Pair, 0, count)
+	requests := make([]BlockRequest, 0, count)
+	blockSize := int64(reader.capability.BlockSize)
+	first := offset / blockSize
+	var pathErr error
+	for i := range count {
+		if pathErr = reader.ctx.Err(); pathErr != nil {
+			break
+		}
+		var pair Pair
+		pair, pathErr = reader.leafPair(first + int64(i))
+		if pathErr != nil {
+			break
+		}
+		pairs = append(pairs, pair)
+		requests = append(requests, BlockRequest{Reference: pair.Reference, TTL: reader.ttl, Options: reader.options})
+	}
+	blocks, err := reader.source.GetBlock(reader.ctx, requests)
+	if len(blocks) > len(requests) || err == nil && len(blocks) != len(requests) {
+		return 0, ErrInvalidBatchResult
+	}
+	written := 0
+	for i, block := range blocks {
+		if cancelErr := reader.ctx.Err(); cancelErr != nil {
+			return written, cancelErr
+		}
+		// Storage can return later leaves after a missing block. A content
+		// reader must stop at that gap; it cannot concatenate those leaves.
+		if block.Data == nil && errors.Is(err, ErrMissingBlock) {
+			return written, err
+		}
+		if len(block.Data) != int(blockSize) {
+			return written, ErrInvalidBlockSize
+		}
+		// The capability and the size check above guarantee a valid length.
+		node, _ := DecryptNodeFromSource(block.Data, pairs[i].Key, 0)
+		if reader.sized && first+int64(i) == reader.leaves-1 {
+			if paddingErr := reader.checkPadding(node); paddingErr != nil {
+				return written, paddingErr
+			}
+		}
+		reader.leafID, reader.leafData = pairs[i], node
+		within := int(offset % blockSize)
+		amount := min(len(buffer)-written, len(node)-within)
+		copy(buffer[written:written+amount], node[within:within+amount])
+		written += amount
+		offset += int64(amount)
+	}
+	if err == nil {
+		err = pathErr
+	}
+	if err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+	return written, err
 }
 
 // Seek implements io.Seeker.
@@ -364,7 +443,7 @@ func (reader *Reader) decrypt(pair Pair, level Level) ([]byte, error) {
 	if err := reader.ctx.Err(); err != nil {
 		return nil, err
 	}
-	block, err, _ := reader.source.GetBlock(reader.ctx, pair.Reference, reader.ttl, reader.options)
+	block, err, _ := GetBlock(reader.ctx, reader.source, pair.Reference, reader.ttl, reader.options)
 	if err != nil {
 		// A block fetch is not the end of the decoded content. Keep a source
 		// EOF from making io.ReadAll or io.Copy accept a truncated file.

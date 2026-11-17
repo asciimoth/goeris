@@ -18,6 +18,7 @@ import (
 	"github.com/asciimoth/goeris"
 	eriscoap "github.com/asciimoth/goeris/coap"
 	erishttp "github.com/asciimoth/goeris/http"
+	"github.com/asciimoth/goeris/internal/batch"
 	"github.com/asciimoth/goeris/s3"
 )
 
@@ -36,14 +37,14 @@ type ttlStore struct {
 	seen []eris.TTL
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (s *ttlStore) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (s *ttlStore) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	s.seen = append(s.seen, ttl)
-	return s.BlockSet.GetBlock(ctx, ref, ttl, eris.BlockOptions{})
+	return eris.GetBlock(ctx, s.BlockSet, ref, ttl, eris.BlockOptions{})
 }
-func (s *ttlStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, refs ...eris.Reference) (eris.Reference, error) {
+func (s *ttlStore) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, refs ...eris.Reference) (eris.Reference, error) {
 	s.seen = append(s.seen, ttl)
-	return s.BlockSet.PutBlock(ctx, block, ttl, eris.BlockOptions{}, refs...)
+	return eris.PutBlock(ctx, s.BlockSet, block, ttl, eris.BlockOptions{}, refs...)
 }
 
 // Each transport uses real request builders and handlers, but no sockets. The
@@ -136,14 +137,14 @@ func TestNetworkTTLRoundTrip(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/%d/wrapped=%v", name, ttl, wrapped), func(t *testing.T) {
 					block := make([]byte, eris.BlockSize1KiB)
 					ref, _ := eris.ReferenceOf(block)
-					terminal := &ttlStore{BlockSet: eris.BlockSet{ref: {Data: block}}}
+					terminal := &ttlStore{BlockSet: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}}
 					var target eris.BlockSource = terminal
 					if wrapped {
 						target = struct{ eris.BlockStore }{terminal}
 					}
 					var wire []eris.TTL
 					client := ttlNetwork(t, name, target, &wire)
-					got, err, options := client.GetBlock(context.Background(), ref, ttl, eris.BlockOptions{})
+					got, err, options := eris.GetBlock(context.Background(), client, ref, ttl, eris.BlockOptions{})
 					if options != (eris.BlockOptions{}) {
 						t.Fatalf("GET options = %#v", options)
 					}
@@ -157,7 +158,7 @@ func TestNetworkTTLRoundTrip(t *testing.T) {
 					}
 					if name != "http" {
 						count++
-						_, err = client.PutBlock(context.Background(), block, ttl, eris.BlockOptions{}, ref)
+						_, err = eris.PutBlock(context.Background(), client, block, ttl, eris.BlockOptions{}, ref)
 						if ttl == 1 {
 							if !errors.Is(err, eris.ErrTTLExpired) {
 								t.Fatalf("PUT: %v", err)
@@ -199,7 +200,7 @@ func TestNetworkTTLStopsLoops(t *testing.T) {
 				loop = *eris.NewCombinedBlockStore(client)
 				block := make([]byte, eris.BlockSize1KiB)
 				ref, _ := eris.ReferenceOf(block)
-				_, err, _ := client.GetBlock(context.Background(), ref, ttl, eris.BlockOptions{})
+				_, err, _ := eris.GetBlock(context.Background(), client, ref, ttl, eris.BlockOptions{})
 				check := func(err error) {
 					t.Helper()
 					if !errors.Is(err, eris.ErrTTLExpired) {
@@ -221,7 +222,7 @@ func TestNetworkTTLStopsLoops(t *testing.T) {
 				check(err)
 				if name != "http" {
 					wire = nil
-					_, err = client.PutBlock(context.Background(), block, ttl, eris.BlockOptions{}, ref)
+					_, err = eris.PutBlock(context.Background(), client, block, ttl, eris.BlockOptions{}, ref)
 					check(err)
 				}
 			})
@@ -232,10 +233,10 @@ func TestNetworkTTLStopsLoops(t *testing.T) {
 func TestCoAPBlockWisePreservesTTL(t *testing.T) {
 	block := make([]byte, eris.BlockSize32KiB)
 	ref, _ := eris.ReferenceOf(block)
-	terminal := &ttlStore{BlockSet: make(eris.BlockSet)}
+	terminal := &ttlStore{BlockSet: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}}
 	var wire []eris.TTL
 	client := ttlNetwork(t, "coap", terminal, &wire)
-	if _, err := client.PutBlock(context.Background(), block, 7, eris.BlockOptions{}, ref); err != nil {
+	if _, err := eris.PutBlock(context.Background(), client, block, 7, eris.BlockOptions{}, ref); err != nil {
 		t.Fatal(err)
 	}
 	if len(wire) < 2 {
@@ -247,7 +248,7 @@ func TestCoAPBlockWisePreservesTTL(t *testing.T) {
 		}
 	}
 	wire = nil
-	if got, err, _ := client.GetBlock(context.Background(), ref, 7, eris.BlockOptions{}); err != nil || !bytes.Equal(got, block) {
+	if got, err, _ := eris.GetBlock(context.Background(), client, ref, 7, eris.BlockOptions{}); err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("GET: %v", err)
 	}
 	if len(wire) < 2 {
@@ -321,7 +322,7 @@ func TestHTTPServersOptionalTTL(t *testing.T) {
 				{[]string{"2", "3"}, 0, 400}, {[]string{"2, 3"}, 0, 400},
 			} {
 				t.Run(fmt.Sprintf("%s/%s/%v", name, method, test.values), func(t *testing.T) {
-					terminal := &ttlStore{BlockSet: eris.BlockSet{ref: {Data: block}}}
+					terminal := &ttlStore{BlockSet: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}}
 					var handler http.Handler = erishttp.Handler{Blocks: terminal}
 					path := erishttp.N2RPath + "?" + ref.URN()
 					if name == "s3" {
@@ -354,7 +355,7 @@ func TestHTTPServersOptionalTTL(t *testing.T) {
 func TestCoAPServerMissingHopLimitIsLocal(t *testing.T) {
 	block := make([]byte, eris.BlockSize1KiB)
 	ref, _ := eris.ReferenceOf(block)
-	terminal := &ttlStore{BlockSet: eris.BlockSet{ref: {Data: block}}}
+	terminal := &ttlStore{BlockSet: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}}
 	handler := eriscoap.Handler{Blocks: terminal, AllowPut: true}
 	store, err := eriscoap.ParseStoreURL("coap://example/")
 	if err != nil {
@@ -393,9 +394,9 @@ func TestTTLStopsMixedProtocolLoops(t *testing.T) {
 		ref, _ := eris.ReferenceOf(block)
 		var err error
 		if write {
-			_, err = client.PutBlock(context.Background(), block, 7, eris.BlockOptions{}, ref)
+			_, err = eris.PutBlock(context.Background(), client, block, 7, eris.BlockOptions{}, ref)
 		} else {
-			_, err, _ = client.GetBlock(context.Background(), ref, 7, eris.BlockOptions{})
+			_, err, _ = eris.GetBlock(context.Background(), client, ref, 7, eris.BlockOptions{})
 		}
 		if !errors.Is(err, eris.ErrTTLExpired) {
 			t.Fatalf("write %v: %v", write, err)
@@ -414,15 +415,15 @@ func TestLocalTTLAllowsFallbackAfterNetworkStore(t *testing.T) {
 	}
 	for _, name := range []string{"http", "s3", "coap"} {
 		t.Run(name, func(t *testing.T) {
-			local := &ttlStore{BlockSet: eris.BlockSet{ref: {Data: block}}}
+			local := &ttlStore{BlockSet: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}}
 			var wire []eris.TTL
 			network := ttlNetwork(t, name, local, &wire)
 			combined := eris.NewCombinedBlockStore(network, local)
-			got, err, _ := combined.GetBlock(context.Background(), ref, eris.LocalTTL, eris.BlockOptions{})
+			got, err, _ := eris.GetBlock(context.Background(), combined, ref, eris.LocalTTL, eris.BlockOptions{})
 			if err != nil || !bytes.Equal(got, block) {
 				t.Fatalf("local read: %v", err)
 			}
-			stored, err := combined.PutBlock(context.Background(), block, eris.LocalTTL, eris.BlockOptions{}, ref)
+			stored, err := eris.PutBlock(context.Background(), combined, block, eris.LocalTTL, eris.BlockOptions{}, ref)
 			if err != nil || stored != ref {
 				t.Fatalf("local write: %v", err)
 			}
@@ -434,4 +435,27 @@ func TestLocalTTLAllowsFallbackAfterNetworkStore(t *testing.T) {
 			}
 		})
 	}
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s *ttlStore) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s *ttlStore) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s *ttlStore) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
 }

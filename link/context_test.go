@@ -10,6 +10,7 @@ import (
 	"testing/fstest"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/batch"
 	"github.com/asciimoth/goeris/link"
 )
 
@@ -20,13 +21,13 @@ type exactContextSource struct {
 	reads int
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (s *exactContextSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (s *exactContextSource) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	if ctx != s.want {
 		s.t.Fatal("link read context changed")
 	}
 	s.reads++
-	return s.BlockSource.GetBlock(ctx, ref, ttl, eris.BlockOptions{})
+	return eris.GetBlock(ctx, s.BlockSource, ref, ttl, eris.BlockOptions{})
 }
 
 func TestFSContextAndWrapper(t *testing.T) {
@@ -61,4 +62,16 @@ func TestFSContextAndWrapper(t *testing.T) {
 	if source.reads != before {
 		t.Fatal("storage called after cancellation")
 	}
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s *exactContextSource) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s *exactContextSource) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
 }

@@ -159,3 +159,6 @@ does not invalidate an otherwise fresh cached block response.
 
 A store MAY apply local resource limits to high-priority traffic. The flag does
 not grant access or bypass authentication, authorization, or forwarding limits.
+
+The [root block extension](root.md) defines an independent flag with the same
+storage and transport rules. Encoders set that flag on object entry blocks.

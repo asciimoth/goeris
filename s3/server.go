@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
-	"github.com/asciimoth/goeris/internal/httppriority"
+	"github.com/asciimoth/goeris/internal/httpoptions"
 	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
@@ -107,7 +107,7 @@ func (handler Handler) get(writer http.ResponseWriter, request *http.Request, re
 			return
 		}
 	}
-	block, options, err := handler.getBlock(request.Context(), ref, ttl, httppriority.Parse(request.Header, HighPriorityHeader))
+	block, options, err := handler.getBlock(request.Context(), ref, ttl, httpoptions.Parse(request.Header, HighPriorityHeader, RootHeader))
 	if err != nil {
 		if errors.Is(err, eris.ErrTTLExpired) {
 			writeS3Error(writer, http.StatusLoopDetected, "LoopDetected", "The request TTL is exhausted.")
@@ -122,7 +122,7 @@ func (handler Handler) get(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store returned an invalid block.")
 		return
 	}
-	httppriority.Set(writer.Header(), HighPriorityHeader, options)
+	httpoptions.Set(writer.Header(), HighPriorityHeader, RootHeader, options)
 	writer.Header().Set("Content-Type", ContentType)
 	writer.Header().Set("Cache-Control", "max-age=31536000, immutable")
 	http.ServeContent(writer, request, ref.String(), time.Time{}, bytes.NewReader(block))
@@ -174,7 +174,7 @@ func (handler Handler) put(writer http.ResponseWriter, request *http.Request, re
 		writeS3Error(writer, http.StatusInternalServerError, "InternalError", "The store is not writable.")
 		return
 	}
-	if err := handler.putBlock(request.Context(), ref, block, ttl, httppriority.Parse(request.Header, HighPriorityHeader)); err != nil {
+	if err := handler.putBlock(request.Context(), ref, block, ttl, httpoptions.Parse(request.Header, HighPriorityHeader, RootHeader)); err != nil {
 		if errors.Is(err, eris.ErrTTLExpired) {
 			writeS3Error(writer, http.StatusLoopDetected, "LoopDetected", "The request TTL is exhausted.")
 		} else if errors.Is(err, eris.ErrInvalidBlock) {
@@ -205,7 +205,7 @@ func (handler Handler) getBlock(ctx context.Context, ref eris.Reference, ttl eri
 	if err := ctx.Err(); err != nil {
 		return nil, eris.BlockOptions{}, err
 	}
-	block, err, stored := handler.Blocks.GetBlock(ctx, ref, ttl, options)
+	block, err, stored := eris.GetBlock(ctx, handler.Blocks, ref, ttl, options)
 	return block, stored, err
 }
 
@@ -213,7 +213,7 @@ func (handler Handler) putBlock(ctx context.Context, ref eris.Reference, block [
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	stored, err := handler.Blocks.(eris.BlockSink).PutBlock(ctx, block, ttl, options, ref)
+	stored, err := eris.PutBlock(ctx, handler.Blocks.(eris.BlockSink), block, ttl, options, ref)
 	if err != nil {
 		return err
 	}

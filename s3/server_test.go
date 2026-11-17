@@ -11,12 +11,13 @@ import (
 	"testing"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 type sourceFunc func(eris.Reference) ([]byte, error)
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (function sourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (function sourceFunc) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	blockResult, blockErr := function(ref)
 	return blockResult, blockErr, eris.BlockOptions{}
 }
@@ -28,7 +29,7 @@ type storeFunc struct {
 
 type wrongReferenceStore struct{ eris.BlockSet }
 
-func (wrongReferenceStore) PutBlock(ctx context.Context, _ []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
+func (wrongReferenceStore) putBlock(ctx context.Context, _ []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	ref := expected[0]
 	ref[0] ^= 1
 	return ref, nil
@@ -41,8 +42,8 @@ type contextStore struct {
 	writes int
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (store *contextStore) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (store *contextStore) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	if ctx == nil || ref != store.ref {
 		return nil, errors.New("incorrect context read"), eris.BlockOptions{}
 	}
@@ -50,7 +51,7 @@ func (store *contextStore) GetBlock(ctx context.Context, ref eris.Reference, ttl
 	return append([]byte(nil), store.block...), nil, eris.BlockOptions{}
 }
 
-func (store *contextStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
+func (store *contextStore) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	if ctx == nil || len(expected) != 1 || expected[0] != store.ref {
 		return eris.Reference{}, errors.New("incorrect context write")
 	}
@@ -59,16 +60,16 @@ func (store *contextStore) PutBlock(ctx context.Context, block []byte, ttl eris.
 	return store.ref, nil
 }
 
-func (store *contextStore) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+func (store *contextStore) updateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
 	return false, nil
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (store storeFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (store storeFunc) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	blockResult, blockErr := store.get(ref)
 	return blockResult, blockErr, eris.BlockOptions{}
 }
-func (store storeFunc) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
+func (store storeFunc) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -79,14 +80,14 @@ func (store storeFunc) PutBlock(ctx context.Context, block []byte, ttl eris.TTL,
 	return ref, store.put(ref, block)
 }
 
-func (store storeFunc) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+func (store storeFunc) updateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
 	return false, nil
 }
 
 func TestHandlerReads(t *testing.T) {
 	t.Parallel()
 	ref, block := testBlock(t)
-	blocks := eris.BlockSet{ref: {Data: block}}
+	blocks := eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}
 	handler := Handler{Blocks: blocks, Bucket: "blocks"}
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		request := httptest.NewRequest(method, "https://s3.example/blocks/"+ref.String(), nil)
@@ -167,16 +168,16 @@ func TestHandlerRoutingAndReadErrors(t *testing.T) {
 		path    string
 		status  int
 	}{
-		{"bad path", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/other/key", 404},
-		{"bad key", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/bad", 404},
-		{"extra path", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/a/b", 404},
-		{"query", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String() + "?acl", 400},
-		{"empty query marker", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String() + "?", 400},
+		{"bad path", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks"}, http.MethodGet, "/other/key", 404},
+		{"bad key", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks"}, http.MethodGet, "/blocks/bad", 404},
+		{"extra path", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks"}, http.MethodGet, "/blocks/a/b", 404},
+		{"query", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String() + "?acl", 400},
+		{"empty query marker", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String() + "?", 400},
 		{"nil store", Handler{Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 500},
-		{"missing", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 404},
+		{"missing", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 404},
 		{"source error", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, sentinel }), Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 500},
 		{"corrupt", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrInvalidBlock }), Bucket: "blocks"}, http.MethodGet, "/blocks/" + ref.String(), 500},
-		{"method", Handler{Blocks: eris.BlockSet{ref: {Data: block}}, Bucket: "blocks"}, http.MethodDelete, "/blocks/" + ref.String(), 405},
+		{"method", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}, Bucket: "blocks"}, http.MethodDelete, "/blocks/" + ref.String(), 405},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -209,46 +210,46 @@ func TestHandlerWriteChecks(t *testing.T) {
 		request func() *http.Request
 		status  int
 	}{
-		{"read only by default", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", Auth: allow}, base, 405},
-		{"no auth", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true}, base, 401},
-		{"bad auth", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: deny}, base, 403},
-		{"denied", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow, Authorize: func(_ context.Context, _, _, _ string, _ eris.Reference) bool { return false }}, base, 403},
-		{"bad acl", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request { request := base(); request.Header.Del("x-amz-acl"); return request }, 400},
-		{"duplicate acl", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request { request := base(); request.Header.Add("x-amz-acl", "private"); return request }, 400},
-		{"case variant acl", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
+		{"read only by default", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", Auth: allow}, base, 405},
+		{"no auth", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", AllowPut: true}, base, 401},
+		{"bad auth", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", AllowPut: true, Auth: deny}, base, 403},
+		{"denied", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", AllowPut: true, Auth: allow, Authorize: func(_ context.Context, _, _, _ string, _ eris.Reference) bool { return false }}, base, 403},
+		{"bad acl", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request { request := base(); request.Header.Del("x-amz-acl"); return request }, 400},
+		{"duplicate acl", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request { request := base(); request.Header.Add("x-amz-acl", "private"); return request }, 400},
+		{"case variant acl", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Header["x-amz-acl"] = []string{"private"}
 			return request
 		}, 400},
-		{"bad block", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
+		{"bad block", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Body = io.NopCloser(bytes.NewReader(make([]byte, eris.BlockSize1KiB)))
 			return request
 		}, 400},
-		{"too large", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
+		{"too large", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Body = io.NopCloser(bytes.NewReader(make([]byte, int(eris.BlockSize32KiB)+1)))
 			return request
 		}, 413},
-		{"declared too large", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
+		{"declared too large", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.ContentLength = int64(eris.BlockSize32KiB) + 1
 			request.Body = io.NopCloser(errorReader{sentinel})
 			return request
 		}, 413},
-		{"body error", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
+		{"body error", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Body = io.NopCloser(errorReader{sentinel})
 			return request
 		}, 400},
-		{"missing body", Handler{Blocks: eris.BlockSet{}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
+		{"missing body", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, Bucket: "blocks", AllowPut: true, Auth: allow}, func() *http.Request {
 			request := base()
 			request.Body = nil
 			return request
 		}, 400},
 		{"source only", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrMissingBlock }), Bucket: "blocks", AllowPut: true, Auth: allow}, base, 500},
 		{"sink error", Handler{Blocks: storeFunc{get: func(eris.Reference) ([]byte, error) { return nil, eris.ErrMissingBlock }, put: func(eris.Reference, []byte) error { return sentinel }}, Bucket: "blocks", AllowPut: true, Auth: allow}, base, 500},
-		{"sink reports wrong reference", Handler{Blocks: wrongReferenceStore{make(eris.BlockSet)}, Bucket: "blocks", AllowPut: true, Auth: allow}, base, 500},
+		{"sink reports wrong reference", Handler{Blocks: wrongReferenceStore{eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}}, Bucket: "blocks", AllowPut: true, Auth: allow}, base, 500},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -264,7 +265,7 @@ func TestHandlerWriteChecks(t *testing.T) {
 func TestHandlerDefaultRejectsPutBeforeAuthentication(t *testing.T) {
 	t.Parallel()
 	ref, block := testBlock(t)
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	authCalled := false
 	handler := Handler{
 		Blocks: blocks,
@@ -281,7 +282,7 @@ func TestHandlerDefaultRejectsPutBeforeAuthentication(t *testing.T) {
 	if recorder.Code != http.StatusMethodNotAllowed || recorder.Header().Get("Allow") != "GET, HEAD" || authCalled {
 		t.Fatalf("default PUT = status %d, Allow %q, auth called %t", recorder.Code, recorder.Header().Get("Allow"), authCalled)
 	}
-	if _, err, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{}); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{}); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("default PUT stored block: %v", err)
 	}
 }
@@ -298,7 +299,7 @@ func TestHandlerAllowHeader(t *testing.T) {
 		{"writable", true, "GET, HEAD, PUT"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			handler := Handler{Blocks: eris.BlockSet{ref: {Data: block}}, Bucket: "blocks", AllowPut: test.allowPut}
+			handler := Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}, Bucket: "blocks", AllowPut: test.allowPut}
 			request := httptest.NewRequest(http.MethodDelete, "https://example/blocks/"+ref.String(), nil)
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
@@ -312,7 +313,7 @@ func TestHandlerAllowHeader(t *testing.T) {
 func TestHandlerAuthenticatedWrite(t *testing.T) {
 	t.Parallel()
 	ref, block := testBlock(t)
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	authorized := false
 	handler := Handler{
 		Blocks:   blocks,
@@ -336,7 +337,7 @@ func TestHandlerAuthenticatedWrite(t *testing.T) {
 	if recorder.Code != 200 || !authorized {
 		t.Fatalf("response = %d, authorized %t: %s", recorder.Code, authorized, recorder.Body.String())
 	}
-	stored, err, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+	stored, err, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 	if err != nil || !bytes.Equal(stored, block) {
 		t.Fatalf("stored block = %x, %v", stored, err)
 	}
@@ -395,7 +396,7 @@ func FuzzHandlerPath(f *testing.F) {
 	f.Add(http.MethodGet, "/blocks/"+ref.String())
 	f.Add(http.MethodPut, "/blocks/bad")
 	f.Fuzz(func(t *testing.T, method, path string) {
-		handler := Handler{Blocks: eris.BlockSet{ref: {Data: block}}, Bucket: "blocks"}
+		handler := Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}, Bucket: "blocks"}
 		request := httptest.NewRequest(http.MethodGet, "https://example/", nil)
 		request.Method = method
 		request.URL.Path = path
@@ -449,4 +450,90 @@ func TestHandlerCanceledStorage(t *testing.T) {
 			}
 		}
 	}
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s sourceFunc) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s sourceFunc) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s wrongReferenceStore) BatchSize() int { return 1 }
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s wrongReferenceStore) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s *contextStore) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s *contextStore) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s *contextStore) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions processes requests in order and returns the completed prefix.
+func (s *contextStore) UpdateBlockOptions(ctx context.Context, requests []eris.BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s storeFunc) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s storeFunc) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s storeFunc) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions processes requests in order and returns the completed prefix.
+func (s storeFunc) UpdateBlockOptions(ctx context.Context, requests []eris.BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
 }

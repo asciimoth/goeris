@@ -97,8 +97,8 @@ func appendElement(dst []byte, element Element) []byte {
 }
 
 func appendBlockMap(dst []byte, blocks eris.BlockSet) []byte {
-	references := make([]eris.Reference, 0, len(blocks))
-	for reference := range blocks {
+	references := make([]eris.Reference, 0, len(blocks.Blocks))
+	for reference := range blocks.Blocks {
 		references = append(references, reference)
 	}
 	slices.SortFunc(references, func(left, right eris.Reference) int {
@@ -107,7 +107,7 @@ func appendBlockMap(dst []byte, blocks eris.BlockSet) []byte {
 	dst = cborwire.AppendHead(dst, 5, uint64(len(references)))
 	for _, reference := range references {
 		dst = appendByteString(dst, reference[:])
-		dst = appendByteString(dst, blocks[reference].Data)
+		dst = appendByteString(dst, blocks.Blocks[reference].Data)
 	}
 	return dst
 }

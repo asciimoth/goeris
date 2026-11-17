@@ -8,12 +8,13 @@ import (
 
 	protocol "github.com/asciimoth/coaperation"
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 type sourceFunc func(eris.Reference) ([]byte, error)
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (function sourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (function sourceFunc) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	blockResult, blockErr := function(ref)
 	return blockResult, blockErr, eris.BlockOptions{}
 }
@@ -25,7 +26,7 @@ type storeFunc struct {
 
 type wrongReferenceStore struct{ eris.BlockSet }
 
-func (wrongReferenceStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, _ ...eris.Reference) (eris.Reference, error) {
+func (wrongReferenceStore) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, _ ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -36,26 +37,26 @@ func (wrongReferenceStore) PutBlock(ctx context.Context, block []byte, ttl eris.
 
 type permissiveStore struct{ writes *int }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (permissiveStore) GetBlock(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (permissiveStore) getBlock(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	return nil, eris.ErrMissingBlock, eris.BlockOptions{}
 }
 
-func (store permissiveStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, _ ...eris.Reference) (eris.Reference, error) {
+func (store permissiveStore) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, _ ...eris.Reference) (eris.Reference, error) {
 	(*store.writes)++
 	return eris.ReferenceOf(block)
 }
 
-func (store permissiveStore) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+func (store permissiveStore) updateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
 	return false, nil
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (store storeFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (store storeFunc) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	blockResult, blockErr := store.get(ref)
 	return blockResult, blockErr, eris.BlockOptions{}
 }
-func (store storeFunc) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
+func (store storeFunc) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	ref, err := eris.ReferenceOf(block)
 	if err != nil {
 		return eris.Reference{}, err
@@ -66,7 +67,7 @@ func (store storeFunc) PutBlock(ctx context.Context, block []byte, ttl eris.TTL,
 	return ref, store.put(ref, block)
 }
 
-func (store storeFunc) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+func (store storeFunc) updateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
 	return false, nil
 }
 
@@ -78,17 +79,17 @@ type contextStore struct {
 	put    bool
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (store *contextStore) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (store *contextStore) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	store.get = ctx.Value(store.key) == store.value
-	return store.blocks.GetBlock(ctx, ref, 0, eris.BlockOptions{})
+	return eris.GetBlock(ctx, store.blocks, ref, 0, eris.BlockOptions{})
 }
-func (store *contextStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
+func (store *contextStore) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	store.put = ctx.Value(store.key) == store.value
-	return store.blocks.PutBlock(ctx, block, 0, eris.BlockOptions{}, expected...)
+	return eris.PutBlock(ctx, store.blocks, block, 0, eris.BlockOptions{}, expected...)
 }
 
-func (store *contextStore) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+func (store *contextStore) updateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
 	return false, nil
 }
 
@@ -107,7 +108,7 @@ func serve(t *testing.T, handler protocol.Handler, request *protocol.Message) *p
 func TestHandlerGet(t *testing.T) {
 	t.Parallel()
 	block, ref := makeBlock(int(eris.BlockSize1KiB), 7)
-	blocks := eris.BlockSet{ref: {Data: append([]byte(nil), block...)}}
+	blocks := eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: append([]byte(nil), block...)}}}
 	handler := Handler{Path: []string{"store"}, Blocks: blocks}
 	store := mustStore(t, "coap://example/store")
 	request, _ := NewGetRequest(store, ref, RequestConfig{SizeHint: eris.BlockSize1KiB})
@@ -122,7 +123,7 @@ func TestHandlerGet(t *testing.T) {
 		t.Errorf("Max-Age = %d", age)
 	}
 	response.Payload[0]++
-	stored, _, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+	stored, _, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 	if !bytes.Equal(stored, block) {
 		t.Fatal("response aliases stored block")
 	}
@@ -152,7 +153,7 @@ func TestHandlerGet(t *testing.T) {
 			clone := addOption(request, protocol.UintOption(protocol.OptionHopLimit, 2))
 			return addOption(clone, protocol.UintOption(protocol.OptionHopLimit, 2))
 		}(), protocol.BadRequest},
-		{"missing", Handler{Path: []string{"store"}, Blocks: eris.BlockSet{}}, request, protocol.NotFound},
+		{"missing", Handler{Path: []string{"store"}, Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}}, request, protocol.NotFound},
 		{"source error", Handler{Path: []string{"store"}, Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, errors.New("store") })}, request, protocol.InternalServerError},
 		{"invalid stored block", Handler{Path: []string{"store"}, Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrInvalidBlock })}, request, protocol.InternalServerError},
 		{"wrong stored content", Handler{Path: []string{"store"}, Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return bytes.Repeat([]byte{0}, 1024), nil })}, request, protocol.InternalServerError},
@@ -173,19 +174,19 @@ func TestHandlerGet(t *testing.T) {
 func TestHandlerPut(t *testing.T) {
 	t.Parallel()
 	block, ref := makeBlock(int(eris.BlockSize1KiB), 8)
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	handler := Handler{Blocks: blocks, AllowPut: true}
 	store := mustStore(t, "coap://example/")
 	request, _ := NewPutRequest(store, block, RequestConfig{})
 	if response := serve(t, handler, request); response.Code != protocol.Created || !bytes.Equal(response.Payload, ref[:]) {
 		t.Fatalf("PUT response = %s, %x", response.Code, response.Payload)
 	}
-	stored, err, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+	stored, err, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 	if err != nil || !bytes.Equal(stored, block) {
 		t.Fatalf("stored block = %x, %v", stored, err)
 	}
 	request.Payload[0]++
-	stored, _, _ = blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+	stored, _, _ = eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 	if !bytes.Equal(stored, block) {
 		t.Fatal("sink retained request payload")
 	}
@@ -212,7 +213,7 @@ func TestHandlerPut(t *testing.T) {
 		{"bad size", handler, replaceOption(base, protocol.UintOption(protocol.OptionSize1, 2)), protocol.BadRequest},
 		{"query", handler, addOption(base, protocol.StringOption(protocol.OptionURIQuery, "unexpected")), protocol.BadRequest},
 		{"wrong reference", handler, wrongRequest, protocol.BadRequest},
-		{"sink reports wrong reference", Handler{Blocks: wrongReferenceStore{make(eris.BlockSet)}, AllowPut: true}, checkedRequest, protocol.InternalServerError},
+		{"sink reports wrong reference", Handler{Blocks: wrongReferenceStore{eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}}, AllowPut: true}, checkedRequest, protocol.InternalServerError},
 		{"short block", handler, func() *protocol.Message {
 			clone := base.Clone()
 			clone.Payload = []byte("short")
@@ -220,11 +221,11 @@ func TestHandlerPut(t *testing.T) {
 			return clone
 		}(), protocol.BadRequest},
 		{"missing error", Handler{Blocks: storeFunc{get: func(ref eris.Reference) ([]byte, error) {
-			blockResult, blockErr, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+			blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 			return blockResult, blockErr
 		}, put: func(eris.Reference, []byte) error { return eris.ErrMissingBlock }}, AllowPut: true}, base, protocol.NotFound},
 		{"sink error", Handler{Blocks: storeFunc{get: func(ref eris.Reference) ([]byte, error) {
-			blockResult, blockErr, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+			blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 			return blockResult, blockErr
 		}, put: func(eris.Reference, []byte) error { return errors.New("store") }}, AllowPut: true}, base, protocol.InternalServerError},
 	}
@@ -240,7 +241,7 @@ func TestHandlerPut(t *testing.T) {
 	if got := serve(t, unchecked, wrongRequest); got.Code != protocol.BadRequest || writes != 0 {
 		t.Fatalf("wrong reference: code = %s, writes = %d", got.Code, writes)
 	}
-	if got := serve(t, Handler{Blocks: wrongReferenceStore{make(eris.BlockSet)}, AllowPut: true}, base); got.Code != protocol.InternalServerError {
+	if got := serve(t, Handler{Blocks: wrongReferenceStore{eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}}, AllowPut: true}, base); got.Code != protocol.InternalServerError {
 		t.Fatalf("wrong returned reference without query: code = %s", got.Code)
 	}
 }
@@ -265,7 +266,7 @@ func TestHandlerRejectsUnassembledPut(t *testing.T) {
 		{Number: 31, More: false, Size: 1024},
 		{Number: 0, More: false, Size: 1024},
 	} {
-		blocks := make(eris.BlockSet)
+		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 		handler := Handler{Blocks: blocks, AllowPut: true}
 		request := baseWithoutOptions(t, store, block)
 		option, err := fragment.Option(protocol.OptionBlock1)
@@ -276,7 +277,7 @@ func TestHandlerRejectsUnassembledPut(t *testing.T) {
 		if response := serve(t, handler, request); response.Code != protocol.BadOption {
 			t.Errorf("fragment %+v: response = %s, want BadOption", fragment, response.Code)
 		}
-		if len(blocks) != 0 {
+		if len(blocks.Blocks) != 0 {
 			t.Fatal("stored a fragment as a complete ERIS block")
 		}
 	}
@@ -317,7 +318,7 @@ func TestHandlerContextNextAndValidation(t *testing.T) {
 	block, ref := makeBlock(int(eris.BlockSize1KiB), 9)
 	type contextKey struct{}
 	key := contextKey{}
-	storage := &contextStore{blocks: eris.BlockSet{ref: {Data: block}}, key: key, value: "value"}
+	storage := &contextStore{blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}}, key: key, value: "value"}
 	handler := Handler{Blocks: storage, AllowPut: true}
 	store := mustStore(t, "coap://example/")
 	get, _ := NewGetRequest(store, ref, RequestConfig{})
@@ -352,7 +353,7 @@ func TestHandlerContextNextAndValidation(t *testing.T) {
 
 func TestBlockWiseClientHandler(t *testing.T) {
 	t.Parallel()
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	server, err := (Handler{Blocks: blocks, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{BlockSize: 1024})
 	if err != nil {
 		t.Fatal(err)
@@ -366,10 +367,10 @@ func TestBlockWiseClientHandler(t *testing.T) {
 	}
 	for _, size := range []eris.BlockSize{eris.BlockSize1KiB, eris.BlockSize32KiB} {
 		block, ref := makeBlock(int(size), 11)
-		if _, err := client.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, ref); err != nil {
+		if _, err := eris.PutBlock(context.Background(), client, block, 0, eris.BlockOptions{}, ref); err != nil {
 			t.Fatal(err)
 		}
-		got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+		got, err, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{})
 		if err != nil || !bytes.Equal(got, block) {
 			t.Fatalf("GetBlock() = %x, %v", got, err)
 		}
@@ -415,4 +416,120 @@ func TestDirectHandlerRejectsBlock2BeforeStorage(t *testing.T) {
 	if called {
 		t.Fatal("unsupported Block2 reached storage")
 	}
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s sourceFunc) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s sourceFunc) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s wrongReferenceStore) BatchSize() int { return 1 }
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s wrongReferenceStore) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s permissiveStore) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s permissiveStore) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s permissiveStore) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions processes requests in order and returns the completed prefix.
+func (s permissiveStore) UpdateBlockOptions(ctx context.Context, requests []eris.BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s storeFunc) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s storeFunc) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s storeFunc) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions processes requests in order and returns the completed prefix.
+func (s storeFunc) UpdateBlockOptions(ctx context.Context, requests []eris.BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s *contextStore) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s *contextStore) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s *contextStore) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions processes requests in order and returns the completed prefix.
+func (s *contextStore) UpdateBlockOptions(ctx context.Context, requests []eris.BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
 }

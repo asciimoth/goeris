@@ -18,7 +18,7 @@ import (
 
 func TestHandlerHugeContentRanges(t *testing.T) {
 	// Fourteen stored blocks describe almost 4 EiB of decoded content.
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	node := make([]byte, int(eris.BlockSize1KiB))
 	node[0] = 0x80
 	var pair eris.Pair
@@ -28,7 +28,7 @@ func TestHandlerHugeContentRanges(t *testing.T) {
 			t.Fatal(err)
 		}
 		pair = next
-		blocks[pair.Reference] = eris.Block{Data: block}
+		blocks.Blocks[pair.Reference] = eris.Block{Data: block}
 		for offset := 0; offset < len(node); offset += eris.PairSize {
 			copy(node[offset:], pair.Reference[:])
 			copy(node[offset+32:], pair.Key[:])
@@ -124,7 +124,7 @@ func TestHandlerLimitsRangeCount(t *testing.T) {
 				calls := 0
 				handler := Handler{Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
 					calls++
-					blockResult, blockErr, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+					blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 					return blockResult, blockErr
 				})}
 				request := httptest.NewRequest(method, N2RPath+"?"+urn, nil)
@@ -199,7 +199,7 @@ func TestHandlerContentLimitAllowsEmptyContentAndBlockReads(t *testing.T) {
 		Handler{Blocks: blocks, MaxContentSize: 1}.ServeHTTP(response, request)
 		want := []byte(nil)
 		if urn == capability.Root.Reference.URN() {
-			want = blocks[capability.Root.Reference].Data
+			want = blocks.Blocks[capability.Root.Reference].Data
 		}
 		if response.Code != nethttp.StatusOK || !bytes.Equal(response.Body.Bytes(), want) {
 			t.Fatalf("%s: status %d, body %d bytes", urn, response.Code, response.Body.Len())
@@ -210,14 +210,14 @@ func TestHandlerContentLimitAllowsEmptyContentAndBlockReads(t *testing.T) {
 func TestHandlerLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	// Each parent repeats its child 16 times. A small block set can describe
 	// a huge decoded resource. The limit must stop the initial tree scan.
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	node := make([]byte, int(eris.BlockSize1KiB))
 	node[0] = 0x80
 	block, pair, err := eris.EncryptNode(node, eris.Secret{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocks[pair.Reference] = eris.Block{Data: block}
+	blocks.Blocks[pair.Reference] = eris.Block{Data: block}
 	for level := eris.Level(1); level <= 8; level++ {
 		for offset := 0; offset < len(node); offset += eris.PairSize {
 			copy(node[offset:], pair.Reference[:])
@@ -227,13 +227,13 @@ func TestHandlerLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		blocks[pair.Reference] = eris.Block{Data: block}
+		blocks.Blocks[pair.Reference] = eris.Block{Data: block}
 	}
 	capability := eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 8, Root: pair}
 	calls := 0
 	handler := Handler{MaxContentSize: 1024, Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
 		calls++
-		blockResult, blockErr, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+		blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 		return blockResult, blockErr
 	})}
 	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
@@ -256,7 +256,7 @@ func TestHandlerStopsCanceledTreeScan(t *testing.T) {
 		handler := Handler{Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
 			calls++
 			cancel()
-			blockResult, blockErr, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+			blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 			return blockResult, blockErr
 		})}
 		request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil).WithContext(ctx)

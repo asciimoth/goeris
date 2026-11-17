@@ -55,7 +55,7 @@ func TestHandlersRejectUnsupportedCriticalOptions(t *testing.T) {
 func TestHandlersIgnoreUnknownElectiveOptions(t *testing.T) {
 	t.Parallel()
 	block, ref := makeBlock(int(eris.BlockSize1KiB), 21)
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	handler := Handler{Blocks: blocks, AllowPut: true}
 	store := mustStore(t, "coap://example/")
 	put, _ := NewPutRequest(store, block, RequestConfig{})
@@ -77,7 +77,7 @@ func TestOriginHandlersRejectProxyURI(t *testing.T) {
 	store := mustStore(t, "coap://example/")
 	put, _ := NewPutRequest(store, block, RequestConfig{})
 	get, _ := NewGetRequest(store, ref, RequestConfig{})
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	wrapped, err := (Handler{Blocks: blocks, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestOriginHandlersRejectProxyURI(t *testing.T) {
 			if response := serve(t, test.handler, request); response.Code != protocol.BadOption {
 				t.Fatalf("response = %s, want BadOption", response.Code)
 			}
-			if len(blocks) != 0 || len(wrapped.transfers) != 0 {
+			if len(blocks.Blocks) != 0 || len(wrapped.transfers) != 0 {
 				t.Fatal("proxy request reached storage or retained transfer state")
 			}
 		})
@@ -124,7 +124,7 @@ func TestResponseMetadataLimits(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{}); err == nil {
+		if _, err, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{}); err == nil {
 			t.Fatal("invalid response metadata accepted")
 		}
 		if calls != 1 {
@@ -177,7 +177,7 @@ func TestOversizedTokensStopBeforeTransfer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err, _ = client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+			_, err, _ = eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{})
 			if size <= 8 && err != nil || size > 8 && !errors.Is(err, ErrResponseTooLarge) {
 				t.Fatalf("GET error = %v", err)
 			}
@@ -185,7 +185,7 @@ func TestOversizedTokensStopBeforeTransfer(t *testing.T) {
 				t.Fatalf("requests = %d; want 1", calls)
 			}
 
-			blocks := make(eris.BlockSet)
+			blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 			handler, err := (Handler{Blocks: blocks, AllowPut: true}).BlockWise(protocol.BlockWiseConfig{})
 			if err != nil {
 				t.Fatal(err)
@@ -196,11 +196,11 @@ func TestOversizedTokensStopBeforeTransfer(t *testing.T) {
 			put.Token = make([]byte, size)
 			response := serve(t, handler, put)
 			if size <= 8 {
-				if response.Code != protocol.Created || len(blocks) != 1 {
-					t.Fatalf("valid token: response = %v, stored = %d", response.Code, len(blocks))
+				if response.Code != protocol.Created || len(blocks.Blocks) != 1 {
+					t.Fatalf("valid token: response = %v, stored = %d", response.Code, len(blocks.Blocks))
 				}
-			} else if response.Code != protocol.BadRequest || len(blocks) != 0 || len(handler.transfers) != 0 {
-				t.Fatalf("oversized token: response = %v, stored = %d, transfers = %d", response.Code, len(blocks), len(handler.transfers))
+			} else if response.Code != protocol.BadRequest || len(blocks.Blocks) != 0 || len(handler.transfers) != 0 {
+				t.Fatalf("oversized token: response = %v, stored = %d, transfers = %d", response.Code, len(blocks.Blocks), len(handler.transfers))
 			}
 		})
 	}

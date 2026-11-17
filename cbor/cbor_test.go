@@ -49,24 +49,24 @@ func TestElementConstructorsAndAccessors(t *testing.T) {
 	}
 
 	validBlock, validReference := testBlock(t, eris.BlockSize1KiB, 2)
-	mapElement, err := NewBlockMap(eris.BlockSet{validReference: {Data: validBlock}})
+	mapElement, err := NewBlockMap(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{validReference: {Data: validBlock}}})
 	if err != nil || mapElement.Kind().String() != "block map" {
 		t.Fatalf("NewBlockMap() error = %v", err)
 	}
 	validBlock[0] ^= 0xff
 	gotMap, ok := mapElement.BlockMap()
-	if !ok || gotMap[validReference].Data[0] == validBlock[0] {
+	if !ok || gotMap.Blocks[validReference].Data[0] == validBlock[0] {
 		t.Fatal("block-map constructor did not copy input")
 	}
-	gotMap[validReference].Data[0] ^= 0xff
+	gotMap.Blocks[validReference].Data[0] ^= 0xff
 	againMap, _ := mapElement.BlockMap()
-	if bytes.Equal(gotMap[validReference].Data, againMap[validReference].Data) {
+	if bytes.Equal(gotMap.Blocks[validReference].Data, againMap.Blocks[validReference].Data) {
 		t.Fatal("BlockMap returned aliased data")
 	}
 	if _, ok := mapElement.Capability(); ok {
 		t.Fatal("Block-map element returned a capability")
 	}
-	if blocks, ok := referenceElement.BlockMap(); ok || blocks != nil {
+	if blocks, ok := referenceElement.BlockMap(); ok || blocks.Blocks != nil {
 		t.Fatal("Reference element returned a block map")
 	}
 
@@ -93,14 +93,14 @@ func TestConstructorsRejectInvalidValues(t *testing.T) {
 		t.Fatalf("NewCapability(zero) did not preserve the ERIS error: %v", err)
 	}
 	block, _ := testBlock(t, eris.BlockSize1KiB, 3)
-	if _, err := NewBlockMap(eris.BlockSet{{}: {Data: block}}); !errors.Is(err, ErrInvalidElement) {
+	if _, err := NewBlockMap(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{{}: {Data: block}}}); !errors.Is(err, ErrInvalidElement) {
 		t.Fatalf("NewBlockMap(bad reference) error = %v", err)
 	} else if !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Fatalf("NewBlockMap(bad reference) did not preserve the ERIS error: %v", err)
 	}
-	if element, err := NewBlockMap(nil); err != nil {
-		t.Fatalf("NewBlockMap(nil) error = %v", err)
-	} else if blocks, ok := element.BlockMap(); !ok || len(blocks) != 0 {
+	if element, err := NewBlockMap(eris.BlockSet{}); err != nil {
+		t.Fatalf("NewBlockMap(eris.BlockSet{}) error = %v", err)
+	} else if blocks, ok := element.BlockMap(); !ok || len(blocks.Blocks) != 0 {
 		t.Fatalf("BlockMap() = (%v, %v)", blocks, ok)
 	}
 }
@@ -168,17 +168,17 @@ func TestMarshalIsDeterministic(t *testing.T) {
 	t.Parallel()
 	firstBlock, firstReference := testBlock(t, eris.BlockSize1KiB, 5)
 	secondBlock, secondReference := testBlock(t, eris.BlockSize32KiB, 6)
-	first, err := NewBlockMap(eris.BlockSet{
+	first, err := NewBlockMap(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{
 		secondReference: {Data: secondBlock},
 		firstReference:  {Data: firstBlock},
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, _ := NewBlockMap(eris.BlockSet{
+	second, _ := NewBlockMap(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{
 		firstReference:  {Data: firstBlock},
 		secondReference: {Data: secondBlock},
-	})
+	}})
 	firstEncoding, _ := Marshal([]Element{first})
 	secondEncoding, _ := Marshal([]Element{second})
 	if !bytes.Equal(firstEncoding, secondEncoding) {
@@ -215,7 +215,7 @@ func TestUnmarshalFlexibleCBORForms(t *testing.T) {
 		t.Fatalf("valid non-preferred CBOR was rejected: %v", err)
 	}
 
-	mapElement, _ := NewBlockMap(eris.BlockSet{})
+	mapElement, _ := NewBlockMap(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 	encodedMap, _ := MarshalUntagged([]Element{mapElement})
 	encodedMap[1] = 0xbf
 	encodedMap = append(encodedMap, 0xff)
@@ -237,7 +237,7 @@ func TestUnmarshalFlexibleCBORForms(t *testing.T) {
 		t.Fatalf("Unmarshal(indefinite map) = (%v, %v)", len(decoded), err)
 	}
 	blocks, ok := decoded[0].BlockMap()
-	if !ok || !bytes.Equal(blocks[reference].Data, block) {
+	if !ok || !bytes.Equal(blocks.Blocks[reference].Data, block) {
 		t.Fatal("indefinite block map changed its key or value")
 	}
 }
@@ -363,7 +363,7 @@ func TestMarshalRejectsInvalidElements(t *testing.T) {
 	invalid := []Element{
 		{},
 		{kind: BlockKind, block: []byte{1}},
-		{kind: BlockMapKind, blockMap: eris.BlockSet{{}: {Data: make([]byte, eris.BlockSize1KiB)}}},
+		{kind: BlockMapKind, blockMap: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{{}: {Data: make([]byte, eris.BlockSize1KiB)}}}},
 		{kind: CapabilityKind},
 	}
 	encoders := []func([]Element) ([]byte, error){Marshal, MarshalUntagged, MarshalSelfDescribed, MarshalSequence, MarshalUntaggedSequence}
@@ -414,7 +414,7 @@ func testElements(t *testing.T) []Element {
 	block, reference := testBlock(t, eris.BlockSize1KiB, 4)
 	largeBlock, largeReference := testBlock(t, eris.BlockSize32KiB, 9)
 	blockElement, _ := NewBlock(block)
-	mapElement, _ := NewBlockMap(eris.BlockSet{largeReference: {Data: largeBlock}})
+	mapElement, _ := NewBlockMap(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{largeReference: {Data: largeBlock}}})
 	capability, _, err := eris.Encode([]byte("test content"), eris.Secret{}, eris.BlockSize1KiB)
 	if err != nil {
 		t.Fatal(err)

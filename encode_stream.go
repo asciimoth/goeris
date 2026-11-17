@@ -5,15 +5,18 @@ import (
 	"context"
 	"io"
 
+	"github.com/asciimoth/goeris/internal/batch"
 	"github.com/asciimoth/goeris/internal/streamio"
 )
 
 // EncodeContent reads content, encodes it with ERIS, and writes each encrypted
-// block to sink. It keeps only one content block and a bounded set of pending
-// tree pairs per level. The result matches Encode for the same bytes, secret,
-// and block size. Each write uses NoTTL and passes ctx unchanged. Cancellation
+// block to sink. It keeps at most 64 encrypted blocks (2 MiB) and a bounded
+// set of pending tree pairs per level. Batches respect the sink limit.
+// The result matches Encode for the same bytes, secret, and block size.
+// Each write uses NoTTL and passes ctx unchanged. Cancellation
 // is checked between input reads and block writes; it cannot stop a blocked
-// input Read. Each block write receives a copy of options.
+// input Read. Each block write receives a copy of options, with Root always
+// set to true for the capability's root block.
 //
 // Encoding stops at the first io.EOF, including EOF returned with data. Other
 // read errors are preserved. After 100 consecutive empty reads it returns
@@ -29,7 +32,7 @@ func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockS
 	if err := ctx.Err(); err != nil {
 		return Capability{}, err
 	}
-	encoder := treeEncoder{ctx: ctx, secret: secret, blockSize: blockSize, sink: sink, options: options}
+	encoder := treeEncoder{ctx: ctx, secret: secret, blockSize: blockSize, sink: sink, options: options, batchSize: batch.Limit(sink.BatchSize())}
 	ended := false
 	for {
 		if err := ctx.Err(); err != nil {
@@ -48,7 +51,12 @@ func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockS
 		if n < len(node) {
 			node[n] = 0x80
 		}
-		pair, err := putNode(ctx, node, secret, 0, sink, options)
+		encoder.ended = ended && n < len(node)
+		writeOptions := options
+		if encoder.ended && len(encoder.levels) == 0 {
+			writeOptions.Root = true
+		}
+		pair, err := encoder.putNode(node, 0, writeOptions)
 		if err != nil {
 			return Capability{}, err
 		}
@@ -88,19 +96,49 @@ func EncodeContentRecommended(ctx context.Context, content io.Reader, secret Sec
 	return EncodeContent(ctx, input, secret, ChooseBlockSize(n), sink, options)
 }
 
-func putNode(ctx context.Context, node []byte, secret Secret, level Level, sink BlockSink, options BlockOptions) (Pair, error) {
-	if err := ctx.Err(); err != nil {
+// putNode computes references locally so parent nodes can be built before the
+// pending batch is written. No capability is returned until flush succeeds.
+func (encoder *treeEncoder) putNode(node []byte, level Level, options BlockOptions) (Pair, error) {
+	if err := encoder.ctx.Err(); err != nil {
 		return Pair{}, err
 	}
-	block, key, err := EncryptNodeForStorage(node, secret, level)
+	block, key, err := EncryptNodeForStorage(node, encoder.secret, level)
 	if err != nil {
 		return Pair{}, err
 	}
-	ref, err := sink.PutBlock(ctx, block, NoTTL, options)
-	if err != nil {
-		return Pair{}, err
+	// Encryption has already checked the block length.
+	ref, _ := ReferenceOf(block)
+	encoder.writes = append(encoder.writes, PutBlockRequest{Data: block, TTL: NoTTL, Options: options, Expected: &ref})
+	if len(encoder.writes) >= encoder.batchSize {
+		if err := encoder.flush(); err != nil {
+			return Pair{}, err
+		}
 	}
 	return Pair{Reference: ref, Key: key}, nil
+}
+
+func (encoder *treeEncoder) flush() error {
+	if len(encoder.writes) == 0 {
+		return nil
+	}
+	if err := encoder.ctx.Err(); err != nil {
+		return err
+	}
+	refs, err := encoder.sink.PutBlock(encoder.ctx, encoder.writes)
+	if err != nil {
+		return err
+	}
+	if len(refs) != len(encoder.writes) {
+		return ErrInvalidBatchResult
+	}
+	for i, ref := range refs {
+		if ref != *encoder.writes[i].Expected {
+			return ErrInvalidBlock
+		}
+	}
+	clear(encoder.writes)
+	encoder.writes = encoder.writes[:0]
+	return nil
 }
 
 type treeEncoder struct {
@@ -110,6 +148,9 @@ type treeEncoder struct {
 	sink      BlockSink
 	options   BlockOptions
 	levels    [][]Pair
+	ended     bool
+	batchSize int
+	writes    []PutBlockRequest
 }
 
 func (encoder *treeEncoder) add(level int, pair Pair) error {
@@ -141,14 +182,24 @@ func (encoder *treeEncoder) parent(level int) (Pair, error) {
 		copy(node[offset:offset+32], pair.Reference[:])
 		copy(node[offset+32:offset+PairSize], pair.Key[:])
 	}
+	options := encoder.options
+	if encoder.ended {
+		if count, _, _ := encoder.pending(); count == len(encoder.levels[level]) {
+			// This parent contains all remaining pairs, so it is the root.
+			options.Root = true
+		}
+	}
 	encoder.levels[level] = encoder.levels[level][:0]
-	return putNode(encoder.ctx, node, encoder.secret, Level(level+1), encoder.sink, encoder.options)
+	return encoder.putNode(node, Level(level+1), options)
 }
 
 func (encoder *treeEncoder) finish() (Capability, error) {
 	for {
 		count, rootLevel, root := encoder.pending()
 		if count == 1 {
+			if err := encoder.flush(); err != nil {
+				return Capability{}, err
+			}
 			return Capability{BlockSize: encoder.blockSize, Level: Level(rootLevel), Root: root}, nil
 		}
 		level := 0

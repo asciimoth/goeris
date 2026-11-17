@@ -44,7 +44,7 @@ func lzipMember(t testing.TB, content []byte) []byte {
 
 func compressedImage(t testing.TB, data []byte, size int64) *FS {
 	t.Helper()
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddLzipFile(context.Background(), "file", bytes.NewReader(data), size, true); err != nil {
 		t.Fatal(err)
@@ -172,10 +172,10 @@ func TestLzipRejectsMalformedStreams(t *testing.T) {
 
 func TestLzipStorageErrors(t *testing.T) {
 	cap, _, _ := eris.Encode([]byte("missing"), eris.Secret{}, eris.BlockSize1KiB)
-	if _, err := openLzipFile(context.Background(), &node{capability: cap, source: make(eris.BlockSet)}); !errors.Is(err, eris.ErrMissingBlock) {
+	if _, err := openLzipFile(context.Background(), &node{capability: cap, source: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}}); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatal(err)
 	}
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddLzipFile(context.Background(), "file", strings.NewReader(""), -1, false); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatal(err)
@@ -214,7 +214,7 @@ func TestLzipIndependentVector(t *testing.T) {
 func TestOpenFileRejectsCompressionWithoutContentReads(t *testing.T) {
 	image := compressedImage(t, lzipMember(t, []byte("content")), 7)
 	// Metadata alone must establish that this file has no random access.
-	clear(image.source.(eris.BlockSet))
+	clear(image.source.(eris.BlockSet).Blocks)
 	if _, err := image.OpenFile(context.Background(), "file"); !errors.Is(err, ErrNotSeekable) {
 		t.Fatalf("OpenFile with unavailable compressed content: %v", err)
 	}

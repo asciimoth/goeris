@@ -9,7 +9,8 @@ import (
 	"net/url"
 
 	"github.com/asciimoth/goeris"
-	"github.com/asciimoth/goeris/internal/httppriority"
+	"github.com/asciimoth/goeris/internal/batch"
+	"github.com/asciimoth/goeris/internal/httpoptions"
 	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
@@ -39,7 +40,11 @@ const TTLHeader = httpttl.Header
 
 // HighPriorityHeader carries the optional true priority flag. A missing field
 // means false. It is sent on requests and read from block responses.
-const HighPriorityHeader = httppriority.Header
+const HighPriorityHeader = httpoptions.HighPriorityHeader
+
+// RootHeader carries the optional true root flag. A missing field means false.
+// It is sent on requests and read from block responses.
+const RootHeader = httpoptions.RootHeader
 
 // Error implements error.
 func (err *ResponseError) Error() string {
@@ -129,17 +134,17 @@ func (client *Client) Resolve(ctx context.Context, urn string, ttl eris.TTL) (*n
 	return response, nil
 }
 
-// GetBlock retrieves and verifies one encrypted ERIS block.
+// getBlock retrieves and verifies one encrypted ERIS block.
 // It requires a 200 OK response with the application/octet-stream media type.
 // Request and body read errors omit transport text but retain their causes.
 //
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (client *Client) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	request, err := client.NewRequest(ctx, ref.URN(), ttl)
 	if err != nil {
 		return nil, err, eris.BlockOptions{}
 	}
-	httppriority.Set(request.Header, HighPriorityHeader, options)
+	httpoptions.Set(request.Header, HighPriorityHeader, RootHeader, options)
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		return nil, &requestError{cause: err}, eris.BlockOptions{}
@@ -169,7 +174,7 @@ func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris
 	if err := eris.VerifyBlock(block, ref); err != nil {
 		return nil, err, eris.BlockOptions{}
 	}
-	return block, nil, httppriority.Parse(response.Header, HighPriorityHeader)
+	return block, nil, httpoptions.Parse(response.Header, HighPriorityHeader, RootHeader)
 }
 
 // OpenContent retrieves remotely decoded ERIS content. The caller must close
@@ -206,3 +211,18 @@ func cloneURL(input *url.URL) *url.URL {
 }
 
 var _ eris.BlockSource = (*Client)(nil)
+
+// BatchSize returns one. This transport has no batch operation or remote
+// limit discovery; one is the safe default.
+func (s *Client) BatchSize() int { return 1 }
+
+// GetBlock reads and verifies encrypted blocks, up to BatchSize requests.
+// It requires a 200 OK response with the application/octet-stream media type.
+// Missing blocks have zero result slots. Request and body read errors omit
+// transport text but retain their causes. See eris.BlockSource for error rules.
+func (s *Client) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}

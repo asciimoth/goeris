@@ -10,7 +10,7 @@ import (
 )
 
 func ExampleEncodeContentRecommended() {
-	store := make(eris.BlockSet) // Any BlockSink can receive the encoded tree.
+	store := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)} // Any BlockSink can receive the encoded tree.
 	capability, err := eris.EncodeContentRecommended(context.Background(), strings.NewReader("Hello, ERIS!"), eris.Secret{}, store, eris.BlockOptions{})
 	if err != nil {
 		panic(err)

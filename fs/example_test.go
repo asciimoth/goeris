@@ -12,7 +12,7 @@ import (
 )
 
 func ExampleBuilder() {
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddFile(context.Background(), "docs/readme", strings.NewReader("hello"), false); err != nil {
 		panic(err)
@@ -43,7 +43,7 @@ func ExampleBuilder() {
 }
 
 func ExampleFS_OpenFile() {
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddFile(context.Background(), "file", strings.NewReader("known length"), false); err != nil {
 		panic(err)
@@ -74,7 +74,7 @@ func ExampleFS_OpenFile() {
 }
 
 func ExampleBuilder_AddAutoFile() {
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	content := strings.Repeat("hello\n", 1024)
 	if err := builder.AddAutoFile(context.Background(), "notes", strings.NewReader(content), false); err != nil {
@@ -87,7 +87,7 @@ func ExampleBuilder_AddAutoFile() {
 
 func ExampleNewIOFS() {
 	ctx := context.Background()
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddFile(ctx, "hello", strings.NewReader("hello"), false); err != nil {
 		panic(err)

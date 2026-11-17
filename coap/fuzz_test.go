@@ -132,7 +132,7 @@ func FuzzHandler(f *testing.F) {
 		}
 		sortOptions(options)
 		request := &protocol.Message{Code: protocol.Code(code), Options: options, Payload: append([]byte(nil), payload...)}
-		handler := Handler{Blocks: make(eris.BlockSet), AllowPut: true}
+		handler := Handler{Blocks: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, AllowPut: true}
 		response, err := handler.ServeCOAP(context.Background(), request)
 		if err != nil || response == nil || !response.Code.IsResponse() {
 			t.Fatalf("response = %+v, %v", response, err)
@@ -178,9 +178,9 @@ func FuzzBlockWiseHandler(f *testing.F) {
 		if len(payload) > int(eris.BlockSize32KiB)+1 {
 			payload = payload[:int(eris.BlockSize32KiB)+1]
 		}
-		blocks := make(eris.BlockSet)
+		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 		download, reference := makeBlock(int(eris.BlockSize32KiB), 7)
-		blocks[reference] = eris.Block{Data: download}
+		blocks.Blocks[reference] = eris.Block{Data: download}
 		handler, err := (Handler{Blocks: blocks, AllowPut: true, MaxTransfers: 2}).BlockWise(protocol.BlockWiseConfig{})
 		if err != nil {
 			t.Fatal(err)
@@ -233,7 +233,7 @@ func FuzzBlockWiseHandler(f *testing.F) {
 				}
 			}
 		}
-		for ref, block := range blocks {
+		for ref, block := range blocks.Blocks {
 			if err := eris.VerifyBlock(block.Data, ref); err != nil {
 				t.Fatalf("invalid stored block: %v", err)
 			}
@@ -275,12 +275,12 @@ func FuzzClientResponse(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+		got, err, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{})
 		if err == nil && !bytes.Equal(got, block) {
 			t.Fatal("client accepted an incorrect block")
 		}
 		calls = 0
-		returned, err := client.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, ref)
+		returned, err := eris.PutBlock(context.Background(), client, block, 0, eris.BlockOptions{}, ref)
 		if err == nil && returned != ref {
 			t.Fatal("client accepted an incorrect write reference")
 		}

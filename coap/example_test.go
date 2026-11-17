@@ -10,7 +10,7 @@ import (
 )
 
 func ExampleClient() {
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	server := eriscoap.Handler{Blocks: blocks, AllowPut: true}
 	requester := eriscoap.RequesterFunc(func(ctx context.Context, request *protocol.Message) (*protocol.Message, error) {
 		return server.ServeCOAP(ctx, request)
@@ -20,10 +20,10 @@ func ExampleClient() {
 
 	encoded, encodedBlocks, _ := eris.Encode([]byte("hello"), eris.Secret{}, eris.BlockSize1KiB)
 	reference := encoded.Root.Reference
-	block, _, _ := encodedBlocks.GetBlock(context.Background(), reference, 0, eris.BlockOptions{})
+	block, _, _ := eris.GetBlock(context.Background(), encodedBlocks, reference, 0, eris.BlockOptions{})
 
-	_, _ = client.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, reference)
-	received, _, _ := client.GetBlock(context.Background(), reference, 0, eris.BlockOptions{})
+	_, _ = eris.PutBlock(context.Background(), client, block, 0, eris.BlockOptions{}, reference)
+	received, _, _ := eris.GetBlock(context.Background(), client, reference, 0, eris.BlockOptions{})
 	fmt.Println(len(received))
 	// Output: 1024
 }

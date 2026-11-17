@@ -20,7 +20,7 @@ func TestHTTPPriorityRoundTrip(t *testing.T) {
 			ctx := context.Background()
 			block := make([]byte, eris.BlockSize1KiB)
 			ref, _ := eris.ReferenceOf(block)
-			terminal := &priorityProbe{BlockSet: make(eris.BlockSet)}
+			terminal := &priorityProbe{BlockSet: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}}
 			target := eris.NewCombinedBlockStore(terminal)
 			header := erishttp.HighPriorityHeader
 			var handler http.Handler = erishttp.Handler{Blocks: target}
@@ -72,7 +72,7 @@ func TestHTTPPriorityRoundTrip(t *testing.T) {
 			// A lower-priority repeated write must not clear a stored high priority.
 			for _, putPriority := range []bool{false, true, false} {
 				wantRequest = putPriority
-				if _, err := sink.PutBlock(ctx, block, 0, eris.BlockOptions{HighPriority: putPriority}, ref); err != nil {
+				if _, err := eris.PutBlock(ctx, sink, block, 0, eris.BlockOptions{HighPriority: putPriority}, ref); err != nil {
 					t.Fatal(err)
 				}
 				if terminal.writes[len(terminal.writes)-1].HighPriority != putPriority {
@@ -81,7 +81,7 @@ func TestHTTPPriorityRoundTrip(t *testing.T) {
 				wantResponse = wantResponse || putPriority
 				for _, readPriority := range []bool{false, true} {
 					wantRequest = readPriority
-					data, err, options := client.GetBlock(ctx, ref, 0, eris.BlockOptions{HighPriority: readPriority})
+					data, err, options := eris.GetBlock(ctx, client, ref, 0, eris.BlockOptions{HighPriority: readPriority})
 					if err != nil || !bytes.Equal(data, block) || options.HighPriority != wantResponse {
 						t.Fatalf("get: %v, %v", err, options)
 					}
@@ -146,7 +146,7 @@ func TestHTTPPriorityOnReadError(t *testing.T) {
 				}
 				client = c
 			}
-			if _, err, options := client.GetBlock(context.Background(), eris.Reference{}, 0, eris.BlockOptions{HighPriority: true}); err == nil || options.HighPriority {
+			if _, err, options := eris.GetBlock(context.Background(), client, eris.Reference{}, 0, eris.BlockOptions{HighPriority: true}); err == nil || options.HighPriority {
 				t.Fatalf("%s status %d: %v, %v", transport, status, err, options)
 			}
 		}
@@ -159,9 +159,9 @@ func TestHTTPDecodedContentPriority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for ref, block := range blocks {
+	for ref, block := range blocks.Blocks {
 		block.Options.HighPriority = true
-		blocks[ref] = block
+		blocks.Blocks[ref] = block
 	}
 	for _, high := range []bool{false, true} {
 		terminal := &priorityProbe{BlockSet: blocks}

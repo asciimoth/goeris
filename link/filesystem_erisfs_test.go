@@ -24,10 +24,10 @@ func TestFSWithERISFSBase(t *testing.T) {
 			payload := patternedPayload(70*1024 + 29)
 			encoded, targets := encodeFSLink(t, payload)
 			emptyLink, emptyBlocks := encodeFSLink(t, nil)
-			for ref, block := range emptyBlocks {
-				targets[ref] = block
+			for ref, block := range emptyBlocks.Blocks {
+				targets.Blocks[ref] = block
 			}
-			baseBlocks := make(eris.BlockSet)
+			baseBlocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 			if shared {
 				baseBlocks = targets
 			}
@@ -198,7 +198,7 @@ func TestFSWithERISFSBaseErrors(t *testing.T) {
 		{"target source EOF", nil, io.EOF},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			baseBlocks := make(eris.BlockSet)
+			baseBlocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 			builder := erisfs.NewBuilder(baseBlocks, eris.Secret{}, eris.BlockOptions{})
 			if err := builder.AddFile(context.Background(), "file", bytes.NewReader(encoded), false); err != nil {
 				t.Fatal(err)

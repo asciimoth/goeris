@@ -19,7 +19,7 @@ func FuzzCBORLookup(f *testing.F) {
 	block := bytes.Repeat([]byte{42}, int(eris.BlockSize1KiB))
 	ref, _ := eris.ReferenceOf(block)
 	blockElement, _ := cbor.NewBlock(block)
-	mapElement, _ := cbor.NewBlockMap(eris.BlockSet{ref: {Data: block}})
+	mapElement, _ := cbor.NewBlockMap(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}})
 	largeElement, _ := cbor.NewBlock(make([]byte, eris.BlockSize32KiB))
 	capability, _, _ := eris.Encode([]byte("metadata"), eris.Secret{}, eris.BlockSize1KiB)
 	capElement, _ := cbor.NewCapability(capability)
@@ -84,8 +84,8 @@ func FuzzCBORLookup(f *testing.F) {
 					want = block
 					break
 				}
-			} else if blocks, ok := element.BlockMap(); ok && blocks[ref].Data != nil {
-				want = blocks[ref].Data
+			} else if blocks, ok := element.BlockMap(); ok && blocks.Blocks[ref].Data != nil {
+				want = blocks.Blocks[ref].Data
 				break
 			}
 		}

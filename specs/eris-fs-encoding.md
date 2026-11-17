@@ -56,8 +56,8 @@ In goeris, use `NewBuilder`, `AddFile` for every file, `AddSymlink` for each
 link, and `Finish`. No extra deterministic mode is needed:
 
 ```go
-blocks := make(eris.BlockSet)
-builder := erisfs.NewBuilder(blocks, eris.Secret{})
+blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 if err := builder.AddFile(ctx, "docs/readme", strings.NewReader("hello\n"), false); err != nil {
 	return err
 }

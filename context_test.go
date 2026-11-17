@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"testing"
+
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 type checkedContextStore struct {
@@ -16,16 +18,16 @@ type checkedContextStore struct {
 	cancel        context.CancelFunc
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (s *checkedContextStore) GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (s *checkedContextStore) getBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
 	s.t.Helper()
 	if ctx != s.want {
 		s.t.Fatal("read context changed")
 	}
 	s.reads++
-	return s.BlockSet.GetBlock(ctx, ref, ttl, BlockOptions{})
+	return GetBlock(ctx, s.BlockSet, ref, ttl, BlockOptions{})
 }
-func (s *checkedContextStore) PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, refs ...Reference) (Reference, error) {
+func (s *checkedContextStore) putBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, refs ...Reference) (Reference, error) {
 	s.t.Helper()
 	if ctx != s.want {
 		s.t.Fatal("write context changed")
@@ -34,14 +36,14 @@ func (s *checkedContextStore) PutBlock(ctx context.Context, block []byte, ttl TT
 	if s.cancel != nil {
 		s.cancel()
 	}
-	return s.BlockSet.PutBlock(ctx, block, ttl, BlockOptions{}, refs...)
+	return PutBlock(ctx, s.BlockSet, block, ttl, BlockOptions{}, refs...)
 }
 
 func TestStreamingContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	data := bytes.Repeat([]byte("context"), 6000)
-	store := &checkedContextStore{BlockSet: BlockSet{}, t: t, want: ctx}
+	store := &checkedContextStore{BlockSet: BlockSet{Blocks: map[Reference]Block{}}, t: t, want: ctx}
 	cap, err := EncodeContent(ctx, bytes.NewReader(data), Secret{}, BlockSize1KiB, store, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +84,7 @@ func TestStreamingContext(t *testing.T) {
 func TestEncodeStopsAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	store := &checkedContextStore{BlockSet: BlockSet{}, t: t, want: ctx, cancel: cancel}
+	store := &checkedContextStore{BlockSet: BlockSet{Blocks: map[Reference]Block{}}, t: t, want: ctx, cancel: cancel}
 	_, err := EncodeContent(ctx, bytes.NewReader(make([]byte, 3000)), Secret{}, BlockSize1KiB, store, BlockOptions{})
 	if !errors.Is(err, context.Canceled) || store.writes != 1 {
 		t.Fatalf("error %v, writes %d", err, store.writes)
@@ -121,11 +123,34 @@ func TestEncodeCancellationDuringInput(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			input := &cancelingInput{cancel: cancel}
-			blocks := BlockSet{}
+			blocks := BlockSet{Blocks: map[Reference]Block{}}
 			_, err := encode(ctx, input, blocks)
-			if !errors.Is(err, context.Canceled) || input.reads != 1 || len(blocks) != 0 {
-				t.Fatalf("error %v, input reads %d, blocks %d", err, input.reads, len(blocks))
+			if !errors.Is(err, context.Canceled) || input.reads != 1 || len(blocks.Blocks) != 0 {
+				t.Fatalf("error %v, input reads %d, blocks %d", err, input.reads, len(blocks.Blocks))
 			}
 		})
 	}
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s *checkedContextStore) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See BlockSource for error rules.
+func (s *checkedContextStore) GetBlock(ctx context.Context, requests []BlockRequest) ([]Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), ErrMissingBlock, func(r BlockRequest) (Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s *checkedContextStore) PutBlock(ctx context.Context, requests []PutBlockRequest) ([]Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r PutBlockRequest) (Reference, error) {
+		var expected []Reference
+		if r.Expected != nil {
+			expected = []Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
 }

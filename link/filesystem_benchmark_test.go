@@ -27,7 +27,7 @@ func BenchmarkFSOpen(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
-			files, err := NewFS(fstest.MapFS{"file": {Data: data}}, eris.BlockSet{}, eris.BlockOptions{})
+			files, err := NewFS(fstest.MapFS{"file": {Data: data}}, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, eris.BlockOptions{})
 			if err != nil {
 				b.Fatal(err)
 			}

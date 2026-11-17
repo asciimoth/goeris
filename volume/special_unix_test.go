@@ -33,7 +33,7 @@ func TestRejectFIFO(t *testing.T) {
 		if err := os.Rename(fifo, flat); err != nil {
 			t.Fatal(err)
 		}
-		if _, err, _ := v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, eris.ErrInvalidBlock) {
+		if _, err, _ := eris.GetBlock(context.Background(), v, ref, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, eris.ErrInvalidBlock) {
 			t.Fatalf("FIFO flat block: %v", err)
 		}
 		nested := filepath.Join(root, volume.BlockPath(ref))
@@ -44,7 +44,7 @@ func TestRejectFIFO(t *testing.T) {
 			t.Fatal(err)
 		}
 		writeFile(t, flat, block)
-		if _, err, _ := v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, eris.ErrInvalidBlock) {
+		if _, err, _ := eris.GetBlock(context.Background(), v, ref, eris.NoTTL, eris.BlockOptions{}); !errors.Is(err, eris.ErrInvalidBlock) {
 			t.Fatalf("FIFO canonical block bypassed: %v", err)
 		}
 		return
@@ -101,7 +101,7 @@ func TestFIFOReplacement(t *testing.T) {
 				if err == nil {
 					_ = opened.Close()
 				}
-				_, _, _ = v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{})
+				_, _, _ = eris.GetBlock(context.Background(), v, ref, eris.NoTTL, eris.BlockOptions{})
 			}
 			close(stop)
 			if err := <-done; err != nil {

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 func TestClientCancelsPartialResponse(t *testing.T) {
@@ -31,7 +32,7 @@ func TestClientCancelsPartialResponse(t *testing.T) {
 				defer close(stopped)
 				w.Header().Set("Content-Type", ContentType)
 				// Send only part of a block, then stall until cancellation.
-				_, _ = w.Write(blocks[capability.Root.Reference].Data[:16])
+				_, _ = w.Write(blocks.Blocks[capability.Root.Reference].Data[:16])
 				w.(nethttp.Flusher).Flush()
 				close(started)
 				select {
@@ -57,7 +58,7 @@ func TestClientCancelsPartialResponse(t *testing.T) {
 					result <- err
 					return
 				}
-				block, err, _ := client.GetBlock(ctx, capability.Root.Reference, 0, eris.BlockOptions{})
+				block, err, _ := eris.GetBlock(ctx, client, capability.Root.Reference, 0, eris.BlockOptions{})
 				if block != nil {
 					result <- errors.New("partial block accepted")
 					return
@@ -89,7 +90,7 @@ func TestClientCancelsPartialResponse(t *testing.T) {
 
 func TestHandlerAbortsFailedStream(t *testing.T) {
 	capability, blocks, _ := testData(t)
-	root, err := eris.DecryptNode(blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
+	root, err := eris.DecryptNode(blocks.Blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +105,7 @@ func TestHandlerAbortsFailedStream(t *testing.T) {
 					if ref == pairs[0].Reference {
 						return nil, sourceErr
 					}
-					blockResult, blockErr, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+					blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 					return blockResult, blockErr
 				})}
 				request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
@@ -144,7 +145,7 @@ func TestHandlerRejectsQuerySuffixesWithoutSourceAccess(t *testing.T) {
 
 func TestHandlerStreamFailureClosesResponse(t *testing.T) {
 	capability, blocks, _ := testData(t)
-	root, err := eris.DecryptNode(blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
+	root, err := eris.DecryptNode(blocks.Blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +157,7 @@ func TestHandlerStreamFailureClosesResponse(t *testing.T) {
 		if ref == pairs[0].Reference {
 			return nil, eris.ErrMissingBlock
 		}
-		blockResult, blockErr, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+		blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 		return blockResult, blockErr
 	})})
 	defer server.Close()
@@ -285,7 +286,7 @@ func TestClientBodyErrorsDoNotExposeServerText(t *testing.T) {
 			check(err)
 			check(content.Close())
 		} else {
-			block, err, _ := client.GetBlock(context.Background(), capability.Root.Reference, 0, eris.BlockOptions{})
+			block, err, _ := eris.GetBlock(context.Background(), client, capability.Root.Reference, 0, eris.BlockOptions{})
 			if block != nil {
 				t.Fatal("accepted a failed block read")
 			}
@@ -332,7 +333,7 @@ func TestClientRejectsMalformedTrailerWithoutExposingText(t *testing.T) {
 			_, err = io.ReadAll(body)
 			_ = body.Close()
 		} else {
-			_, err, _ = client.GetBlock(context.Background(), capability.Root.Reference, 0, eris.BlockOptions{})
+			_, err, _ = eris.GetBlock(context.Background(), client, capability.Root.Reference, 0, eris.BlockOptions{})
 		}
 		if err == nil || strings.Contains(err.Error(), privateText) {
 			t.Fatalf("decoded %v: unsafe trailer error: %v", decoded, err)
@@ -384,7 +385,7 @@ func TestClientRejectsUnexpectedSuccessStatus(t *testing.T) {
 	ref := capability.Root.Reference
 	base, _ := url.Parse("http://example.test")
 	for _, status := range []int{201, 202, 204, 206, 299} {
-		body := &trackingBody{Reader: bytes.NewReader(blocks[ref].Data)}
+		body := &trackingBody{Reader: bytes.NewReader(blocks.Blocks[ref].Data)}
 		client, err := NewClient(clientFunc(func(*nethttp.Request) (*nethttp.Response, error) {
 			res := response(status, ContentType, nil)
 			res.Body = body
@@ -393,7 +394,7 @@ func TestClientRejectsUnexpectedSuccessStatus(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		block, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+		block, err, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{})
 		var statusErr *ResponseError
 		if block != nil || !errors.As(err, &statusErr) || statusErr.StatusCode != status {
 			t.Fatalf("status %d: block %x, error %v", status, block, err)
@@ -435,7 +436,7 @@ func TestClientBoundsBlockResponseReads(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		block, err, _ := client.GetBlock(context.Background(), eris.Reference{}, 0, eris.BlockOptions{})
+		block, err, _ := eris.GetBlock(context.Background(), client, eris.Reference{}, 0, eris.BlockOptions{})
 		if block != nil || !errors.Is(err, ErrResponseTooLarge) || !body.closed {
 			t.Fatalf("length %d: block size %d, error %v, closed %v", length, len(block), err, body.closed)
 		}
@@ -472,7 +473,7 @@ func TestClientBoundsDecompressedBlockResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	block, err, _ := client.GetBlock(context.Background(), eris.Reference{}, 0, eris.BlockOptions{})
+	block, err, _ := eris.GetBlock(context.Background(), client, eris.Reference{}, 0, eris.BlockOptions{})
 	if block != nil || !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("block size %d, error %v", len(block), err)
 	}
@@ -480,8 +481,8 @@ func TestClientBoundsDecompressedBlockResponse(t *testing.T) {
 
 type contextSourceFunc func(context.Context, eris.Reference) ([]byte, error)
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (source contextSourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (source contextSourceFunc) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	blockResult, blockErr := source(ctx, ref)
 	return blockResult, blockErr, eris.BlockOptions{}
 }
@@ -504,7 +505,7 @@ func (writer failedStreamWriter) Write([]byte) (int, error) {
 
 func TestHandlerReturnsAfterMultipartWriteFailure(t *testing.T) {
 	capability, blocks, _ := testData(t)
-	root, err := eris.DecryptNode(blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
+	root, err := eris.DecryptNode(blocks.Blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +527,7 @@ func TestHandlerReturnsAfterMultipartWriteFailure(t *testing.T) {
 			close(finished)
 			return nil, ctx.Err()
 		}
-		blockResult, blockErr, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+		blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 		return blockResult, blockErr
 	})}
 	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil).WithContext(requestCtx)
@@ -584,7 +585,7 @@ func (writer multipartFailureWriter) Write(p []byte) (int, error) {
 
 func TestServerCancelsPendingMultipartRead(t *testing.T) {
 	capability, blocks, _ := testData(t)
-	root, err := eris.DecryptNode(blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
+	root, err := eris.DecryptNode(blocks.Blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +607,7 @@ func TestServerCancelsPendingMultipartRead(t *testing.T) {
 						defer close(finished)
 						return nil, ctx.Err()
 					}
-					blockResult, blockErr, _ := blocks.GetBlock(ctx, ref, 0, eris.BlockOptions{})
+					blockResult, blockErr, _ := eris.GetBlock(ctx, blocks, ref, 0, eris.BlockOptions{})
 					return blockResult, blockErr
 				})
 				handler := Handler{Blocks: source}
@@ -643,4 +644,16 @@ func TestServerCancelsPendingMultipartRead(t *testing.T) {
 			}
 		})
 	}
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s contextSourceFunc) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s contextSourceFunc) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
 }

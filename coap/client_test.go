@@ -13,7 +13,7 @@ import (
 func TestClient(t *testing.T) {
 	t.Parallel()
 	block, ref := makeBlock(int(eris.BlockSize1KiB), 12)
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	handler := Handler{Blocks: blocks, AllowPut: true}
 	requester := RequesterFunc(func(ctx context.Context, request *protocol.Message) (*protocol.Message, error) {
 		return handler.ServeCOAP(ctx, request)
@@ -22,19 +22,19 @@ func TestClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotRef, err := client.PutBlock(context.Background(), block, 0, eris.BlockOptions{}); err != nil || gotRef != ref {
+	if gotRef, err := eris.PutBlock(context.Background(), client, block, 0, eris.BlockOptions{}); err != nil || gotRef != ref {
 		t.Fatalf("PutBlock() = %v, %v", gotRef, err)
 	}
-	got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+	got, err, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{})
 	if err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
 	got[0]++
-	stored, _, _ := blocks.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+	stored, _, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 	if !bytes.Equal(stored, block) {
 		t.Fatal("client result aliases response")
 	}
-	if got, err, _ = client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{}); err != nil || len(got) != len(block) {
+	if got, err, _ = eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{}); err != nil || len(got) != len(block) {
 		t.Fatalf("GetBlock() = %d bytes, %v", len(got), err)
 	}
 }
@@ -66,7 +66,7 @@ func TestClientErrors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err, _ = client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+			_, err, _ = eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{})
 			var responseError *ResponseError
 			if _, isResponse := test.want.(*ResponseError); isResponse {
 				if !errors.As(err, &responseError) || responseError.Code != protocol.InternalServerError {
@@ -78,16 +78,16 @@ func TestClientErrors(t *testing.T) {
 		})
 	}
 
-	if _, err := (&Client{}).PutBlock(context.Background(), block, 0, eris.BlockOptions{}, ref); !errors.Is(err, ErrNilRequester) {
+	if _, err := eris.PutBlock(context.Background(), (&Client{}), block, 0, eris.BlockOptions{}, ref); !errors.Is(err, ErrNilRequester) {
 		t.Errorf("nil client PUT error = %v", err)
 	}
-	if _, err, _ := (*Client)(nil).GetBlock(context.Background(), ref, 0, eris.BlockOptions{}); !errors.Is(err, ErrNilRequester) {
+	if _, err, _ := eris.GetBlock(context.Background(), (*Client)(nil), ref, 0, eris.BlockOptions{}); !errors.Is(err, ErrNilRequester) {
 		t.Errorf("nil client GET error = %v", err)
 	}
 	client, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.Created, Payload: ref[:]}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if _, err := client.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, otherRef); !errors.Is(err, eris.ErrInvalidBlock) {
+	if _, err := eris.PutBlock(context.Background(), client, block, 0, eris.BlockOptions{}, otherRef); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Errorf("invalid PUT error = %v", err)
 	}
 	requests := 0
@@ -95,37 +95,37 @@ func TestClientErrors(t *testing.T) {
 		requests++
 		return &protocol.Message{Code: protocol.Created, Payload: ref[:]}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if _, err := checkedClient.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, otherRef); !errors.Is(err, eris.ErrInvalidBlock) || requests != 0 {
+	if _, err := eris.PutBlock(context.Background(), checkedClient, block, 0, eris.BlockOptions{}, otherRef); !errors.Is(err, eris.ErrInvalidBlock) || requests != 0 {
 		t.Errorf("mismatched expected reference sent %d requests, error = %v", requests, err)
 	}
 	wrongReferenceClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.Created, Payload: otherRef[:]}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if _, err := wrongReferenceClient.PutBlock(context.Background(), block, 0, eris.BlockOptions{}); !errors.Is(err, ErrInvalidReference) {
+	if _, err := eris.PutBlock(context.Background(), wrongReferenceClient, block, 0, eris.BlockOptions{}); !errors.Is(err, ErrInvalidReference) {
 		t.Errorf("wrong returned reference error = %v", err)
 	}
-	if _, err := wrongReferenceClient.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, ref); !errors.Is(err, ErrInvalidReference) {
+	if _, err := eris.PutBlock(context.Background(), wrongReferenceClient, block, 0, eris.BlockOptions{}, ref); !errors.Is(err, ErrInvalidReference) {
 		t.Errorf("wrong returned expected reference error = %v", err)
 	}
 	badRequestClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.BadRequest}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if _, err := badRequestClient.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, ref); !errors.Is(err, eris.ErrInvalidBlock) {
+	if _, err := eris.PutBlock(context.Background(), badRequestClient, block, 0, eris.BlockOptions{}, ref); !errors.Is(err, eris.ErrInvalidBlock) {
 		t.Errorf("rejected reference error = %v", err)
 	}
 	malformedClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.Created}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if gotRef, err := malformedClient.PutBlock(context.Background(), block, 0, eris.BlockOptions{}); err != nil || gotRef != ref {
+	if gotRef, err := eris.PutBlock(context.Background(), malformedClient, block, 0, eris.BlockOptions{}); err != nil || gotRef != ref {
 		t.Errorf("legacy response reference = %v, %v", gotRef, err)
 	}
-	if _, err := malformedClient.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, ref); !errors.Is(err, ErrInvalidReference) {
+	if _, err := eris.PutBlock(context.Background(), malformedClient, block, 0, eris.BlockOptions{}, ref); !errors.Is(err, ErrInvalidReference) {
 		t.Errorf("missing response reference with expectation error = %v", err)
 	}
 	shortResponseClient, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) {
 		return &protocol.Message{Code: protocol.Created, Payload: []byte{1}}, nil
 	}), mustStore(t, "coap://example/"), ClientConfig{})
-	if _, err := shortResponseClient.PutBlock(context.Background(), block, 0, eris.BlockOptions{}); !errors.Is(err, ErrInvalidReference) {
+	if _, err := eris.PutBlock(context.Background(), shortResponseClient, block, 0, eris.BlockOptions{}); !errors.Is(err, ErrInvalidReference) {
 		t.Errorf("short response reference error = %v", err)
 	}
 
@@ -140,7 +140,7 @@ func TestClientErrors(t *testing.T) {
 	}
 	for _, test := range putTests {
 		client, _ := NewClient(RequesterFunc(func(context.Context, *protocol.Message) (*protocol.Message, error) { return test.response, test.err }), mustStore(t, "coap://example/"), ClientConfig{})
-		_, err := client.PutBlock(context.Background(), block, 0, eris.BlockOptions{}, ref)
+		_, err := eris.PutBlock(context.Background(), client, block, 0, eris.BlockOptions{}, ref)
 		var responseError *ResponseError
 		if _, ok := test.want.(*ResponseError); ok {
 			if !errors.As(err, &responseError) || responseError.Code != protocol.Content {
@@ -176,7 +176,7 @@ func TestClientStopsOversizedBlockWiseResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{}); !errors.Is(err, ErrResponseTooLarge) {
+	if _, err, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{}); !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("oversized block-wise response error = %v", err)
 	}
 	if requests != 33 {
@@ -199,7 +199,7 @@ func TestClientRejectsOversizedSize2BeforeContinuation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err, _ := client.GetBlock(context.Background(), eris.Reference{}, 0, eris.BlockOptions{}); !errors.Is(err, ErrResponseTooLarge) {
+		if _, err, _ := eris.GetBlock(context.Background(), client, eris.Reference{}, 0, eris.BlockOptions{}); !errors.Is(err, ErrResponseTooLarge) {
 			t.Fatalf("Size2 %d: got %v, want ErrResponseTooLarge", size, err)
 		}
 		if calls != 1 {
@@ -222,8 +222,8 @@ func TestClientChecksCompleteResponseSize(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, getErr, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
-		_, putErr := client.PutBlock(context.Background(), block, 0, eris.BlockOptions{})
+		_, getErr, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{})
+		_, putErr := eris.PutBlock(context.Background(), client, block, 0, eris.BlockOptions{})
 		for _, result := range []struct {
 			name   string
 			length int
@@ -267,7 +267,7 @@ func TestClientLimitsTotalResponseOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{}); !errors.Is(err, ErrResponseTooLarge) {
+	if _, err, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{}); !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("total response options: %v", err)
 	}
 	if calls >= 64 {
@@ -308,7 +308,7 @@ func TestClientRejectsAmbiguousTransferResponses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{}); !errors.Is(err, ErrInvalidResponseOption) || calls != 1 {
+		if _, err, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{}); !errors.Is(err, ErrInvalidResponseOption) || calls != 1 {
 			t.Fatalf("options %+v: calls %d, error %v", options, calls, err)
 		}
 	}

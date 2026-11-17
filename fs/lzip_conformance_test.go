@@ -110,7 +110,7 @@ func TestLzipEncodingVectors(t *testing.T) {
 					t.Fatal("invalid Lzip trailer")
 				}
 			}
-			blocks := make(eris.BlockSet)
+			blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 			builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 			if err := builder.AddCompressedFile(context.Background(), "file", bytes.NewReader(content), false); err != nil {
 				t.Fatal(err)

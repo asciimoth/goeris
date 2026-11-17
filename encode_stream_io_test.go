@@ -72,7 +72,7 @@ func TestEncodeContentStopsAtEOFWithData(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := EncodeContent(context.Background(), &terminalEOFReader{data: content}, Secret{}, blockSize, make(BlockSet), BlockOptions{})
+			got, err := EncodeContent(context.Background(), &terminalEOFReader{data: content}, Secret{}, blockSize, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{})
 			if err != nil || got != want {
 				t.Errorf("size %d, block size %d: %v", size, blockSize, err)
 			}
@@ -88,40 +88,40 @@ func TestEncodeContentReadTermination(t *testing.T) {
 			t.Fatal(err)
 		}
 		source := &finalErrorReader{data: content, err: io.EOF}
-		got, err := EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, make(BlockSet), BlockOptions{})
+		got, err := EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{})
 		if err != nil || got != want {
 			t.Fatalf("EOF with %d bytes changed encoding: %v", size, err)
 		}
 		for _, cause := range []error{io.ErrUnexpectedEOF, errors.New("read error"), errors.Join(io.EOF, io.ErrUnexpectedEOF), fmt.Errorf("source failed: %w", io.EOF)} {
 			source = &finalErrorReader{data: content, err: cause}
-			if _, err := EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, make(BlockSet), BlockOptions{}); !errors.Is(err, cause) {
+			if _, err := EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, cause) {
 				t.Fatalf("%d bytes with %v: %v", size, cause, err)
 			}
 			source = &finalErrorReader{data: content, err: cause}
-			capability, err := EncodeContentRecommended(context.Background(), source, Secret{}, make(BlockSet), BlockOptions{})
+			capability, err := EncodeContentRecommended(context.Background(), source, Secret{}, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{})
 			if !errors.Is(err, cause) || capability != (Capability{}) {
 				t.Fatalf("recommended, %d bytes with %v: %v", size, cause, err)
 			}
 		}
 	}
-	if _, err := EncodeContent(context.Background(), noProgressReader{}, Secret{}, BlockSize1KiB, make(BlockSet), BlockOptions{}); !errors.Is(err, io.ErrNoProgress) {
+	if _, err := EncodeContent(context.Background(), noProgressReader{}, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("no progress: %v", err)
 	}
 	for _, size := range []int{0, 1 << 14} {
 		input := io.MultiReader(bytes.NewReader(make([]byte, size)), noProgressReader{})
-		if _, err := EncodeContentRecommended(context.Background(), input, Secret{}, make(BlockSet), BlockOptions{}); !errors.Is(err, io.ErrNoProgress) {
+		if _, err := EncodeContentRecommended(context.Background(), input, Secret{}, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, io.ErrNoProgress) {
 			t.Fatalf("recommended, no progress after %d bytes: %v", size, err)
 		}
 	}
 	content := []byte("temporary empty reads")
 	source := &intermittentReader{reader: bytes.NewReader(content), empty: 99}
-	cap, err := EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, make(BlockSet), BlockOptions{})
+	cap, err := EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{})
 	want, _, encodeErr := Encode(content, Secret{}, BlockSize1KiB)
 	if err != nil || encodeErr != nil || cap != want {
 		t.Fatalf("empty reads changed encoding: %v", err)
 	}
 	source = &intermittentReader{reader: bytes.NewReader(content), empty: 99}
-	cap, err = EncodeContentRecommended(context.Background(), source, Secret{}, make(BlockSet), BlockOptions{})
+	cap, err = EncodeContentRecommended(context.Background(), source, Secret{}, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{})
 	if err != nil || cap != want {
 		t.Fatalf("empty reads changed recommended encoding: %v", err)
 	}

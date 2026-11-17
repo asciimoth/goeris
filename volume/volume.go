@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 // ErrNotDirectory means that a write was requested for a regular file root.
@@ -91,15 +92,15 @@ func BlockPath(ref eris.Reference) string {
 	return filepath.Join(name[:3], name[3:6], name[6:9], name[9:])
 }
 
-// GetBlock reads and verifies a block. It tries the flat path only when the
+// getBlock reads and verifies a block. It tries the flat path only when the
 // canonical path is absent. For a file root, it searches the ERIS CBOR contents.
-// Missing blocks match eris.ErrMissingBlock. It ignores ttl and HighPriority.
+// Missing blocks match eris.ErrMissingBlock. It ignores ttl, HighPriority, and Root.
 // Returned block options are always zero.
 // It checks cancellation between file operations.
 // Cancellation cannot interrupt a file-system call that is already in progress.
 //
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (v *Volume) GetBlock(ctx context.Context, ref eris.Reference, _ eris.TTL, _ eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (v *Volume) getBlock(ctx context.Context, ref eris.Reference, _ eris.TTL, _ eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	if err := v.check(ctx); err != nil {
 		return nil, err, eris.BlockOptions{}
 	}
@@ -180,16 +181,16 @@ func (v *Volume) read(ctx context.Context, name string, ref eris.Reference) ([]b
 	return block, nil
 }
 
-// PutBlock verifies and stores a block at its canonical path. An existing
+// putBlock verifies and stores a block at its canonical path. An existing
 // file at that path is replaced. Flat files are left in place.
 // A regular file root returns ErrNotDirectory and is never changed.
 // It syncs the block before rename and the directories afterward where supported.
 // A directory-sync error can be returned after the complete block is visible.
-// It ignores ttl and block options, including HighPriority, and checks
+// It ignores ttl and block options, including HighPriority and Root, and checks
 // cancellation between file operations.
 // Cancellation cannot interrupt a file-system call that is already in progress.
 // Once the final rename starts, the block can be stored despite cancellation.
-func (v *Volume) PutBlock(ctx context.Context, block []byte, _ eris.TTL, _ eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
+func (v *Volume) putBlock(ctx context.Context, block []byte, _ eris.TTL, _ eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	if err := v.check(ctx); err != nil {
 		return eris.Reference{}, err
 	}
@@ -237,9 +238,9 @@ func (v *Volume) PutBlock(ctx context.Context, block []byte, _ eris.TTL, _ eris.
 	return ref, nil
 }
 
-// UpdateBlockOptions does nothing because block options are not supported.
-// It always returns false, nil, without checking context or TTL.
-func (v *Volume) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+// updateBlockOptions does nothing because block options are not supported.
+// The batch entry point checks cancellation before each request.
+func (v *Volume) updateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
 	return false, nil
 }
 
@@ -298,3 +299,41 @@ var (
 	_ eris.BlockStore = (*Volume)(nil)
 	_ io.Closer       = (*Volume)(nil)
 )
+
+// BatchSize returns one. Volume performs one file operation at a time.
+func (s *Volume) BatchSize() int { return 1 }
+
+// GetBlock reads and verifies blocks, up to BatchSize requests. It tries the
+// flat path only when the canonical path is absent. For a file root, it searches
+// the ERIS CBOR contents. Missing blocks have zero result slots and an error
+// that matches eris.ErrMissingBlock. It ignores TTL and request options;
+// returned options are zero. Cancellation cannot interrupt a file-system call.
+func (s *Volume) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock verifies and stores blocks at their canonical paths, up to
+// BatchSize requests. Existing files are replaced; flat files remain unchanged.
+// A file root returns ErrNotDirectory. It syncs each block before rename and
+// directories afterward where supported. A sync error or cancellation can be
+// returned after a block is visible. TTL and storage options are ignored.
+func (s *Volume) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions returns false for each request because volume storage
+// does not support block options. It checks cancellation before each request.
+func (s *Volume) UpdateBlockOptions(ctx context.Context, requests []eris.BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
+}

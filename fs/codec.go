@@ -9,6 +9,7 @@ import (
 )
 
 // EncodeIndex encodes a canonical ERIS-FS index and writes its ERIS blocks.
+// The encoder always sets BlockOptions.Root on the index root block.
 // It validates the index before checking the sink. A nil sink returns
 // ErrInvalidEntry.
 func EncodeIndex(ctx context.Context, index Index, secret eris.Secret, sink eris.BlockSink, options eris.BlockOptions) (eris.Capability, error) {

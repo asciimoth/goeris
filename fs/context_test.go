@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 type contextBlocks struct {
@@ -21,8 +22,8 @@ type contextBlocks struct {
 	reads, writes int
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (s *contextBlocks) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (s *contextBlocks) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	s.t.Helper()
 	if ctx != s.want {
 		s.t.Fatal("read context changed")
@@ -31,9 +32,9 @@ func (s *contextBlocks) GetBlock(ctx context.Context, ref eris.Reference, ttl er
 	if err := ctx.Err(); err != nil {
 		return nil, err, eris.BlockOptions{}
 	}
-	return s.BlockSet.GetBlock(ctx, ref, ttl, eris.BlockOptions{})
+	return eris.GetBlock(ctx, s.BlockSet, ref, ttl, eris.BlockOptions{})
 }
-func (s *contextBlocks) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, refs ...eris.Reference) (eris.Reference, error) {
+func (s *contextBlocks) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, refs ...eris.Reference) (eris.Reference, error) {
 	s.t.Helper()
 	if ctx != s.want {
 		s.t.Fatal("write context changed")
@@ -42,13 +43,13 @@ func (s *contextBlocks) PutBlock(ctx context.Context, block []byte, ttl eris.TTL
 	if err := ctx.Err(); err != nil {
 		return eris.Reference{}, err
 	}
-	return s.BlockSet.PutBlock(ctx, block, ttl, eris.BlockOptions{}, refs...)
+	return eris.PutBlock(ctx, s.BlockSet, block, ttl, eris.BlockOptions{}, refs...)
 }
 
 func contextImage(t *testing.T) (eris.Capability, eris.BlockSet) {
 	t.Helper()
 	ctx := context.Background()
-	blocks := eris.BlockSet{}
+	blocks := eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}
 	nested := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := nested.AddFile(ctx, "file", strings.NewReader("payload"), false); err != nil {
 		t.Fatal(err)
@@ -163,7 +164,7 @@ func TestIOFSContextAndSub(t *testing.T) {
 }
 
 func TestDirectoryEntryRetainsContext(t *testing.T) {
-	blocks := eris.BlockSet{}
+	blocks := eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}
 	data := bytes.Repeat([]byte("metadata"), 500)
 	cap, err := eris.EncodeContent(context.Background(), bytes.NewReader(data), eris.Secret{}, eris.BlockSize1KiB, blocks, eris.BlockOptions{})
 	if err != nil {
@@ -221,7 +222,7 @@ func TestDirectoryEntryRetainsContext(t *testing.T) {
 func TestBuilderContexts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	store := &contextBlocks{BlockSet: eris.BlockSet{}, t: t, want: ctx}
+	store := &contextBlocks{BlockSet: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, t: t, want: ctx}
 	builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	for name, add := range map[string]func(context.Context, string, io.Reader, bool) error{
 		"file": builder.AddFile, "compressed": builder.AddCompressedFile, "auto": builder.AddAutoFile,
@@ -287,7 +288,7 @@ func TestBuilderCancellationDuringInput(t *testing.T) {
 			for _, cancelAt := range []int{1, 2} {
 				ctx, cancel := context.WithCancel(context.Background())
 				input := &cancelingInput{cancel: cancel, cancelAt: cancelAt}
-				builder := NewBuilder(eris.BlockSet{}, eris.Secret{}, eris.BlockOptions{})
+				builder := NewBuilder(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, eris.Secret{}, eris.BlockOptions{})
 				err := add(builder, ctx, input)
 				cancel()
 				if !errors.Is(err, context.Canceled) || input.reads != cancelAt || len(builder.Index().Entries) != 0 {
@@ -300,8 +301,8 @@ func TestBuilderCancellationDuringInput(t *testing.T) {
 
 type sourceWithContext func(context.Context, eris.Reference, eris.TTL) ([]byte, error)
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (source sourceWithContext) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (source sourceWithContext) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	blockResult, blockErr := source(ctx, ref, ttl)
 	return blockResult, blockErr, eris.BlockOptions{}
 }
@@ -317,7 +318,7 @@ func TestNestedIndexWaitCanBeCanceled(t *testing.T) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}
-		blockResult, blockErr, _ := blocks.GetBlock(ctx, ref, ttl, eris.BlockOptions{})
+		blockResult, blockErr, _ := eris.GetBlock(ctx, blocks, ref, ttl, eris.BlockOptions{})
 		return blockResult, blockErr
 	})
 	image, err := OpenFS(context.Background(), capability, source, eris.BlockOptions{})
@@ -358,4 +359,39 @@ func TestNestedIndexWaitCanBeCanceled(t *testing.T) {
 	if data, err := image.ReadFile(context.Background(), "nested/file"); err != nil || string(data) != "payload" {
 		t.Fatalf("retry: %q, %v", data, err)
 	}
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s *contextBlocks) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s *contextBlocks) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s *contextBlocks) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s sourceWithContext) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s sourceWithContext) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
 }

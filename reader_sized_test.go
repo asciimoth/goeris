@@ -117,7 +117,7 @@ func TestSizedReaderRandomAccessCostAndCacheBound(t *testing.T) {
 }
 
 func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
-	blocks := make(BlockSet)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
 	cap := Capability{BlockSize: BlockSize1KiB}
 	for _, test := range []struct {
 		cap    Capability
@@ -167,7 +167,7 @@ func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
 	}
 	// Empty-file reads still check the sole padding block.
 	empty, emptyBlocks, _ := Encode(nil, Secret{}, BlockSize1KiB)
-	reader, _ = NewReaderWithSize(context.Background(), empty, make(BlockSet), 0, BlockOptions{})
+	reader, _ = NewReaderWithSize(context.Background(), empty, BlockSet{Blocks: make(map[Reference]Block)}, 0, BlockOptions{})
 	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, ErrMissingBlock) {
 		t.Fatal(err)
 	}
@@ -183,14 +183,14 @@ func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
 		t.Fatalf("padding fetch: %d, %v", n, err)
 	}
 	// A missing root must fail when checking EOF as well as on a normal read.
-	reader, _ = NewReaderWithSize(context.Background(), cap, make(BlockSet), 1024, BlockOptions{})
+	reader, _ = NewReaderWithSize(context.Background(), cap, BlockSet{Blocks: make(map[Reference]Block)}, 1024, BlockOptions{})
 	if _, err := reader.ReadAt(make([]byte, 1), 1024); !errors.Is(err, ErrMissingBlock) {
 		t.Fatal(err)
 	}
 }
 
 func TestSizedReaderRejectsMalformedVisitedTree(t *testing.T) {
-	blocks := make(BlockSet)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
 	leaf := make([]byte, 1024)
 	leaf[0] = 0x80
 	pair, err := storeTestNode(leaf, Secret{}, 0, blocks)
@@ -217,7 +217,7 @@ func TestSizedReaderRejectsMalformedVisitedTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := blocks.PutBlock(context.Background(), encrypted, 0, BlockOptions{})
+	ref, err := PutBlock(context.Background(), blocks, encrypted, 0, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestReaderSizeOverflow(t *testing.T) {
 		level Level
 		want  error
 	}{{14, ErrInvalidTree}, {16, ErrInvalidNode}} {
-		blocks := make(BlockSet)
+		blocks := BlockSet{Blocks: make(map[Reference]Block)}
 		leaf := make([]byte, 1024)
 		leaf[0] = 0x80
 		pair, err := storeTestNode(leaf, Secret{}, 0, blocks)

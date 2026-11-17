@@ -112,7 +112,7 @@ func TestOpenDefaultChain(t *testing.T) {
 	chain = openChain(t, "")
 	block, ref := testBlock(t, eris.BlockSize1KiB, 92)
 	writeFile(t, filepath.Join(paths[1], ref.String()), block)
-	got, err, _ := chain.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{})
+	got, err, _ := eris.GetBlock(context.Background(), chain, ref, eris.NoTTL, eris.BlockOptions{})
 	if err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("read from default cache: length %d, %v", len(got), err)
 	}

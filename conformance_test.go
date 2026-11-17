@@ -61,13 +61,13 @@ func TestERISOfficialVectors(t *testing.T) {
 		if err := json.NewDecoder(archive).Decode(&vector); err != nil {
 			t.Fatal(err)
 		}
-		blocks := make(BlockSet)
+		blocks := BlockSet{Blocks: make(map[Reference]Block)}
 		for ref, data := range vector.Blocks {
 			reference, err := ParseReference(ref)
 			if err != nil {
 				t.Fatal(err)
 			}
-			blocks[reference] = Block{Data: decode(data)}
+			blocks.Blocks[reference] = Block{Data: decode(data)}
 		}
 		capability, err := ParseURN(vector.URN)
 		if err != nil {
@@ -104,12 +104,16 @@ func TestERISOfficialVectors(t *testing.T) {
 				t.Fatal("invalid vector secret")
 			}
 			secret := Secret(secretBytes)
+			// The vectors define block bytes, not storage metadata.
+			root := blocks.Blocks[capability.Root.Reference]
+			root.Options.Root = true
+			blocks.Blocks[capability.Root.Reference] = root
 			actualCap, actualBlocks, err := Encode(content, secret, BlockSize(vector.Size))
 			if err != nil || actualCap != capability || !reflect.DeepEqual(actualBlocks, blocks) {
 				t.Fatalf("Encode differs from official capability or blocks: %v", err)
 			}
 			for _, chunk := range []int{37, 32768} {
-				actualBlocks = make(BlockSet)
+				actualBlocks = BlockSet{Blocks: make(map[Reference]Block)}
 				actualCap, err = EncodeContent(context.Background(), smallChunkReader{bytes.NewReader(content), chunk}, secret, BlockSize(vector.Size), actualBlocks, BlockOptions{})
 				if err != nil || actualCap != capability || !reflect.DeepEqual(actualBlocks, blocks) {
 					t.Fatalf("EncodeContent chunk %d differs from official capability or blocks: %v", chunk, err)

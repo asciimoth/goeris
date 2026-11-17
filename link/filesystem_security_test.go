@@ -66,7 +66,7 @@ func TestFSRejectsInvalidEntryNames(t *testing.T) {
 					t.Fatal(err)
 				}
 				base.entries = []fs.DirEntry{namedEntry{DirEntry: fs.FileInfoToDirEntry(info), name: name}}
-				wrapped := newLinkFS(t, base, eris.BlockSet{})
+				wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 				readDir := func() ([]fs.DirEntry, error) {
 					return wrapped.ReadDir(context.Background(), "dir")
 				}
@@ -102,7 +102,7 @@ func TestFSReadDirPartialResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	base.entries = []fs.DirEntry{fs.FileInfoToDirEntry(info)}
-	wrapped := newLinkFS(t, base, eris.BlockSet{})
+	wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 	file, err := wrapped.Open(context.Background(), "dir")
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +139,7 @@ func TestFSRejectsNilDirectoryEntries(t *testing.T) {
 			if mode == "fallback" {
 				source = openFSFunc(base.Open)
 			}
-			wrapped := newLinkFS(t, source, eris.BlockSet{})
+			wrapped := newLinkFS(t, source, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 			readDir := func() ([]fs.DirEntry, error) {
 				return wrapped.ReadDir(context.Background(), "dir")
 			}
@@ -174,7 +174,7 @@ func TestFSReadDirSortsWithoutChangingBaseEntries(t *testing.T) {
 	}
 	base := &entryFS{FS: files, entries: []fs.DirEntry{entries[1], entries[0]}}
 	for _, source := range []fs.FS{base, openFSFunc(base.Open)} {
-		got, err := newLinkFS(t, source, eris.BlockSet{}).ReadDir(context.Background(), "dir")
+		got, err := newLinkFS(t, source, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}).ReadDir(context.Background(), "dir")
 		if err != nil || len(got) != 2 || got[0].Name() != "a" || got[1].Name() != "z" {
 			t.Fatalf("ReadDir order: %v, %v", got, err)
 		}
@@ -203,7 +203,7 @@ func TestFSKeepsCheckedEntryNamesAndTypes(t *testing.T) {
 		}
 		entry := &changingEntry{DirEntry: fs.FileInfoToDirEntry(info), name: "file"}
 		base := &entryFS{FS: files, entries: []fs.DirEntry{entry}}
-		wrapped := newLinkFS(t, base, eris.BlockSet{})
+		wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 		readDir := func() ([]fs.DirEntry, error) {
 			return wrapped.ReadDir(context.Background(), "dir")
 		}
@@ -283,7 +283,7 @@ func TestFSStatDoesNotOpenSpecialFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		base := &metadataFS{info: info}
-		wrapped := newLinkFS(t, base, eris.BlockSet{})
+		wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 		for _, stat := range []func(context.Context, string) (fs.FileInfo, error){wrapped.Stat, wrapped.Lstat} {
 			got, err := stat(context.Background(),
 
@@ -297,7 +297,7 @@ func TestFSStatDoesNotOpenSpecialFiles(t *testing.T) {
 
 func TestFSStatValidatesBeforeBaseAccess(t *testing.T) {
 	base := &metadataFS{err: fs.ErrNotExist}
-	wrapped := newLinkFS(t, base, eris.BlockSet{})
+	wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 	if _, err := wrapped.Stat(context.Background(), "../secret"); !errors.Is(err, fs.ErrInvalid) {
 		t.Fatalf("invalid path: %v", err)
 	}
@@ -375,7 +375,7 @@ func TestFSEntryInfoPreservesBaseChecks(t *testing.T) {
 					return baseFiles.Lstat("dir/file")
 				},
 			}}
-			wrapped := newLinkFS(t, base, eris.BlockSet{})
+			wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 			readDir := func() ([]fs.DirEntry, error) {
 				return wrapped.ReadDir(context.Background(), "dir")
 			}

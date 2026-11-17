@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
-	"github.com/asciimoth/goeris/internal/httppriority"
+	"github.com/asciimoth/goeris/internal/httpoptions"
 	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
@@ -74,12 +74,12 @@ func (handler Handler) serveBlock(writer nethttp.ResponseWriter, request *nethtt
 		writeSourceError(writer, err)
 		return
 	}
-	block, err, options := handler.Blocks.GetBlock(request.Context(), ref, ttl, httppriority.Parse(request.Header, HighPriorityHeader))
+	block, err, options := eris.GetBlock(request.Context(), handler.Blocks, ref, ttl, httpoptions.Parse(request.Header, HighPriorityHeader, RootHeader))
 	if err != nil {
 		writeSourceError(writer, err)
 		return
 	}
-	httppriority.Set(writer.Header(), HighPriorityHeader, options)
+	httpoptions.Set(writer.Header(), HighPriorityHeader, RootHeader, options)
 	setResourceHeaders(writer)
 	nethttp.ServeContent(writer, request, "", time.Time{}, bytes.NewReader(block))
 }
@@ -98,7 +98,7 @@ func (handler Handler) serveContent(writer nethttp.ResponseWriter, request *neth
 	if limit == 0 {
 		limit = -1
 	}
-	reader, err := eris.NewReaderWithLimit(request.Context(), capability, handler.Blocks, limit, ttl, httppriority.Parse(request.Header, HighPriorityHeader))
+	reader, err := eris.NewReaderWithLimit(request.Context(), capability, handler.Blocks, limit, ttl, httpoptions.Parse(request.Header, HighPriorityHeader, RootHeader))
 	if err != nil {
 		if errors.Is(err, eris.ErrDecodedTooLarge) {
 			writer.WriteHeader(nethttp.StatusRequestEntityTooLarge)

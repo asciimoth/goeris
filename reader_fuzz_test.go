@@ -62,13 +62,13 @@ func FuzzTreeShape(f *testing.F) {
 		if len(counts) > 16 {
 			t.Skip()
 		}
-		blocks := make(BlockSet)
+		blocks := BlockSet{Blocks: make(map[Reference]Block)}
 		store := func(node []byte, level Level) Pair {
 			block, pair, err := EncryptNode(node, Secret{}, level)
 			if err != nil {
 				t.Fatal(err)
 			}
-			blocks[pair.Reference] = Block{Data: block}
+			blocks.Blocks[pair.Reference] = Block{Data: block}
 			return pair
 		}
 		putPair := func(node []byte, index int, pair Pair) {

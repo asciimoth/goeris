@@ -7,6 +7,8 @@ import (
 	"io"
 	"reflect"
 	"testing"
+
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 func TestEncodeContentMatchesCoreEncoder(t *testing.T) {
@@ -18,7 +20,7 @@ func TestEncodeContentMatchesCoreEncoder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			blocks := make(BlockSet)
+			blocks := BlockSet{Blocks: make(map[Reference]Block)}
 			gotCap, err := EncodeContent(context.Background(), bytes.NewReader(content), Secret{1, 2, 3}, size, blocks, BlockOptions{})
 			if err != nil || gotCap != wantCap || !reflect.DeepEqual(blocks, wantBlocks) {
 				t.Fatalf("size %d length %d mismatch: %v", size, length, err)
@@ -34,7 +36,7 @@ func TestIncrementalEncoderMatchesMultiLevelCoreTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocks := make(BlockSet)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
 	gotCap, err := EncodeContent(context.Background(), bytes.NewReader(content), Secret{9}, BlockSize1KiB, blocks, BlockOptions{})
 	if err != nil || gotCap != wantCap || !reflect.DeepEqual(blocks, wantBlocks) {
 		t.Fatalf("multi-level encoding mismatch: %v", err)
@@ -43,16 +45,16 @@ func TestIncrementalEncoderMatchesMultiLevelCoreTree(t *testing.T) {
 
 func TestEncodeContentErrors(t *testing.T) {
 	sentinel := errors.New("sentinel")
-	if _, err := EncodeContent(context.Background(), nil, Secret{}, BlockSize1KiB, make(BlockSet), BlockOptions{}); !errors.Is(err, ErrInvalidInput) {
+	if _, err := EncodeContent(context.Background(), nil, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("nil reader error = %v", err)
 	}
 	if _, err := EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, BlockSize1KiB, nil, BlockOptions{}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("nil sink error = %v", err)
 	}
-	if _, err := EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, 1, make(BlockSet), BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
+	if _, err := EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, 1, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Fatalf("invalid size error = %v", err)
 	}
-	if _, err := EncodeContent(context.Background(), errorReader{sentinel}, Secret{}, BlockSize1KiB, make(BlockSet), BlockOptions{}); !errors.Is(err, sentinel) {
+	if _, err := EncodeContent(context.Background(), errorReader{sentinel}, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, sentinel) {
 		t.Fatalf("reader error = %v", err)
 	}
 	if _, err := EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, BlockSize1KiB, errorSink{sentinel}, BlockOptions{}); !errors.Is(err, sentinel) {
@@ -70,17 +72,17 @@ func TestEncodeContentErrors(t *testing.T) {
 	if _, err := EncodeContent(context.Background(), bytes.NewReader(make([]byte, BlockSize1KiB*15)), Secret{}, BlockSize1KiB, &countingSink{failAt: 17, err: sentinel}, BlockOptions{}); !errors.Is(err, sentinel) {
 		t.Fatalf("final leaf parent sink error = %v", err)
 	}
-	if _, err := putNode(context.Background(), nil, Secret{}, 0, make(BlockSet), BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
+	if _, err := (&treeEncoder{ctx: context.Background()}).putNode(nil, 0, BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Fatalf("invalid node error = %v", err)
 	}
-	encoder := treeEncoder{blockSize: BlockSize1KiB, sink: make(BlockSet)}
+	encoder := treeEncoder{blockSize: BlockSize1KiB, sink: BlockSet{Blocks: make(map[Reference]Block)}}
 	if err := encoder.add(256, Pair{}); !errors.Is(err, ErrInvalidTree) {
 		t.Fatalf("excessive encoder level error = %v", err)
 	}
 	if _, err := encoder.parent(255); !errors.Is(err, ErrInvalidTree) {
 		t.Fatalf("excessive parent level error = %v", err)
 	}
-	if _, err := NewReader(context.Background(), Capability{}, make(BlockSet), BlockOptions{}); !errors.Is(err, ErrInvalidCapability) {
+	if _, err := NewReader(context.Background(), Capability{}, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, ErrInvalidCapability) {
 		t.Fatalf("invalid capability error = %v", err)
 	}
 }
@@ -98,7 +100,7 @@ func TestEncodeContentRecommended(t *testing.T) {
 			&terminalEOFReader{data: content},
 			smallChunkReader{Reader: bytes.NewReader(content), max: 37},
 		} {
-			blocks := make(BlockSet)
+			blocks := BlockSet{Blocks: make(map[Reference]Block)}
 			got, err := EncodeContentRecommended(context.Background(), input, secret, blocks, BlockOptions{})
 			if err != nil || got != want || !reflect.DeepEqual(blocks, wantBlocks) {
 				t.Fatalf("size %d, input %T: capability or blocks differ: %v", size, input, err)
@@ -111,7 +113,7 @@ func TestEncodeContentRecommendedErrors(t *testing.T) {
 	for _, input := range []io.Reader{nil, bytes.NewReader(nil)} {
 		var sink BlockSink
 		if input == nil {
-			sink = make(BlockSet)
+			sink = BlockSet{Blocks: make(map[Reference]Block)}
 		}
 		if _, err := EncodeContentRecommended(context.Background(), input, Secret{}, sink, BlockOptions{}); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("nil input or sink: %v", err)
@@ -140,7 +142,7 @@ type countingSink struct {
 	err    error
 }
 
-func (sink *countingSink) PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, _ ...Reference) (Reference, error) {
+func (sink *countingSink) putBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, _ ...Reference) (Reference, error) {
 	sink.calls++
 	if sink.calls == sink.failAt {
 		return Reference{}, sink.err
@@ -148,7 +150,7 @@ func (sink *countingSink) PutBlock(ctx context.Context, block []byte, ttl TTL, o
 	return ReferenceOf(block)
 }
 
-func (sink *countingSink) UpdateBlockOptions(context.Context, Reference, TTL, BlockOptions) (bool, error) {
+func (sink *countingSink) updateBlockOptions(context.Context, Reference, TTL, BlockOptions) (bool, error) {
 	return false, nil
 }
 
@@ -158,10 +160,52 @@ func (reader errorReader) Read([]byte) (int, error) { return 0, reader.err }
 
 type errorSink struct{ err error }
 
-func (sink errorSink) PutBlock(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error) {
+func (sink errorSink) putBlock(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error) {
 	return Reference{}, sink.err
 }
 
-func (sink errorSink) UpdateBlockOptions(context.Context, Reference, TTL, BlockOptions) (bool, error) {
+func (sink errorSink) updateBlockOptions(context.Context, Reference, TTL, BlockOptions) (bool, error) {
 	return false, nil
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s *countingSink) BatchSize() int { return 1 }
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s *countingSink) PutBlock(ctx context.Context, requests []PutBlockRequest) ([]Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r PutBlockRequest) (Reference, error) {
+		var expected []Reference
+		if r.Expected != nil {
+			expected = []Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions processes requests in order and returns the completed prefix.
+func (s *countingSink) UpdateBlockOptions(ctx context.Context, requests []BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s errorSink) BatchSize() int { return 1 }
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s errorSink) PutBlock(ctx context.Context, requests []PutBlockRequest) ([]Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r PutBlockRequest) (Reference, error) {
+		var expected []Reference
+		if r.Expected != nil {
+			expected = []Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions processes requests in order and returns the completed prefix.
+func (s errorSink) UpdateBlockOptions(ctx context.Context, requests []BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
 }

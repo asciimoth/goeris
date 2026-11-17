@@ -8,7 +8,8 @@ import (
 	"net/http"
 
 	"github.com/asciimoth/goeris"
-	"github.com/asciimoth/goeris/internal/httppriority"
+	"github.com/asciimoth/goeris/internal/batch"
+	"github.com/asciimoth/goeris/internal/httpoptions"
 	"github.com/asciimoth/goeris/internal/httpttl"
 )
 
@@ -27,7 +28,11 @@ const TTLHeader = httpttl.Header
 
 // HighPriorityHeader carries the optional true priority flag. A missing field
 // means false. It is sent on requests and read from block responses.
-const HighPriorityHeader = httppriority.S3Header
+const HighPriorityHeader = httpoptions.S3HighPriorityHeader
+
+// RootHeader carries the optional true root flag. A missing field means false.
+// It is sent on requests and read from block responses.
+const RootHeader = httpoptions.S3RootHeader
 
 // Client reads and writes ERIS blocks in one S3 bucket.
 type Client struct {
@@ -100,7 +105,7 @@ func (client *Client) newRequest(ctx context.Context, method string, ref eris.Re
 	if err := httpttl.Set(request.Header, ttl); err != nil {
 		return nil, err
 	}
-	httppriority.Set(request.Header, HighPriorityHeader, options)
+	httpoptions.Set(request.Header, HighPriorityHeader, RootHeader, options)
 	if client.signer != nil {
 		if err := client.signer.Sign(request, block); err != nil {
 			return nil, err
@@ -109,10 +114,10 @@ func (client *Client) newRequest(ctx context.Context, method string, ref eris.Re
 	return request, nil
 }
 
-// GetBlock retrieves and verifies one block.
+// getBlock retrieves and verifies one block.
 //
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (client *Client) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	request, err := client.newRequest(ctx, http.MethodGet, ref, nil, ttl, true, options)
 	if err != nil {
 		return nil, err, eris.BlockOptions{}
@@ -139,11 +144,11 @@ func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris
 	if err := eris.VerifyBlock(block, ref); err != nil {
 		return nil, err, eris.BlockOptions{}
 	}
-	return block, nil, httppriority.Parse(response.Header, HighPriorityHeader)
+	return block, nil, httpoptions.Parse(response.Header, HighPriorityHeader, RootHeader)
 }
 
-// PutBlock stores one block and returns its reference.
-func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
+// putBlock stores one block and returns its reference.
+func (client *Client) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	if client == nil || client.httpClient == nil {
 		return eris.Reference{}, ErrNilHTTPClient
 	}
@@ -180,10 +185,10 @@ func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, 
 	return ref, nil
 }
 
-// UpdateBlockOptions does nothing because this transport has no explicit
+// updateBlockOptions does nothing because this transport has no explicit
 // options-update operation. PutBlock can send options with a block.
-// It always returns false, nil, without checking context or TTL.
-func (client *Client) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+// The batch entry point checks cancellation before each request.
+func (client *Client) updateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
 	return false, nil
 }
 
@@ -192,3 +197,38 @@ func responseError(response *http.Response) error {
 }
 
 var _ eris.BlockStore = (*Client)(nil)
+
+// BatchSize returns one. This transport has no batch operation or remote
+// limit discovery; one is the safe default.
+func (s *Client) BatchSize() int { return 1 }
+
+// GetBlock reads and verifies encrypted blocks, up to BatchSize requests.
+// Each result includes the stored options. Missing blocks have zero result slots.
+func (s *Client) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock verifies and stores encrypted blocks, up to BatchSize requests.
+// Each Expected reference, when set, must match its block. Request options
+// are sent as object metadata.
+func (s *Client) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions returns false for each request because this transport
+// has no explicit options-update operation. It checks cancellation before each
+// request. PutBlock can send options with a block.
+func (s *Client) UpdateBlockOptions(ctx context.Context, requests []eris.BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
+}

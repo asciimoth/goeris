@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base32"
 	"errors"
+
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 const (
@@ -125,29 +127,37 @@ type Pair struct {
 }
 
 // BlockSet is an in-memory set of encrypted blocks, indexed by reference.
+// Initialize Blocks before writes. A nil Blocks map is readable but rejects
+// writes with ErrMissingBlock. Copies of a BlockSet share the same map.
 // Encode owns the slices in the set. Decode does not modify them. Concurrent
 // reads are safe only while no caller changes the map or its blocks.
-// BlockSet is a terminal store and ignores TTL and context cancellation for
-// reads and writes. Its operations complete in memory. Puts keep the highest
-// HighPriority value; explicit option updates can raise or lower it.
-type BlockSet map[Reference]Block
+// BlockSet is a terminal store and ignores TTL. It checks cancellation before
+// each request. Puts preserve true HighPriority and Root flags. Explicit
+// option updates can set or clear them.
+type BlockSet struct {
+	// Blocks holds encrypted data and options. Initialize it before writes.
+	Blocks map[Reference]Block
+	// MaxBatchSize optionally limits batches for tests and debugging.
+	// Zero accepts any batch size. Negative values use the safe limit of one.
+	MaxBatchSize int
+}
 
 // Block holds encrypted block data and its storage options. Direct map writes
 // replace the data and options together; omitted options are zero.
-// Use BlockSet.PutBlock to copy and verify the data and to preserve the highest
-// priority on repeated writes.
+// Use BlockSet.PutBlock to copy and verify the data and to preserve true
+// flags on repeated writes.
 type Block struct {
 	Data    []byte
 	Options BlockOptions
 }
 
-// GetBlock verifies and returns a copy of the encrypted block for ref. The map
+// getBlock verifies and returns a copy of the encrypted block for ref. The map
 // can be changed directly, so each read checks the reference. It returns stored
 // options and ignores request options.
 //
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (s BlockSet) GetBlock(_ context.Context, ref Reference, _ TTL, _ BlockOptions) ([]byte, error, BlockOptions) {
-	block, ok := s[ref]
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (s BlockSet) getBlock(_ context.Context, ref Reference, _ TTL, _ BlockOptions) ([]byte, error, BlockOptions) {
+	block, ok := s.Blocks[ref]
 	if !ok {
 		return nil, ErrMissingBlock, BlockOptions{}
 	}
@@ -157,11 +167,11 @@ func (s BlockSet) GetBlock(_ context.Context, ref Reference, _ TTL, _ BlockOptio
 	return append([]byte(nil), block.Data...), nil, block.Options
 }
 
-// PutBlock stores a copy of an encrypted block and returns its reference. It
+// putBlock stores a copy of an encrypted block and returns its reference. It
 // rejects a block that does not match an optional expected reference. Repeated
-// puts keep HighPriority true if either the stored or supplied value is true.
-func (s BlockSet) PutBlock(_ context.Context, block []byte, _ TTL, options BlockOptions, expected ...Reference) (Reference, error) {
-	if s == nil {
+// puts keep each flag true if either the stored or supplied value is true.
+func (s BlockSet) putBlock(_ context.Context, block []byte, _ TTL, options BlockOptions, expected ...Reference) (Reference, error) {
+	if s.Blocks == nil {
 		return Reference{}, ErrMissingBlock
 	}
 	ref, err := ReferenceOf(block)
@@ -171,25 +181,26 @@ func (s BlockSet) PutBlock(_ context.Context, block []byte, _ TTL, options Block
 	if len(expected) > 1 || len(expected) == 1 && expected[0] != ref {
 		return Reference{}, ErrInvalidBlock
 	}
-	options.HighPriority = options.HighPriority || s[ref].Options.HighPriority
-	s[ref] = Block{Data: append([]byte(nil), block...), Options: options}
+	options.HighPriority = options.HighPriority || s.Blocks[ref].Options.HighPriority
+	options.Root = options.Root || s.Blocks[ref].Options.Root
+	s.Blocks[ref] = Block{Data: append([]byte(nil), block...), Options: options}
 	return ref, nil
 }
 
-// UpdateBlockOptions replaces the options of an existing block. It can raise
-// or lower priority. It returns false if the block is absent or unchanged.
-// Like GetBlock and PutBlock, it ignores context cancellation and TTL.
-func (s BlockSet) UpdateBlockOptions(_ context.Context, ref Reference, _ TTL, options BlockOptions) (bool, error) {
-	block, ok := s[ref]
+// updateBlockOptions replaces the options of an existing block. It can set
+// or clear either flag. It returns false if the block is absent or unchanged.
+// The batch entry point checks cancellation before each request.
+func (s BlockSet) updateBlockOptions(_ context.Context, ref Reference, _ TTL, options BlockOptions) (bool, error) {
+	block, ok := s.Blocks[ref]
 	if !ok || block.Options == options {
 		return false, nil
 	}
 	block.Options = options
-	s[ref] = block
+	s.Blocks[ref] = block
 	return true, nil
 }
 
-var _ BlockStore = BlockSet(nil)
+var _ BlockStore = BlockSet{}
 
 var base32Encoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
@@ -231,4 +242,43 @@ func ChooseBlockSize(contentLength int) BlockSize {
 		return BlockSize1KiB
 	}
 	return BlockSize32KiB
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s BlockSet) BatchSize() int {
+	if s.MaxBatchSize < 0 {
+		return 1
+	}
+	return s.MaxBatchSize
+}
+
+// GetBlock verifies each reference and returns a copy of each available block
+// with its stored options. It ignores TTL and request options. Missing blocks
+// have zero result slots and do not stop later reads.
+func (s BlockSet) GetBlock(ctx context.Context, requests []BlockRequest) ([]Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), ErrMissingBlock, func(r BlockRequest) (Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock verifies and copies each block. Each Expected reference, when set,
+// must match its block. Repeated writes preserve true HighPriority and Root
+// flags. It ignores TTL and stops at the first error.
+func (s BlockSet) PutBlock(ctx context.Context, requests []PutBlockRequest) ([]Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r PutBlockRequest) (Reference, error) {
+		var expected []Reference
+		if r.Expected != nil {
+			expected = []Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions replaces stored options, including clearing flags. Each
+// result is false for an absent or unchanged block. It ignores TTL.
+func (s BlockSet) UpdateBlockOptions(ctx context.Context, requests []BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
 }

@@ -71,7 +71,7 @@ type decodeInspector struct {
 }
 
 func (inspector *decodeInspector) node(pair Pair, level Level) ([]byte, error) {
-	block, ok := inspector.blocks[pair.Reference]
+	block, ok := inspector.blocks.Blocks[pair.Reference]
 	if !ok {
 		return nil, ErrMissingBlock
 	}
@@ -156,7 +156,7 @@ func paddedContentLength(node []byte) (int, error) {
 }
 
 func decodeNode(pair Pair, level Level, blockSize BlockSize, blocks BlockSet, root bool) ([]byte, int64, error) {
-	block, ok := blocks[pair.Reference]
+	block, ok := blocks.Blocks[pair.Reference]
 	if !ok {
 		return nil, 0, ErrMissingBlock
 	}

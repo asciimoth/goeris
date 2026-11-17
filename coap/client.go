@@ -7,6 +7,7 @@ import (
 
 	protocol "github.com/asciimoth/coaperation"
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 // ClientConfig controls block requests. Its zero value uses raw references,
@@ -17,6 +18,9 @@ type ClientConfig struct {
 	// responses. It is disabled by default. Use only in coordinated experiments;
 	// RFC 7252 does not permit operational use of experimental option numbers.
 	ExperimentalHighPriority bool
+	// ExperimentalRoot enables option 65052 for root block hints. It is
+	// disabled by default and is only for coordinated experiments.
+	ExperimentalRoot bool
 	// Request controls URI-query, size-hint, and proxy options.
 	Request RequestConfig
 	// Transfer controls single-message and RFC 7959 block-wise transfers.
@@ -50,10 +54,10 @@ func NewClient(requester protocol.Requester, store StoreURL, config ClientConfig
 	return &Client{requester: requester, store: store, config: config}, nil
 }
 
-// GetBlock retrieves and verifies one encrypted block.
+// getBlock retrieves and verifies one encrypted block.
 //
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (client *Client) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	if client == nil || client.requester == nil {
 		return nil, ErrNilRequester, eris.BlockOptions{}
 	}
@@ -66,6 +70,7 @@ func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris
 		return nil, err, eris.BlockOptions{}
 	}
 	setPriority(request, options, client.config.ExperimentalHighPriority)
+	setRoot(request, options, client.config.ExperimentalRoot)
 	response, err := protocol.RequestBody(ctx, &limitedRequester{
 		requester: client.requester, remaining: int(eris.BlockSize32KiB), remainingOptions: MaxTransferResponseOptionSize,
 	}, request, client.config.Transfer)
@@ -88,13 +93,13 @@ func (client *Client) GetBlock(ctx context.Context, ref eris.Reference, ttl eris
 	if err := eris.VerifyBlock(block, ref); err != nil {
 		return nil, err, eris.BlockOptions{}
 	}
-	return block, nil, priorityOptions(response, client.config.ExperimentalHighPriority)
+	return block, nil, blockOptions(response, client.config.ExperimentalHighPriority, client.config.ExperimentalRoot)
 }
 
-// PutBlock stores one encrypted block and returns its reference. If an
+// putBlock stores one encrypted block and returns its reference. If an
 // older server returns no reference, it computes the reference locally when
 // no expected reference was supplied.
-func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
+func (client *Client) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, expected ...eris.Reference) (eris.Reference, error) {
 	if client == nil || client.requester == nil {
 		return eris.Reference{}, ErrNilRequester
 	}
@@ -125,6 +130,7 @@ func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, 
 		sortOptions(request.Options)
 	}
 	setPriority(request, options, client.config.ExperimentalHighPriority)
+	setRoot(request, options, client.config.ExperimentalRoot)
 	response, err := protocol.RequestBody(ctx, &limitedRequester{
 		requester: client.requester, remaining: int(eris.BlockSize32KiB), remainingOptions: MaxTransferResponseOptionSize,
 	}, request, client.config.Transfer)
@@ -154,10 +160,10 @@ func (client *Client) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, 
 	return ref, nil
 }
 
-// UpdateBlockOptions does nothing because ERIS over CoAP has no explicit
-// options-update operation. PutBlock can send experimental priority hints.
-// It always returns false, nil, without checking context or TTL.
-func (client *Client) UpdateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
+// updateBlockOptions does nothing because ERIS over CoAP has no explicit
+// options-update operation. PutBlock can send experimental priority and root hints.
+// The batch entry point checks cancellation before each request.
+func (client *Client) updateBlockOptions(context.Context, eris.Reference, eris.TTL, eris.BlockOptions) (bool, error) {
 	return false, nil
 }
 
@@ -233,3 +239,39 @@ func (requester *limitedRequester) Request(ctx context.Context, request *protoco
 }
 
 var _ eris.BlockStore = (*Client)(nil)
+
+// BatchSize returns one. This transport has no batch operation or remote
+// limit discovery; one is the safe default.
+func (s *Client) BatchSize() int { return 1 }
+
+// GetBlock reads and verifies encrypted blocks, up to BatchSize requests.
+// Each result includes the stored options supported by the configured
+// extensions. Missing blocks have zero result slots.
+func (s *Client) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock stores encrypted blocks, up to BatchSize requests. Each Expected
+// reference, when set, must match its block. If an older server returns no
+// reference, the client computes it locally when no Expected value was supplied.
+func (s *Client) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions returns false for each request because this transport
+// has no explicit options-update operation. It checks cancellation before each
+// request. PutBlock can send experimental priority and root hints.
+func (s *Client) UpdateBlockOptions(ctx context.Context, requests []eris.BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
+}

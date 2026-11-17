@@ -3,6 +3,8 @@ package eris
 import (
 	"context"
 	"errors"
+
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 // ErrNoBlockStorage means that no entry in a CombinedBlockStore supports the
@@ -70,20 +72,27 @@ func NewCombinedBlockStore(stores ...any) *CombinedBlockStore {
 	combined := &CombinedBlockStore{}
 	for index, entry := range stores {
 		if source, ok := entry.(BlockSource); ok {
-			combined.get = append(combined.get, combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions)]{index, source.GetBlock})
+			//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+			combined.get = append(combined.get, combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions)]{index, func(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
+				return GetBlock(ctx, source, ref, ttl, options)
+			}})
 		}
 		if sink, ok := entry.(BlockSink); ok {
-			combined.update = append(combined.update, combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) (bool, error)]{index, sink.UpdateBlockOptions})
-			combined.put = append(combined.put, combinedBlockMethod[func(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error)]{index, sink.PutBlock})
+			combined.update = append(combined.update, combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) (bool, error)]{index, func(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) (bool, error) {
+				return UpdateBlockOptions(ctx, sink, ref, ttl, options)
+			}})
+			combined.put = append(combined.put, combinedBlockMethod[func(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error)]{index, func(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expected ...Reference) (Reference, error) {
+				return PutBlock(ctx, sink, block, ttl, options, expected...)
+			}})
 		}
 	}
 	return combined
 }
 
-// GetBlock tries each source until a read succeeds. It passes ctx unchanged.
+// getBlock tries each source until a read succeeds. It passes ctx unchanged.
 //
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (store *CombinedBlockStore) GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (store *CombinedBlockStore) getBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
 	type result struct {
 		block   []byte
 		options BlockOptions
@@ -95,18 +104,15 @@ func (store *CombinedBlockStore) GetBlock(ctx context.Context, ref Reference, tt
 	return got.block, err, got.options
 }
 
-// PutBlock tries each sink until a write succeeds. It passes ctx unchanged.
-func (store *CombinedBlockStore) PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expected ...Reference) (Reference, error) {
+// putBlock tries each sink until a write succeeds. It passes ctx unchanged.
+func (store *CombinedBlockStore) putBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expected ...Reference) (Reference, error) {
 	return tryBlockStores(ctx, store.put, store.OnError, func(put func(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error)) (Reference, error) {
 		return put(ctx, block, ttl, options, expected...)
 	})
 }
 
-// UpdateBlockOptions tries each sink until a call returns true, nil.
-// A false, nil result continues to the next sink. If no update succeeds,
-// it returns the final attempt's error, or nil if that attempt had no error.
-// With no compatible sinks, it returns ErrNoBlockStorage.
-func (store *CombinedBlockStore) UpdateBlockOptions(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) (bool, error) {
+// updateBlockOptions tries each sink until a call returns true, nil.
+func (store *CombinedBlockStore) updateBlockOptions(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -158,4 +164,41 @@ func tryBlockStores[Method, Result any](ctx context.Context, methods []combinedB
 		return zero, lastErr
 	}
 	return zero, ErrNoBlockStorage
+}
+
+// BatchSize returns one to preserve per-block fallback and callback order.
+func (s *CombinedBlockStore) BatchSize() int { return 1 }
+
+// GetBlock tries each source in order until a read succeeds. It accepts up to
+// BatchSize requests and passes context, TTL, and options unchanged. A missing
+// block has a zero result slot. See BlockSource for the batch error rules.
+func (s *CombinedBlockStore) GetBlock(ctx context.Context, requests []BlockRequest) ([]Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), ErrMissingBlock, func(r BlockRequest) (Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock tries each sink in order until a write succeeds. It accepts up to
+// BatchSize requests and passes context, TTL, and options unchanged. A successful
+// write is not copied to later sinks. Errors return only the completed prefix.
+func (s *CombinedBlockStore) PutBlock(ctx context.Context, requests []PutBlockRequest) ([]Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r PutBlockRequest) (Reference, error) {
+		var expected []Reference
+		if r.Expected != nil {
+			expected = []Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions tries each sink until a call returns true without an error.
+// A false result without an error continues to the next sink. If no update
+// succeeds, it returns the final attempt's error, or nil if that attempt had no
+// error. With no compatible sinks, it returns ErrNoBlockStorage. It accepts up to
+// BatchSize requests and returns only the completed prefix on error.
+func (s *CombinedBlockStore) UpdateBlockOptions(ctx context.Context, requests []BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
 }

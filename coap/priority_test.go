@@ -8,6 +8,7 @@ import (
 
 	protocol "github.com/asciimoth/coaperation"
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 type priorityStore struct {
@@ -15,14 +16,14 @@ type priorityStore struct {
 	reads, writes []eris.BlockOptions
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (s *priorityStore) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (s *priorityStore) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	s.reads = append(s.reads, options)
-	return s.BlockSet.GetBlock(ctx, ref, ttl, options)
+	return eris.GetBlock(ctx, s.BlockSet, ref, ttl, options)
 }
-func (s *priorityStore) PutBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, refs ...eris.Reference) (eris.Reference, error) {
+func (s *priorityStore) putBlock(ctx context.Context, block []byte, ttl eris.TTL, options eris.BlockOptions, refs ...eris.Reference) (eris.Reference, error) {
 	s.writes = append(s.writes, options)
-	return s.BlockSet.PutBlock(ctx, block, ttl, options, refs...)
+	return eris.PutBlock(ctx, s.BlockSet, block, ttl, options, refs...)
 }
 
 func TestExperimentalPriorityRoundTrip(t *testing.T) {
@@ -31,7 +32,7 @@ func TestExperimentalPriorityRoundTrip(t *testing.T) {
 			for _, size := range []int{int(eris.BlockSize1KiB), int(eris.BlockSize32KiB)} {
 				t.Run(fmt.Sprintf("%s/enabled=%v/size=%d", transport, enabled, size), func(t *testing.T) {
 					block, ref := makeBlock(size, 12)
-					terminal := &priorityStore{BlockSet: make(eris.BlockSet)}
+					terminal := &priorityStore{BlockSet: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}}
 					handler, err := (Handler{Blocks: terminal, AllowPut: true, ExperimentalHighPriority: enabled}).BlockWise(protocol.BlockWiseConfig{})
 					if err != nil {
 						t.Fatal(err)
@@ -64,7 +65,7 @@ func TestExperimentalPriorityRoundTrip(t *testing.T) {
 					}
 					for _, high := range []bool{false, true, false} {
 						wantHint = high
-						if _, err := client.PutBlock(context.Background(), block, 0, eris.BlockOptions{HighPriority: high}, ref); err != nil {
+						if _, err := eris.PutBlock(context.Background(), client, block, 0, eris.BlockOptions{HighPriority: high}, ref); err != nil {
 							t.Fatal(err)
 						}
 						if terminal.writes[len(terminal.writes)-1].HighPriority != (enabled && high) {
@@ -73,7 +74,7 @@ func TestExperimentalPriorityRoundTrip(t *testing.T) {
 						wantStored = wantStored || high
 						for _, hint := range []bool{false, true} {
 							wantHint = hint
-							data, err, options := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{HighPriority: hint})
+							data, err, options := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{HighPriority: hint})
 							if err != nil || !bytes.Equal(data, block) || options.HighPriority != (enabled && wantStored) {
 								t.Fatalf("get: %v, %v", err, options)
 							}
@@ -116,13 +117,13 @@ func TestExperimentalPriorityOneEndpoint(t *testing.T) {
 		serverEnabled := !clientEnabled
 		block, ref := makeBlock(int(eris.BlockSize1KiB), 13)
 		high := eris.BlockOptions{HighPriority: true}
-		terminal := &priorityStore{BlockSet: eris.BlockSet{ref: {Data: block, Options: high}}}
+		terminal := &priorityStore{BlockSet: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block, Options: high}}}}
 		handler := Handler{Blocks: terminal, ExperimentalHighPriority: serverEnabled}
 		client, err := NewClient(RequesterFunc(handler.ServeCOAP), mustStore(t, "coap://example/"), ClientConfig{ExperimentalHighPriority: clientEnabled})
 		if err != nil {
 			t.Fatal(err)
 		}
-		data, err, options := client.GetBlock(context.Background(), ref, 0, high)
+		data, err, options := eris.GetBlock(context.Background(), client, ref, 0, high)
 		if err != nil || !bytes.Equal(data, block) || options.HighPriority {
 			t.Fatalf("get: %v, %v", err, options)
 		}
@@ -173,9 +174,32 @@ func TestExperimentalPriorityReadErrors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		data, err, options := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{HighPriority: true})
+		data, err, options := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{HighPriority: true})
 		if err == nil || data != nil || options.HighPriority {
 			t.Fatalf("code %v: data=%d bytes, err=%v, options=%v", code, len(data), err, options)
 		}
 	}
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s *priorityStore) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s *priorityStore) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s *priorityStore) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r eris.PutBlockRequest) (eris.Reference, error) {
+		var expected []eris.Reference
+		if r.Expected != nil {
+			expected = []eris.Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
 }

@@ -202,7 +202,7 @@ func TestVersionAndMapOrder(t *testing.T) {
 
 func TestV1FilesAndMixedNestedImages(t *testing.T) {
 	for _, kind := range []EntryType{Regular, Executable} {
-		blocks := make(eris.BlockSet)
+		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 		content := bytes.Repeat([]byte("old file\n"), 3000)
 		capability, err := eris.EncodeContent(context.Background(), bytes.NewReader(content), eris.Secret{}, eris.BlockSize1KiB, blocks, eris.BlockOptions{})
 		if err != nil {
@@ -262,7 +262,7 @@ func TestV1FilesAndMixedNestedImages(t *testing.T) {
 }
 
 func TestV2MetadataWithoutContent(t *testing.T) {
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	index := Index{Entries: []Entry{{Path: []string{"file"}, Capability: eris.Capability{BlockSize: eris.BlockSize1KiB}, Size: 123}}}
 	root, err := EncodeIndex(context.Background(), index, eris.Secret{}, blocks, eris.BlockOptions{})
 	if err != nil {
@@ -318,7 +318,7 @@ func TestV2AdditionalErrorPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	cap, _, _ := eris.Encode([]byte("missing"), eris.Secret{}, eris.BlockSize1KiB)
 	old := storeV1Index(t, Index{Entries: []Entry{{Path: []string{"file"}, Capability: cap}}}, blocks)
 	image, err := OpenFS(context.Background(), old, blocks, eris.BlockOptions{})
@@ -337,7 +337,7 @@ func TestV2AdditionalErrorPaths(t *testing.T) {
 }
 
 func TestMixedSubdirectoryReuse(t *testing.T) {
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	nested := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := nested.AddFile(context.Background(), "dir/file", strings.NewReader("content"), false); err != nil {
 		t.Fatal(err)

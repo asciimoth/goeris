@@ -67,7 +67,7 @@ func TestFSPrefixReadErrors(t *testing.T) {
 		for _, readErr := range []error{io.ErrUnexpectedEOF, fs.ErrPermission} {
 			file, base := observedBase(t, data)
 			file.readErr = readErr
-			wrapped := newLinkFS(t, base, eris.BlockSet{})
+			wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 			opened, err := wrapped.Open(context.Background(), "file")
 			if opened != nil {
 				_ = opened.Close()
@@ -237,7 +237,7 @@ func TestFSRejectsInvalidReadCounts(t *testing.T) {
 			for _, sourceErr := range []error{nil, io.EOF, fs.ErrPermission} {
 				file, base := observedBase(t, nil)
 				file.reader = &invalidCountReader{prefix: prefix, negative: negative, err: sourceErr}
-				data, err := newLinkFS(t, base, eris.BlockSet{}).ReadFile(context.Background(), "file")
+				data, err := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}).ReadFile(context.Background(), "file")
 				if !errors.Is(err, fs.ErrInvalid) {
 					t.Fatalf("prefix %q, negative %v, source error %v: got %v", prefix, negative, sourceErr, err)
 				}
@@ -276,7 +276,7 @@ func TestFSPreservesPrefixEOF(t *testing.T) {
 			file, base := observedBase(t, nil)
 			reader := &finalReader{data: []byte(data)}
 			file.reader = reader
-			got, err := newLinkFS(t, base, eris.BlockSet{}).ReadFile(context.Background(), "file")
+			got, err := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}).ReadFile(context.Background(), "file")
 			if data == link.MagicPrefix {
 				if !errors.Is(err, link.ErrInvalidLink) {
 					t.Fatalf("truncated link: %v", err)
@@ -315,7 +315,7 @@ func TestFSRejectsFailedRewind(t *testing.T) {
 		base := openFSFunc(func(string) (fs.File, error) {
 			return &rewindFile{observedFile: observed, position: test.position, err: test.err}, nil
 		})
-		file, err := newLinkFS(t, base, eris.BlockSet{}).Open(context.Background(), "file")
+		file, err := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}).Open(context.Background(), "file")
 		if file != nil {
 			_ = file.Close()
 			t.Error("failed rewind returned a file")
@@ -329,7 +329,7 @@ func TestFSRejectsFailedRewind(t *testing.T) {
 func TestFSPrefixFileChecksMetadata(t *testing.T) {
 	for _, missing := range []bool{false, true} {
 		observed, base := observedBase(t, []byte("ordinary content"))
-		file, err := newLinkFS(t, base, eris.BlockSet{}).Open(context.Background(), "file")
+		file, err := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}).Open(context.Background(), "file")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -354,7 +354,7 @@ func TestFSPrefixFileCloseDoesNotReuseBase(t *testing.T) {
 	for _, closeErr := range []error{nil, fs.ErrPermission} {
 		observed, base := observedBase(t, []byte("ordinary content"))
 		observed.closeErr = closeErr
-		file, err := newLinkFS(t, base, eris.BlockSet{}).Open(context.Background(), "file")
+		file, err := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}).Open(context.Background(), "file")
 		if err != nil {
 			t.Fatal(err)
 		}

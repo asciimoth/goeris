@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 // combinedProbe returns a nonzero result even on failure. Tests can therefore
@@ -21,16 +23,16 @@ type combinedProbe struct {
 	ref   Reference
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (probe *combinedProbe) GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (probe *combinedProbe) getBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
 	return probe.block, probe.call("GetBlock", ctx, ref, nil, nil), BlockOptions{}
 }
 
-func (probe *combinedProbe) PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expected ...Reference) (Reference, error) {
+func (probe *combinedProbe) putBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expected ...Reference) (Reference, error) {
 	return probe.ref, probe.call("PutBlock", ctx, Reference{}, block, expected)
 }
 
-func (probe *combinedProbe) UpdateBlockOptions(context.Context, Reference, TTL, BlockOptions) (bool, error) {
+func (probe *combinedProbe) updateBlockOptions(context.Context, Reference, TTL, BlockOptions) (bool, error) {
 	return false, nil
 }
 
@@ -42,11 +44,11 @@ type combinedOperation struct {
 
 var combinedOperations = []combinedOperation{
 	{"GetBlock", false, func(store *CombinedBlockStore, ctx context.Context, _ []byte, ref Reference, _ []Reference) (any, error) {
-		blockResult, blockErr, _ := store.GetBlock(ctx, ref, 0, BlockOptions{})
+		blockResult, blockErr, _ := GetBlock(ctx, store, ref, 0, BlockOptions{})
 		return blockResult, blockErr
 	}},
 	{"PutBlock", true, func(store *CombinedBlockStore, ctx context.Context, block []byte, _ Reference, expected []Reference) (any, error) {
-		return store.PutBlock(ctx, block, 0, BlockOptions{}, expected...)
+		return PutBlock(ctx, store, block, 0, BlockOptions{}, expected...)
 	}},
 }
 
@@ -241,10 +243,7 @@ func TestCombinedBlockStoreCapabilities(t *testing.T) {
 			{"sink", func(p *combinedProbe) any { return struct{ BlockSink }{p} }, []string{"PutBlock"}},
 			{"store", func(p *combinedProbe) any { return struct{ BlockStore }{p} }, []string{"GetBlock", "PutBlock"}},
 			{"separate interfaces", func(p *combinedProbe) any {
-				return struct {
-					BlockSource
-					BlockSink
-				}{p, p}
+				return separateBlockStore{p, p}
 			}, []string{"GetBlock", "PutBlock"}},
 			{"all", func(p *combinedProbe) any { return p }, []string{"GetBlock", "PutBlock"}},
 		} {
@@ -298,14 +297,18 @@ func TestCombinedBlockStoreWriteReferences(t *testing.T) {
 				calls := 0
 				probe := &combinedProbe{ref: Reference{3}, call: func(_ string, _ context.Context, _ Reference, gotBlock []byte, gotExpected []Reference) error {
 					calls++
-					if !bytes.Equal(gotBlock, block) || !reflect.DeepEqual(gotExpected, expected) {
+					if !bytes.Equal(gotBlock, block) || !slices.Equal(gotExpected, expected) {
 						t.Fatal("write arguments changed")
 					}
 					return failure
 				}}
 				store := NewCombinedBlockStore(probe, probe)
 				got, err := operation.call(store, context.Background(), block, Reference{}, expected)
-				if err != failure || got != (Reference{}) || calls != 2 {
+				wantErr, wantCalls := failure, 2
+				if len(expected) > 1 {
+					wantErr, wantCalls = ErrInvalidBlock, 0
+				}
+				if err != wantErr || got != (Reference{}) || calls != wantCalls {
 					t.Fatalf("result = (%v, %v), calls = %d", got, err, calls)
 				}
 			})
@@ -630,9 +633,9 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 		corrupt[0] ^= 1
 		var indexes []int
 		store := NewCombinedBlockStore(
-			BlockSet{pair.Reference: {Data: corrupt}},
-			make(BlockSet),
-			BlockSet{pair.Reference: {Data: block}},
+			BlockSet{Blocks: map[Reference]Block{pair.Reference: {Data: corrupt}}},
+			BlockSet{Blocks: make(map[Reference]Block)},
+			BlockSet{Blocks: map[Reference]Block{pair.Reference: {Data: block}}},
 		)
 		store.OnError = func(index int, err error) {
 			indexes = append(indexes, index)
@@ -641,16 +644,16 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 				t.Fatalf("unexpected callback: (%d, %v)", index, err)
 			}
 		}
-		got, err, _ := store.GetBlock(context.Background(), pair.Reference, 0, BlockOptions{})
+		got, err, _ := GetBlock(context.Background(), store, pair.Reference, 0, BlockOptions{})
 		if err != nil || !bytes.Equal(got, block) || !slices.Equal(indexes, []int{0, 1}) {
 			t.Fatalf("read error = %v, callback indexes = %v", err, indexes)
 		}
 	})
 
 	t.Run("write only to first successful sink", func(t *testing.T) {
-		readOnly, writable, later := make(BlockSet), make(BlockSet), make(BlockSet)
+		readOnly, writable, later := BlockSet{Blocks: make(map[Reference]Block)}, BlockSet{Blocks: make(map[Reference]Block)}, BlockSet{Blocks: make(map[Reference]Block)}
 		var indexes []int
-		store := NewCombinedBlockStore(struct{ BlockSource }{readOnly}, BlockSet(nil), writable, later)
+		store := NewCombinedBlockStore(struct{ BlockSource }{readOnly}, BlockSet{}, writable, later)
 		store.OnError = func(index int, err error) {
 			indexes = append(indexes, index)
 			if err != ErrMissingBlock {
@@ -658,12 +661,12 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 			}
 		}
 		input := append([]byte(nil), block...)
-		ref, err := store.PutBlock(context.Background(), input, 0, BlockOptions{}, pair.Reference)
+		ref, err := PutBlock(context.Background(), store, input, 0, BlockOptions{}, pair.Reference)
 		if err != nil || ref != pair.Reference || !slices.Equal(indexes, []int{1}) {
 			t.Fatalf("write = (%v, %v), callback indexes = %v", ref, err, indexes)
 		}
 		input[0] ^= 1
-		if len(readOnly) != 0 || len(later) != 0 || !bytes.Equal(writable[ref].Data, block) {
+		if len(readOnly.Blocks) != 0 || len(later.Blocks) != 0 || !bytes.Equal(writable.Blocks[ref].Data, block) {
 			t.Fatal("write reached another store or retained the caller's buffer")
 		}
 	})
@@ -677,11 +680,11 @@ func TestCombinedBlockStoreBlockSets(t *testing.T) {
 			{block, []Reference{pair.Reference, pair.Reference}},
 			{[]byte{1}, nil},
 		} {
-			first, second := make(BlockSet), make(BlockSet)
+			first, second := BlockSet{Blocks: make(map[Reference]Block)}, BlockSet{Blocks: make(map[Reference]Block)}
 			store := NewCombinedBlockStore(first, second)
-			ref, err := store.PutBlock(context.Background(), test.block, 0, BlockOptions{}, test.expected...)
-			if !errors.Is(err, ErrInvalidBlock) || ref != (Reference{}) || len(first) != 0 || len(second) != 0 {
-				t.Fatalf("invalid write = (%v, %v), store lengths = %d, %d", ref, err, len(first), len(second))
+			ref, err := PutBlock(context.Background(), store, test.block, 0, BlockOptions{}, test.expected...)
+			if !errors.Is(err, ErrInvalidBlock) || ref != (Reference{}) || len(first.Blocks) != 0 || len(second.Blocks) != 0 {
+				t.Fatalf("invalid write = (%v, %v), store lengths = %d, %d", ref, err, len(first.Blocks), len(second.Blocks))
 			}
 		}
 	})
@@ -723,3 +726,42 @@ func TestCombinedBlockStoreInFlightCancellation(t *testing.T) {
 		})
 	}
 }
+
+// BatchSize reports the maximum number of requests per call.
+func (s *combinedProbe) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See BlockSource for error rules.
+func (s *combinedProbe) GetBlock(ctx context.Context, requests []BlockRequest) ([]Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), ErrMissingBlock, func(r BlockRequest) (Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return Block{Data: data, Options: options}, err
+	})
+}
+
+// PutBlock processes requests in order and returns the completed prefix.
+func (s *combinedProbe) PutBlock(ctx context.Context, requests []PutBlockRequest) ([]Reference, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r PutBlockRequest) (Reference, error) {
+		var expected []Reference
+		if r.Expected != nil {
+			expected = []Reference{*r.Expected}
+		}
+		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+	})
+}
+
+// UpdateBlockOptions processes requests in order and returns the completed prefix.
+func (s *combinedProbe) UpdateBlockOptions(ctx context.Context, requests []BlockRequest) ([]bool, error) {
+	return batch.Run(ctx, requests, s.BatchSize(), func(r BlockRequest) (bool, error) {
+		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+	})
+}
+
+// Two embedded interfaces have an ambiguous BatchSize method. Resolve it
+// explicitly when read and write methods come from separate fields.
+type separateBlockStore struct {
+	BlockSource
+	BlockSink
+}
+
+func (separateBlockStore) BatchSize() int { return 1 }

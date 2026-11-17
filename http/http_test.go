@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 type clientFunc func(*nethttp.Request) (*nethttp.Response, error)
@@ -23,8 +24,8 @@ func (function clientFunc) Do(request *nethttp.Request) (*nethttp.Response, erro
 
 type sourceFunc func(eris.Reference) ([]byte, error)
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (function sourceFunc) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (function sourceFunc) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	blockResult, blockErr := function(ref)
 	return blockResult, blockErr, eris.BlockOptions{}
 }
@@ -56,13 +57,13 @@ func testData(t *testing.T) (eris.Capability, eris.BlockSet, []byte) {
 func TestHandlerCombinedPlainBlockSets(t *testing.T) {
 	t.Parallel()
 	capability, blocks, content := testData(t)
-	store := eris.NewCombinedBlockStore(make(eris.BlockSet), blocks)
+	store := eris.NewCombinedBlockStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, blocks)
 	handler := Handler{Blocks: store}
 	for _, test := range []struct {
 		name string
 		want []byte
 	}{
-		{capability.Root.Reference.URN(), blocks[capability.Root.Reference].Data},
+		{capability.Root.Reference.URN(), blocks.Blocks[capability.Root.Reference].Data},
 		{capability.String(), content},
 	} {
 		recorder := httptest.NewRecorder()
@@ -81,13 +82,13 @@ type contextSource struct {
 
 type requestContextKey struct{}
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (source *contextSource) GetBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (source *contextSource) getBlock(ctx context.Context, ref eris.Reference, ttl eris.TTL, options eris.BlockOptions) ([]byte, error, eris.BlockOptions) {
 	source.calls++
 	if ctx != source.wantContext {
 		return nil, errors.New("incorrect request context"), eris.BlockOptions{}
 	}
-	return source.blocks.GetBlock(ctx, ref, 0, eris.BlockOptions{})
+	return eris.GetBlock(ctx, source.blocks, ref, 0, eris.BlockOptions{})
 }
 
 func TestResourceURL(t *testing.T) {
@@ -176,10 +177,10 @@ func TestHandlerBlocksAndChaining(t *testing.T) {
 		result := recorder.Result()
 		if result.StatusCode != nethttp.StatusOK || result.Header.Get("Content-Type") != ContentType ||
 			result.Header.Get("Cache-Control") != "max-age=31536000, immutable" ||
-			result.ContentLength != int64(len(blocks[ref].Data)) {
+			result.ContentLength != int64(len(blocks.Blocks[ref].Data)) {
 			t.Errorf("%s block response = status %d, headers %#v", method, result.StatusCode, result.Header)
 		}
-		if method == nethttp.MethodGet && !bytes.Equal(recorder.Body.Bytes(), blocks[ref].Data) {
+		if method == nethttp.MethodGet && !bytes.Equal(recorder.Body.Bytes(), blocks.Blocks[ref].Data) {
 			t.Error("GET returned an incorrect block")
 		}
 		if method == nethttp.MethodHead && recorder.Body.Len() != 0 {
@@ -191,7 +192,7 @@ func TestHandlerBlocksAndChaining(t *testing.T) {
 	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+ref.URN(), nil)
 	request.Header.Set("Range", "bytes=1-3")
 	handler.ServeHTTP(recorder, request)
-	if recorder.Code != nethttp.StatusPartialContent || !bytes.Equal(recorder.Body.Bytes(), blocks[ref].Data[1:4]) {
+	if recorder.Code != nethttp.StatusPartialContent || !bytes.Equal(recorder.Body.Bytes(), blocks.Blocks[ref].Data[1:4]) {
 		t.Fatalf("range response = %d %x", recorder.Code, recorder.Body.Bytes())
 	}
 }
@@ -254,7 +255,7 @@ func TestHandlerErrors(t *testing.T) {
 		})}, nethttp.MethodGet, ref.URN(), nethttp.StatusNotFound},
 		{"source failure", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, errors.New("store") })}, nethttp.MethodGet, ref.URN(), nethttp.StatusInternalServerError},
 		{"corrupt block", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrInvalidBlock })}, nethttp.MethodGet, ref.URN(), nethttp.StatusInternalServerError},
-		{"missing content", Handler{Blocks: eris.BlockSet{}}, nethttp.MethodGet, capability.String(), nethttp.StatusNotFound},
+		{"missing content", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}}, nethttp.MethodGet, capability.String(), nethttp.StatusNotFound},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -282,8 +283,8 @@ func TestClientGetBlock(t *testing.T) {
 	})}
 	base, _ := url.Parse("http://in-memory.invalid")
 	client, _ := NewClient(httpClient, base)
-	got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
-	if err != nil || !bytes.Equal(got, blocks[ref].Data) {
+	got, err, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{})
+	if err != nil || !bytes.Equal(got, blocks.Blocks[ref].Data) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
 }
@@ -295,15 +296,15 @@ func TestClientBlockSizeBoundaryAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := capability.Root.Reference
-	body := &trackingBody{Reader: bytes.NewReader(blocks[ref].Data)}
+	body := &trackingBody{Reader: bytes.NewReader(blocks.Blocks[ref].Data)}
 	base, _ := url.Parse("http://example.test")
 	client, _ := NewClient(clientFunc(func(*nethttp.Request) (*nethttp.Response, error) {
 		response := response(nethttp.StatusOK, ContentType, strings.NewReader(""))
 		response.Body = body
 		return response, nil
 	}), base)
-	got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
-	if err != nil || !bytes.Equal(got, blocks[ref].Data) {
+	got, err, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{})
+	if err != nil || !bytes.Equal(got, blocks.Blocks[ref].Data) {
 		t.Fatalf("GetBlock() = %x, %v", got, err)
 	}
 	if !body.closed {
@@ -334,7 +335,7 @@ func TestClientGetBlockErrors(t *testing.T) {
 	t.Parallel()
 	capability, blocks, _ := testData(t)
 	ref := capability.Root.Reference
-	valid := blocks[ref]
+	valid := blocks.Blocks[ref]
 	readErr := errors.New("read failed")
 	requestErr := errors.New("request failed")
 	tests := []struct {
@@ -372,7 +373,7 @@ func TestClientGetBlockErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client, _ := NewClient(test.do, base)
-			got, err, _ := client.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+			got, err, _ := eris.GetBlock(context.Background(), client, ref, 0, eris.BlockOptions{})
 			if got != nil {
 				t.Fatalf("block = %x", got)
 			}
@@ -502,4 +503,28 @@ func TestCloneURLUserInformation(t *testing.T) {
 	if !reflect.DeepEqual(clone, base) || clone == base || clone.User == base.User {
 		t.Fatalf("cloneURL() = %#v", clone)
 	}
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s sourceFunc) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s sourceFunc) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s *contextSource) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See eris.BlockSource for error rules.
+func (s *contextSource) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]eris.Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), eris.ErrMissingBlock, func(r eris.BlockRequest) (eris.Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return eris.Block{Data: data, Options: options}, err
+	})
 }

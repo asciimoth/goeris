@@ -18,28 +18,28 @@ func FuzzBlockSetPut(f *testing.F) {
 		if len(block) > int(BlockSize32KiB) {
 			t.Skip()
 		}
-		store := make(BlockSet)
+		store := BlockSet{Blocks: make(map[Reference]Block)}
 		var expected []Reference
 		if check {
 			var ref Reference
 			copy(ref[:], reference)
 			expected = append(expected, ref)
 		}
-		got, err := store.PutBlock(context.Background(), block, 0, BlockOptions{}, expected...)
+		got, err := PutBlock(context.Background(), store, block, 0, BlockOptions{}, expected...)
 		actual, sizeErr := ReferenceOf(block)
 		if sizeErr != nil {
-			if !errors.Is(err, ErrInvalidBlockSize) || len(store) != 0 {
-				t.Fatalf("invalid size: ref %v, error %v, stored %d", got, err, len(store))
+			if !errors.Is(err, ErrInvalidBlockSize) || len(store.Blocks) != 0 {
+				t.Fatalf("invalid size: ref %v, error %v, stored %d", got, err, len(store.Blocks))
 			}
 			return
 		}
 		if check && expected[0] != actual {
-			if !errors.Is(err, ErrInvalidBlock) || len(store) != 0 {
-				t.Fatalf("mismatch: ref %v, error %v, stored %d", got, err, len(store))
+			if !errors.Is(err, ErrInvalidBlock) || len(store.Blocks) != 0 {
+				t.Fatalf("mismatch: ref %v, error %v, stored %d", got, err, len(store.Blocks))
 			}
 			return
 		}
-		stored, readErr, _ := store.GetBlock(context.Background(), actual, 0, BlockOptions{})
+		stored, readErr, _ := GetBlock(context.Background(), store, actual, 0, BlockOptions{})
 		if err != nil || readErr != nil || got != actual || !bytes.Equal(stored, block) {
 			t.Fatalf("stored block mismatch: ref %v, write %v, read %v", got, err, readErr)
 		}
@@ -217,9 +217,9 @@ func FuzzEncodeDecode(f *testing.F) {
 		// The streaming APIs must produce the same complete tree even when
 		// input arrives in small chunks and the final read includes EOF.
 		input := smallChunkReader{Reader: &terminalEOFReader{data: content}, max: int(sizeCode) + 1}
-		streamed := make(BlockSet)
+		streamed := BlockSet{Blocks: make(map[Reference]Block)}
 		streamCap, err := EncodeContent(context.Background(), input, secret, size, streamed, BlockOptions{})
-		if err != nil || streamCap != capability || !maps.EqualFunc(streamed, blocks, equalBlocks) {
+		if err != nil || streamCap != capability || !maps.EqualFunc(streamed.Blocks, blocks.Blocks, equalBlocks) {
 			t.Fatalf("streaming encoding differs: %v", err)
 		}
 		capability, blocks, err = EncodeRecommended(content, secret)
@@ -227,9 +227,9 @@ func FuzzEncodeDecode(f *testing.F) {
 			t.Fatal(err)
 		}
 		input.Reader = &terminalEOFReader{data: content}
-		streamed = make(BlockSet)
+		streamed = BlockSet{Blocks: make(map[Reference]Block)}
 		streamCap, err = EncodeContentRecommended(context.Background(), input, secret, streamed, BlockOptions{})
-		if err != nil || streamCap != capability || !maps.EqualFunc(streamed, blocks, equalBlocks) {
+		if err != nil || streamCap != capability || !maps.EqualFunc(streamed.Blocks, blocks.Blocks, equalBlocks) {
 			t.Fatalf("recommended streaming encoding differs: %v", err)
 		}
 	})
@@ -237,12 +237,12 @@ func FuzzEncodeDecode(f *testing.F) {
 
 func FuzzDecodeMutations(f *testing.F) {
 	capability, blocks, _ := Encode(bytes.Repeat([]byte("seed"), 300), Secret{}, BlockSize1KiB)
-	root := blocks[capability.Root.Reference]
+	root := blocks.Blocks[capability.Root.Reference]
 	f.Add(root.Data)
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, candidate []byte) {
 		mutated := cloneBlocks(blocks)
-		mutated[capability.Root.Reference] = Block{Data: bytes.Clone(candidate)}
+		mutated.Blocks[capability.Root.Reference] = Block{Data: bytes.Clone(candidate)}
 		decoded, err := Decode(capability, mutated)
 		if err == nil && !bytes.Equal(decoded, bytes.Repeat([]byte("seed"), 300)) {
 			t.Fatal("accepted mutation changed decoded content")

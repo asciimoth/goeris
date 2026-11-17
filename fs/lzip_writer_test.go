@@ -50,7 +50,7 @@ func TestCompressedFileRoundTripAndDeterminism(t *testing.T) {
 		var firstCap eris.Capability
 		var firstBlocks eris.BlockSet
 		for run := 0; run < 2; run++ {
-			blocks := make(eris.BlockSet)
+			blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 			builder := NewBuilder(blocks, eris.Secret{1, 2, 3}, eris.BlockOptions{})
 			if run == 1 {
 				if err := builder.AddSymlink("link", "file"); err != nil {
@@ -122,7 +122,7 @@ func TestCompressedFileErrors(t *testing.T) {
 	if err := nilBuilder.AddCompressedFile(context.Background(), "file", bytes.NewReader(nil), false); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatal(err)
 	}
-	builder := NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
+	builder := NewBuilder(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddCompressedFile(context.Background(), "file", nil, false); !errors.Is(err, ErrInvalidEntry) {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestCompressedFileErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	sentinel := errors.New("sentinel")
-	builder = NewBuilder(make(eris.BlockSet), eris.Secret{}, eris.BlockOptions{})
+	builder = NewBuilder(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddCompressedFile(context.Background(), "file", errorReader{sentinel}, false); !errors.Is(err, sentinel) {
 		t.Fatalf("source error: %v", err)
 	}

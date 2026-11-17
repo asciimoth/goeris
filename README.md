@@ -252,39 +252,100 @@ decoded, err := eris.Decode(capability, blocks)
 source, use `DecodeWithLimit(capability, blocks, maxBytes)` to reject a tree
 whose decoded content exceeds the selected size limit before expansion.
 
-`BlockSink.PutBlock(ctx, block, ttl, options)` returns the reference computed by
-storage. `BlockSink.PutBlock(ctx, block, ttl, options, expected)` rejects a
-block that does not match the expected reference.
-`BlockSource.GetBlock(ctx, ref, ttl, options)` returns only a matching block;
-the source verifies stored or received data if it can be incorrect.
-
-All block storage methods require context, `eris.TTL`, and `eris.BlockOptions`.
-`BlockOptions` is passed and returned by value. Its `HighPriority` flag defaults
-to `false`. The methods are:
+Block storage uses ordered batches. Each request has its own TTL and options.
+The interfaces are:
 
 ```go
-GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions)
-PutBlock(ctx context.Context, block []byte, ttl TTL, options BlockOptions, expected ...Reference) (Reference, error)
-UpdateBlockOptions(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) (bool, error)
+GetBlock(ctx context.Context, requests []BlockRequest) ([]Block, error)
+PutBlock(ctx context.Context, requests []PutBlockRequest) ([]Reference, error)
+UpdateBlockOptions(ctx context.Context, requests []BlockRequest) ([]bool, error)
+BatchSize() int
 ```
+
+This is a breaking API change. Custom sources and sinks must implement the batch
+methods and `BatchSize`. Replace single-block method calls with the package
+helpers shown below, or supply a one-request slice to the new methods.
+
+`BlockRequest` has `Reference`, `TTL`, and `Options` fields. `PutBlockRequest`
+has `Data`, `TTL`, `Options`, and an optional `Expected *Reference`. A reference
+mismatch rejects that block with `ErrInvalidBlock`. Sources verify each returned
+block against its requested reference. Read results include stored options.
+
+Both interfaces use the same `BatchSize` limit for all operations. Zero permits
+any size. Implementations with an unknown limit, such as network API clients,
+must report one as a safe default. Oversized batches return `ErrBatchTooLarge`
+before processing any request. Empty batches succeed without I/O, even when the
+context is canceled.
+
+Read results keep their request positions. A missing block has nil `Data` and
+zero `Options`. `GetBlock` continues after missing blocks and returns every
+available block, with an error that matches `ErrMissingBlock` through
+`errors.Is`. For example, requests `[A, missing, B]` return
+`[blockA, {}, blockB]` and a missing-block error. The first missing error is
+preserved, including wrapped storage errors.
+
+Cancellation and other read errors stop processing and return the processed
+prefix, including any missing slots. If blocks were missing before that stop,
+`errors.Is` matches both `ErrMissingBlock` and the stopping error. When missing
+blocks are the only errors, the result length equals the request length.
+
+Writes and option updates stop at the first error and return the completed
+prefix. **Batches have no atomicity or rollback guarantee.** Earlier writes may
+remain, and the failed operation may also have side effects. Stores that process
+blocks one at a time check cancellation before each block. Middleware preserves
+the context, TTL, and options for each request.
+
+The single-block helpers and content readers reject malformed successful result
+counts with `ErrInvalidBatchResult`. This prevents a panic or a read loop
+without progress.
+
+For one operation, use the root package helpers:
+
+```go
+block, err, storedOptions := eris.GetBlock(ctx, source, ref, ttl, options)
+ref, err = eris.PutBlock(ctx, sink, data, ttl, options) // Optional final expected reference.
+changed, err := eris.UpdateBlockOptions(ctx, sink, ref, ttl, options)
+```
+
+Stream encoders and readers respect the storage limit and cap their batches at
+64 blocks (at most 2 MiB of encrypted data). ERIS-FS uses the same bounded paths
+for file content and indexes. It does not collect a complete image for one
+write. Network clients and local volumes currently use a limit of one. The
+combined store also uses one to preserve its per-block fallback and callback
+order.
+
+`BlockOptions` is passed and returned by value. Its `HighPriority` and `Root`
+flags default to `false`.
 
 `HighPriority` is an advisory hint. Terminal stores can use it for cache
 eviction, operation scheduling, or another policy, or ignore it. Middleware
 passes options unchanged by default and returns the options from a successful
 read.
 
-`BlockSet` stores the highest priority from repeated puts and returns it on get.
-`UpdateBlockOptions` can raise or lower that priority. It returns `true` only if
-the stored options changed; an absent block, unchanged options, or unsupported
-updates return `false, nil`. A combined store continues after `false, nil` until
-an update succeeds or the list ends. Volumes ignore priority and return `false`.
-Network clients do not support explicit option updates.
+`Root` highlights key blocks for indexing and block exchange between nodes.
+Encoders always set it on the block named by the returned capability, including
+single-block content and ERIS-FS index roots. ERIS-FS file writes preserve the
+original `Root` option. Standalone blob writes still mark their roots. The
+effective flag is the original option OR the automatic root flag. An explicit
+`Root=true` is never cleared during encoding. The automatic flag identifies the
+object's entry point. Other blocks keep the supplied options. The flag does not
+change block bytes or capabilities.
 
-`BlockSet` now maps references to `eris.Block` values with `Data` and `Options`
-fields. This is a breaking change for direct map access: use `blocks[ref].Data`
-to read bytes, or `eris.Block{Data: data, Options: options}` for a map entry.
-Use `PutBlock` to verify and copy bytes and preserve priority across repeated
-puts.
+`BlockSet` keeps each flag true across repeated puts and returns it on get.
+`UpdateBlockOptions` can set or clear either flag. Each result is `true` only if
+the stored options changed. Absent blocks, unchanged options, and unsupported
+updates produce `false` without an error. A combined store continues after
+`false` without an error until an update succeeds or the list ends. Volumes
+ignore both flags and return `false` for each request. Network clients do not
+support explicit option updates.
+
+`BlockSet` is now a struct with a `Blocks map[Reference]Block` field and an
+optional `MaxBatchSize` field for tests and debugging. Initialize it with
+`eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}`. Zero
+`MaxBatchSize` accepts any batch size. Direct access uses
+`blocks.Blocks[ref].Data`. Use the storage methods or single-block helpers to
+verify and copy bytes and preserve flags across repeated puts. Direct map access
+is not safe during concurrent writes.
 
 HTTP carries true priority in `Eris-High-Priority: true`. S3 uses
 `x-amz-meta-eris-high-priority: true`, set before request signing. Both omit the
@@ -293,17 +354,23 @@ field for false priority. CoAP supports experimental option 65020 when
 `coap.Handler`. It is disabled by default and is only for coordinated,
 non-operational experiments. The existing ERIS CBOR grammar has no metadata
 field, so CBOR omits priority and reads it as false. See the
-[priority specification](spec/priority.md) for wire rules and compatibility
+[priority specification](specs/priority.md) for wire rules and compatibility
 limits.
+
+The root flag uses `Eris-Root: true` over HTTP and `x-amz-meta-eris-root: true`
+over S3, with the same parsing and signing rules. CoAP uses experimental option
+65052 when `ExperimentalRoot` is enabled on both endpoints. CBOR and volumes do
+not retain root metadata. See the [root block specification](specs/root.md).
 
 Content encoders, readers, and index codecs accept options by value. ERIS-FS
 builders and filesystems, including the link filesystem, receive options once at
-construction. They pass a copy to every block operation, including nested
-indexes, compressed files, and reads through `Sub`.
+construction. They pass a copy to every block operation, with `Root` always true
+on index root writes and unchanged from the original option on file writes. This
+includes nested indexes, compressed files, and reads through `Sub`.
 
-Middleware passes context unchanged. `BlockSet` ignores cancellation because its
-operations complete in memory. `Volume` checks cancellation between file
-operations but cannot stop a file-system call already in progress.
+Middleware passes context unchanged. `BlockSet` checks cancellation before each
+request. `Volume` also checks cancellation between file operations, but cannot
+stop a file-system call already in progress.
 
 TTL limits network forwarding along each request path. It does not set a time
 limit or block expiry. Use `eris.NoTTL` (`0`) when the caller does not specify a
@@ -344,13 +411,13 @@ store := eris.NewCombinedBlockStore(readOnlySource, primaryStore, fallbackStore)
 store.OnError = func(index int, err error) {
 	log.Printf("block storage %d failed: %v", index, err)
 }
-block, err, _ := store.GetBlock(ctx, reference, eris.NoTTL, eris.BlockOptions{})
+block, err, _ := eris.GetBlock(ctx, store, reference, eris.NoTTL, eris.BlockOptions{})
 ```
 
 Each operation stops at the first success. Writes skip entries without a sink
-and store the block in the first successful sink. The wrapper above exposes only
-`GetBlock`. Assigning a store to a `BlockSource` variable alone does not hide
-its write methods from the constructor.
+and store the block in the first successful sink. The wrapper above exposes
+`GetBlock` and `BatchSize`. Assigning a store to a `BlockSource` variable alone
+does not hide its write methods from the constructor.
 
 The constructor also accepts sinks. It selects methods for each operation and
 skips entries without a suitable method. Changing the input slice after
@@ -378,7 +445,7 @@ support concurrent calls.
 Build and open an ERIS-FS image without host file-system access:
 
 ```go
-blocks := make(eris.BlockSet)
+blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 if err := builder.AddFile(ctx, "docs/readme", strings.NewReader("hello"), false); err != nil {
 	return err

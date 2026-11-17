@@ -9,8 +9,8 @@ import (
 
 func ExampleNewCombinedBlockStore() {
 	// Expose only reads from the first store. The second store permits writes.
-	readOnly := struct{ eris.BlockSource }{make(eris.BlockSet)}
-	writable := make(eris.BlockSet)
+	readOnly := struct{ eris.BlockSource }{eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}}
+	writable := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	store := eris.NewCombinedBlockStore(readOnly, writable)
 	store.OnError = func(index int, err error) {
 		fmt.Printf("store %d: %v\n", index, err)
@@ -22,12 +22,12 @@ func ExampleNewCombinedBlockStore() {
 		panic(err)
 	}
 	ref := capability.Root.Reference
-	stored, err := store.PutBlock(context.Background(), blocks[ref].Data, 0, eris.BlockOptions{}, ref)
+	stored, err := eris.PutBlock(context.Background(), store, blocks.Blocks[ref].Data, 0, eris.BlockOptions{}, ref)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("stored:", stored == ref)
-	got, err, _ := store.GetBlock(context.Background(), ref, 0, eris.BlockOptions{})
+	got, err, _ := eris.GetBlock(context.Background(), store, ref, 0, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}

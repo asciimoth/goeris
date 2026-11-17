@@ -12,7 +12,7 @@ import (
 
 func TestSubSymlinkRoot(t *testing.T) {
 	t.Parallel()
-	blocks := make(eris.BlockSet)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddFile(context.Background(), "dir/file", strings.NewReader("content"), false); err != nil {
 		t.Fatal(err)

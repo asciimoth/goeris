@@ -72,7 +72,7 @@ func TestKilledWriter(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if _, err, _ := v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{}); err != nil {
+		if _, err, _ := eris.GetBlock(context.Background(), v, ref, eris.NoTTL, eris.BlockOptions{}); err != nil {
 			return fmt.Errorf("published block after termination: %w", err)
 		}
 		count++
@@ -95,14 +95,14 @@ func TestCrashWriterProcess(t *testing.T) {
 	block := make([]byte, eris.BlockSize32KiB)
 	for i := uint64(0); ; i++ {
 		binary.LittleEndian.PutUint64(block, i)
-		if _, err := v.PutBlock(context.Background(), block, eris.NoTTL, eris.BlockOptions{}); err != nil {
+		if _, err := eris.PutBlock(context.Background(), v, block, eris.NoTTL, eris.BlockOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := fmt.Fprintln(os.Stdout, "stored"); err != nil {
 			t.Fatal(err)
 		}
 		binary.LittleEndian.PutUint64(block, 0)
-		if _, err := v.PutBlock(context.Background(), block, eris.NoTTL, eris.BlockOptions{}); err != nil {
+		if _, err := eris.PutBlock(context.Background(), v, block, eris.NoTTL, eris.BlockOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}

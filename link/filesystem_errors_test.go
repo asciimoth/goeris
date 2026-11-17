@@ -32,7 +32,7 @@ func TestFSErrorTextHidesBackendDetails(t *testing.T) {
 		for _, operation := range []string{"open", "stat", "lstat", "readdir", "read", "readat"} {
 			t.Run(operation, func(t *testing.T) {
 				base := openFSFunc(func(string) (fs.File, error) { return nil, cause })
-				wrapped := newLinkFS(t, base, eris.BlockSet{})
+				wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 				var err error
 				switch operation {
 				case "open":
@@ -87,7 +87,7 @@ func TestFSErrorTextDoesNotCallUnknownMethods(t *testing.T) {
 	cycle.Err = cycle
 	for _, cause := range []error{&panicMessageError{}, (*fs.PathError)(nil), cycle} {
 		base := openFSFunc(func(string) (fs.File, error) { return nil, cause })
-		_, err := newLinkFS(t, base, eris.BlockSet{}).Open(context.Background(), "public")
+		_, err := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}).Open(context.Background(), "public")
 		if err == nil || err.Error() != "open public: eris link: operation failed" {
 			t.Fatal("unsafe backend error text")
 		}
@@ -99,7 +99,7 @@ func TestFSErrorTextKeepsKnownFailures(t *testing.T) {
 		base := openFSFunc(func(string) (fs.File, error) {
 			return nil, &fs.PathError{Op: "backend", Path: "/private", Err: cause}
 		})
-		_, err := newLinkFS(t, base, eris.BlockSet{}).Open(context.Background(), "public")
+		_, err := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}).Open(context.Background(), "public")
 		if err == nil || err.Error() != "open public: "+cause.Error() || !errors.Is(err, cause) {
 			t.Fatalf("known failure: %v", err)
 		}

@@ -32,7 +32,9 @@ type builderPath struct {
 }
 
 // NewBuilder returns a builder that writes all file and index blocks to sink.
-// It keeps a copy of options and passes it to every block write.
+// It keeps a copy of options. File writes preserve the supplied Root flag;
+// the encoder always sets Root on the index root. An explicit Root=true is
+// preserved on all writes. Other options pass to every block write.
 func NewBuilder(sink eris.BlockSink, secret eris.Secret, options eris.BlockOptions) *Builder {
 	return &Builder{sink: sink, secret: secret, options: options}
 }
@@ -53,7 +55,7 @@ func (builder *Builder) AddFile(ctx context.Context, path string, content io.Rea
 		return err
 	}
 	counted := &countReader{reader: content}
-	capability, err := eris.EncodeContentRecommended(ctx, counted, builder.secret, builder.sink, builder.options)
+	capability, err := eris.EncodeContentRecommended(ctx, counted, builder.secret, fileBlockSink{BlockSink: builder.sink, root: builder.options.Root}, builder.options)
 	if err != nil {
 		return err
 	}
@@ -62,6 +64,13 @@ func (builder *Builder) AddFile(ctx context.Context, path string, content io.Rea
 		kind = Executable
 	}
 	return builder.add(Entry{Path: components, Type: kind, Capability: capability, Size: counted.size})
+}
+
+// File content belongs to the image. Use the original Root option instead of
+// the blob encoder's automatic flag, including for compressed file writes.
+type fileBlockSink struct {
+	eris.BlockSink
+	root bool
 }
 
 // AddLzipFile stores an existing Lzip stream. Size is the uncompressed length.
@@ -226,4 +235,23 @@ func splitPath(path string) ([]string, error) {
 		return nil, ErrInvalidPath
 	}
 	return strings.Split(path, "/"), nil
+}
+
+// PutBlock preserves per-block options and forwards the complete batch.
+func (sink fileBlockSink) PutBlock(ctx context.Context, requests []eris.PutBlockRequest) ([]eris.Reference, error) {
+	if len(requests) == 0 {
+		return nil, nil
+	}
+	if limit := sink.BatchSize(); limit > 0 && len(requests) > limit {
+		return nil, eris.ErrBatchTooLarge
+	}
+	// Do not change the caller's request slice.
+	requests = slices.Clone(requests)
+	for i := range requests {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		requests[i].Options.Root = sink.root
+	}
+	return sink.BlockSink.PutBlock(ctx, requests)
 }

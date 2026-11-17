@@ -9,6 +9,8 @@ import (
 	stdfs "io/fs"
 	"math"
 	"testing"
+
+	"github.com/asciimoth/goeris/internal/batch"
 )
 
 func TestReaderHelpers(t *testing.T) {
@@ -147,7 +149,7 @@ func TestReaderLimits(t *testing.T) {
 			t.Fatalf("nil source: %v", err)
 		}
 	}
-	if _, err := NewReader(context.Background(), Capability{}, make(BlockSet), BlockOptions{}); !errors.Is(err, ErrInvalidCapability) {
+	if _, err := NewReader(context.Background(), Capability{}, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, ErrInvalidCapability) {
 		t.Fatalf("invalid capability: %v", err)
 	}
 }
@@ -157,12 +159,12 @@ func TestReaderRejectsBadBlocks(t *testing.T) {
 	content := deterministicBytes(3000)
 	capability, blocks, _ := Encode(content, Secret{}, BlockSize1KiB)
 	missing := cloneBlockSet(blocks)
-	delete(missing, capability.Root.Reference)
+	delete(missing.Blocks, capability.Root.Reference)
 	if _, err := NewReader(context.Background(), capability, missing, BlockOptions{}); !errors.Is(err, ErrMissingBlock) {
 		t.Fatalf("missing root error = %v", err)
 	}
 	wrongSize := cloneBlockSet(blocks)
-	wrongSize[capability.Root.Reference] = Block{Data: []byte{1}}
+	wrongSize.Blocks[capability.Root.Reference] = Block{Data: []byte{1}}
 	if _, err := NewReader(context.Background(), capability, wrongSize, BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Fatalf("short root error = %v", err)
 	}
@@ -170,12 +172,12 @@ func TestReaderRejectsBadBlocks(t *testing.T) {
 		t.Fatalf("wrong size from source error = %v", err)
 	}
 	corrupt := cloneBlockSet(blocks)
-	corrupt[capability.Root.Reference].Data[0] ^= 1
+	corrupt.Blocks[capability.Root.Reference].Data[0] ^= 1
 	if _, err := NewReader(context.Background(), capability, corrupt, BlockOptions{}); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("corrupt root error = %v", err)
 	}
 	leafCap, leafBlocks, _ := Encode([]byte("x"), Secret{}, BlockSize1KiB)
-	leafBlocks[leafCap.Root.Reference] = Block{Data: make([]byte, BlockSize1KiB)}
+	leafBlocks.Blocks[leafCap.Root.Reference] = Block{Data: make([]byte, BlockSize1KiB)}
 	if _, err := NewReader(context.Background(), leafCap, leafBlocks, BlockOptions{}); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("corrupt leaf error = %v", err)
 	}
@@ -189,7 +191,7 @@ func TestReaderRejectsBadBlocks(t *testing.T) {
 	if n, err := reader.ReadAt(make([]byte, 1), int64(len(content))); n != 0 || !errors.Is(err, io.EOF) {
 		t.Fatalf("end ReadAt = (%d, %v)", n, err)
 	}
-	root, err := DecryptNode(blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
+	root, err := DecryptNode(blocks.Blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +200,7 @@ func TestReaderRejectsBadBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	firstPair := pairs[0]
-	delete(blocks, firstPair.Reference)
+	delete(blocks.Blocks, firstPair.Reference)
 	if _, err := reader.ReadAt(make([]byte, 1), 0); !errors.Is(err, ErrMissingBlock) {
 		t.Fatalf("missing leaf read error = %v", err)
 	}
@@ -206,10 +208,10 @@ func TestReaderRejectsBadBlocks(t *testing.T) {
 
 func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
 	t.Parallel()
-	blocks := make(BlockSet)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
 	badLeaf := make([]byte, BlockSize1KiB)
 	badLeafBlock, badLeafPair, _ := EncryptNode(badLeaf, Secret{}, 0)
-	blocks[badLeafPair.Reference] = Block{Data: badLeafBlock}
+	blocks.Blocks[badLeafPair.Reference] = Block{Data: badLeafBlock}
 	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Root: badLeafPair}, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidPadding) {
 		t.Fatalf("bad padding error = %v", err)
 	}
@@ -217,17 +219,17 @@ func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
 	validLeaf := make([]byte, BlockSize1KiB)
 	validLeaf[0] = 0x80
 	leafBlock, leafPair, _ := EncryptNode(validLeaf, Secret{}, 0)
-	blocks[leafPair.Reference] = Block{Data: leafBlock}
+	blocks.Blocks[leafPair.Reference] = Block{Data: leafBlock}
 	oneChildNode := makeNode(leafPair)
 	oneBlock, onePair, _ := EncryptNode(oneChildNode, Secret{}, 1)
-	blocks[onePair.Reference] = Block{Data: oneBlock}
+	blocks.Blocks[onePair.Reference] = Block{Data: oneBlock}
 	oneCap := Capability{BlockSize: BlockSize1KiB, Level: 1, Root: onePair}
 	if _, err := NewReader(context.Background(), oneCap, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("one-child root error = %v", err)
 	}
 	levelTwoNode := makeNode(onePair, onePair)
 	levelTwoBlock, levelTwoPair, _ := EncryptNode(levelTwoNode, Secret{}, 2)
-	blocks[levelTwoPair.Reference] = Block{Data: levelTwoBlock}
+	blocks.Blocks[levelTwoPair.Reference] = Block{Data: levelTwoBlock}
 	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 2, Root: levelTwoPair}, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("short non-final subtree error = %v", err)
 	}
@@ -237,31 +239,31 @@ func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
 	}
 	fullNode := makeNode(fullChildren...)
 	fullBlock, fullPair, _ := EncryptNode(fullNode, Secret{}, 1)
-	blocks[fullPair.Reference] = Block{Data: fullBlock}
+	blocks.Blocks[fullPair.Reference] = Block{Data: fullBlock}
 	repeatedNode := makeNode(fullPair, fullPair)
 	repeatedBlock, repeatedPair, _ := EncryptNode(repeatedNode, Secret{}, 2)
-	blocks[repeatedPair.Reference] = Block{Data: repeatedBlock}
+	blocks.Blocks[repeatedPair.Reference] = Block{Data: repeatedBlock}
 	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 2, Root: repeatedPair}, blocks, BlockOptions{}); err != nil {
 		t.Fatalf("repeated valid subtree error = %v", err)
 	}
 	missingInternal := Pair{Reference: Reference{9}, Key: Key{8}}
 	missingNode := makeNode(missingInternal, onePair)
 	missingBlock, missingPair, _ := EncryptNode(missingNode, Secret{}, 2)
-	blocks[missingPair.Reference] = Block{Data: missingBlock}
+	blocks.Blocks[missingPair.Reference] = Block{Data: missingBlock}
 	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 2, Root: missingPair}, blocks, BlockOptions{}); !errors.Is(err, ErrMissingBlock) {
 		t.Fatalf("missing internal error = %v", err)
 	}
 
 	emptyNode := make([]byte, BlockSize1KiB)
 	emptyBlock, emptyPair, _ := EncryptNode(emptyNode, Secret{}, 1)
-	blocks[emptyPair.Reference] = Block{Data: emptyBlock}
+	blocks.Blocks[emptyPair.Reference] = Block{Data: emptyBlock}
 	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 1, Root: emptyPair}, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("empty root error = %v", err)
 	}
 
 	twoChildren := makeNode(leafPair, leafPair)
 	rootBlock, rootPair, _ := EncryptNode(twoChildren, Secret{}, 1)
-	blocks[rootPair.Reference] = Block{Data: rootBlock}
+	blocks.Blocks[rootPair.Reference] = Block{Data: rootBlock}
 	badKeyCap := Capability{BlockSize: BlockSize1KiB, Level: 1, Root: rootPair}
 	badKeyCap.Root.Key[0] ^= 1
 	if _, err := NewReader(context.Background(), badKeyCap, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidRootKey) {
@@ -271,7 +273,7 @@ func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
 	brokenSlots := makeNode(leafPair)
 	copy(brokenSlots[2*PairSize:], brokenSlots[:PairSize])
 	brokenBlock, brokenPair, _ := EncryptNode(brokenSlots, Secret{}, 1)
-	blocks[brokenPair.Reference] = Block{Data: brokenBlock}
+	blocks.Blocks[brokenPair.Reference] = Block{Data: brokenBlock}
 	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 1, Root: brokenPair}, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("non-contiguous pairs error = %v", err)
 	}
@@ -282,9 +284,9 @@ func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
 }
 
 func cloneBlockSet(blocks BlockSet) BlockSet {
-	clone := make(BlockSet, len(blocks))
-	for ref, block := range blocks {
-		clone[ref] = Block{Data: bytes.Clone(block.Data), Options: block.Options}
+	clone := BlockSet{Blocks: make(map[Reference]Block, len(blocks.Blocks))}
+	for ref, block := range blocks.Blocks {
+		clone.Blocks[ref] = Block{Data: bytes.Clone(block.Data), Options: block.Options}
 	}
 	return clone
 }
@@ -334,8 +336,8 @@ func TestReaderRejectsSourceEOF(t *testing.T) {
 	}
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (source malformedSource) GetBlock(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (source malformedSource) getBlock(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions) {
 	return source, nil, BlockOptions{}
 }
 
@@ -345,13 +347,13 @@ type failAfterSource struct {
 	err           error
 }
 
-//nolint:staticcheck // ST1008: BlockSource requires options as the third return value.
-func (source *failAfterSource) GetBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
+//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
+func (source *failAfterSource) getBlock(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
 	source.calls++
 	if source.calls == source.failAt {
 		return nil, source.err, BlockOptions{}
 	}
-	return source.BlockSource.GetBlock(ctx, ref, 0, BlockOptions{})
+	return GetBlock(ctx, source.BlockSource, ref, 0, BlockOptions{})
 }
 
 func storeTestNode(node []byte, secret Secret, level Level, sink BlockSink) (Pair, error) {
@@ -359,6 +361,30 @@ func storeTestNode(node []byte, secret Secret, level Level, sink BlockSink) (Pai
 	if err != nil {
 		return Pair{}, err
 	}
-	_, err = sink.PutBlock(context.Background(), block, 0, BlockOptions{})
+	_, err = PutBlock(context.Background(), sink, block, 0, BlockOptions{})
 	return pair, err
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s malformedSource) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See BlockSource for error rules.
+func (s malformedSource) GetBlock(ctx context.Context, requests []BlockRequest) ([]Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), ErrMissingBlock, func(r BlockRequest) (Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return Block{Data: data, Options: options}, err
+	})
+}
+
+// BatchSize reports the maximum number of requests per call.
+func (s *failAfterSource) BatchSize() int { return 1 }
+
+// GetBlock returns results in request order, with zero slots for missing blocks.
+// Missing blocks do not stop later reads. See BlockSource for error rules.
+func (s *failAfterSource) GetBlock(ctx context.Context, requests []BlockRequest) ([]Block, error) {
+	return batch.Read(ctx, requests, s.BatchSize(), ErrMissingBlock, func(r BlockRequest) (Block, error) {
+		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+		return Block{Data: data, Options: options}, err
+	})
 }
