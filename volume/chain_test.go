@@ -23,6 +23,9 @@ func openChain(t *testing.T, paths string) *volume.Chain {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = chain.Close() })
+	if chain.BatchSize() != 1 {
+		t.Fatalf("volume chain batch size = %d, want 1", chain.BatchSize())
+	}
 	return chain
 }
 

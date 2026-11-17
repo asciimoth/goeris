@@ -12,14 +12,15 @@ import (
 var ErrNoBlockStorage = errors.New("eris: no compatible block storage")
 
 // CombinedBlockStore reads and writes blocks through an ordered list of stores.
-// Each operation tries compatible entries in order until one succeeds. A write
+// Each request tries compatible entries in order until one succeeds. A write
 // stops at the first success; it does not copy the block to later stores.
 // An options update continues until a sink returns true, nil.
 // Use NewCombinedBlockStore to resolve the methods for each operation once.
 //
-// If all compatible entries fail, the operation returns the last error unchanged
-// and a zero result. Earlier errors go to OnError, if set. If no entry supports the
-// operation, it returns ErrNoBlockStorage. The zero value has no stores.
+// For a single request, if all compatible entries fail, the operation returns
+// the last error unchanged and a zero result. Earlier errors go to OnError, if
+// set. If no entry supports the operation, it returns ErrNoBlockStorage.
+// The zero value has no stores.
 //
 // Each call passes ctx unchanged and checks cancellation before each attempt.
 // A successful attempt returns its result. If the final entry fails, its error
@@ -34,12 +35,23 @@ var ErrNoBlockStorage = errors.New("eris: no compatible block storage")
 // Each attempt receives the original options. Reads return the options from
 // the successful source, or zero options if all attempts fail.
 //
+// BatchSize is the smallest nonzero limit of the wrapped sources and sinks,
+// or zero if all accept any size. Each child call respects its batch limit.
+// Results stay in request order, but a child can process later requests before
+// an earlier request falls back. Option updates can therefore have effects
+// beyond an error's returned prefix. Single-request calls keep their original
+// fallback and callback order.
+//
 // Concurrent calls are safe if the wrapped stores and OnError support concurrent
 // calls and no caller changes OnError during use.
 type CombinedBlockStore struct {
-	update []combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) (bool, error)]
-	get    []combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions)]
-	put    []combinedBlockMethod[func(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error)]
+	update      []combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) (bool, error)]
+	get         []combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions)]
+	put         []combinedBlockMethod[func(context.Context, []byte, TTL, BlockOptions, ...Reference) (Reference, error)]
+	getBatch    []combinedBatchMethod[BlockRequest, Block]
+	putBatch    []combinedBatchMethod[PutBlockRequest, Reference]
+	updateBatch []combinedBatchMethod[BlockRequest, bool]
+	batchLimits []func() int
 
 	// OnError receives errors that an operation discards. The index is the
 	// zero-based position in the constructor's input, including skipped entries.
@@ -50,6 +62,9 @@ type CombinedBlockStore struct {
 	// The final failed attempt is not reported if its error is returned to the
 	// caller. Separate attempts can return the same error value. A nil callback
 	// discards earlier errors.
+	// For multi-request calls, a callback precedes each fallback group. Separate
+	// groups can report the same child batch error. Child calls and callbacks
+	// can occur in a different order than separate single-request calls.
 	OnError func(index int, err error)
 }
 
@@ -71,13 +86,21 @@ type combinedBlockMethod[Method any] struct {
 func NewCombinedBlockStore(stores ...any) *CombinedBlockStore {
 	combined := &CombinedBlockStore{}
 	for index, entry := range stores {
-		if source, ok := entry.(BlockSource); ok {
+		source, reads := entry.(BlockSource)
+		if reads {
+			combined.batchLimits = append(combined.batchLimits, source.BatchSize)
+			combined.getBatch = append(combined.getBatch, combinedBatchMethod[BlockRequest, Block]{index, source.BatchSize, source.GetBlock})
 			//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
 			combined.get = append(combined.get, combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) ([]byte, error, BlockOptions)]{index, func(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) ([]byte, error, BlockOptions) {
 				return GetBlock(ctx, source, ref, ttl, options)
 			}})
 		}
 		if sink, ok := entry.(BlockSink); ok {
+			if !reads {
+				combined.batchLimits = append(combined.batchLimits, sink.BatchSize)
+			}
+			combined.putBatch = append(combined.putBatch, combinedBatchMethod[PutBlockRequest, Reference]{index, sink.BatchSize, sink.PutBlock})
+			combined.updateBatch = append(combined.updateBatch, combinedBatchMethod[BlockRequest, bool]{index, sink.BatchSize, sink.UpdateBlockOptions})
 			combined.update = append(combined.update, combinedBlockMethod[func(context.Context, Reference, TTL, BlockOptions) (bool, error)]{index, func(ctx context.Context, ref Reference, ttl TTL, options BlockOptions) (bool, error) {
 				return UpdateBlockOptions(ctx, sink, ref, ttl, options)
 			}})
@@ -166,30 +189,67 @@ func tryBlockStores[Method, Result any](ctx context.Context, methods []combinedB
 	return zero, ErrNoBlockStorage
 }
 
-// BatchSize returns one to preserve per-block fallback and callback order.
-func (s *CombinedBlockStore) BatchSize() int { return 1 }
+// BatchSize returns the smallest nonzero limit of the wrapped sources and sinks.
+// It returns zero if all accept any size, or one if there are no compatible
+// stores. Invalid negative child limits are treated as one. Limits are read on
+// each call, so changes to a child's limit also apply to the combined store.
+func (s *CombinedBlockStore) BatchSize() int {
+	if s == nil || len(s.batchLimits) == 0 {
+		return 1
+	}
+	limit := 0
+	for _, childLimit := range s.batchLimits {
+		child := childLimit()
+		if child < 0 {
+			child = 1
+		}
+		if child > 0 && (limit == 0 || child < limit) {
+			limit = child
+		}
+	}
+	return limit
+}
 
 // GetBlock tries each source in order until a read succeeds. It accepts up to
 // BatchSize requests and passes context, TTL, and options unchanged. A missing
 // block has a zero result slot. See BlockSource for the batch error rules.
 func (s *CombinedBlockStore) GetBlock(ctx context.Context, requests []BlockRequest) ([]Block, error) {
-	return batch.Read(ctx, requests, s.BatchSize(), ErrMissingBlock, func(r BlockRequest) (Block, error) {
-		data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
-		return Block{Data: data, Options: options}, err
-	})
+	// Every valid child limit allows a single request. Keep small calls on
+	// the original path without querying any child limits.
+	if len(requests) <= 1 {
+		return batch.Read(ctx, requests, 1, ErrMissingBlock, func(r BlockRequest) (Block, error) {
+			data, err, options := s.getBlock(ctx, r.Reference, r.TTL, r.Options)
+			return Block{Data: data, Options: options}, err
+		})
+	}
+	if limit := s.BatchSize(); limit > 0 && len(requests) > limit {
+		return nil, ErrBatchTooLarge
+	}
+	operation := combinedBatchOperation[BlockRequest, Block]{
+		methods: s.getBatch, onError: s.OnError, read: true,
+		retry: func(block Block) bool { return block.Data == nil },
+	}
+	return operation.run(ctx, requests)
 }
 
 // PutBlock tries each sink in order until a write succeeds. It accepts up to
 // BatchSize requests and passes context, TTL, and options unchanged. A successful
 // write is not copied to later sinks. Errors return only the completed prefix.
 func (s *CombinedBlockStore) PutBlock(ctx context.Context, requests []PutBlockRequest) ([]Reference, error) {
-	return batch.Run(ctx, requests, s.BatchSize(), func(r PutBlockRequest) (Reference, error) {
-		var expected []Reference
-		if r.Expected != nil {
-			expected = []Reference{*r.Expected}
-		}
-		return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
-	})
+	if len(requests) <= 1 {
+		return batch.Run(ctx, requests, 1, func(r PutBlockRequest) (Reference, error) {
+			var expected []Reference
+			if r.Expected != nil {
+				expected = []Reference{*r.Expected}
+			}
+			return s.putBlock(ctx, r.Data, r.TTL, r.Options, expected...)
+		})
+	}
+	if limit := s.BatchSize(); limit > 0 && len(requests) > limit {
+		return nil, ErrBatchTooLarge
+	}
+	operation := combinedBatchOperation[PutBlockRequest, Reference]{methods: s.putBatch, onError: s.OnError}
+	return operation.run(ctx, requests)
 }
 
 // UpdateBlockOptions tries each sink until a call returns true without an error.
@@ -198,7 +258,17 @@ func (s *CombinedBlockStore) PutBlock(ctx context.Context, requests []PutBlockRe
 // error. With no compatible sinks, it returns ErrNoBlockStorage. It accepts up to
 // BatchSize requests and returns only the completed prefix on error.
 func (s *CombinedBlockStore) UpdateBlockOptions(ctx context.Context, requests []BlockRequest) ([]bool, error) {
-	return batch.Run(ctx, requests, s.BatchSize(), func(r BlockRequest) (bool, error) {
-		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
-	})
+	if len(requests) <= 1 {
+		return batch.Run(ctx, requests, 1, func(r BlockRequest) (bool, error) {
+			return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
+		})
+	}
+	if limit := s.BatchSize(); limit > 0 && len(requests) > limit {
+		return nil, ErrBatchTooLarge
+	}
+	operation := combinedBatchOperation[BlockRequest, bool]{
+		methods: s.updateBatch, onError: s.OnError,
+		retry: func(changed bool) bool { return !changed },
+	}
+	return operation.run(ctx, requests)
 }

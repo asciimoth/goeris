@@ -310,9 +310,9 @@ changed, err := eris.UpdateBlockOptions(ctx, sink, ref, ttl, options)
 Stream encoders and readers respect the storage limit and cap their batches at
 64 blocks (at most 2 MiB of encrypted data). ERIS-FS uses the same bounded paths
 for file content and indexes. It does not collect a complete image for one
-write. Network clients and local volumes currently use a limit of one. The
-combined store also uses one to preserve its per-block fallback and callback
-order.
+write. Network clients and local volumes currently use a limit of one. Combined
+stores report the smallest nonzero child limit, or zero if all children accept
+any size. A combined store that includes a volume therefore reports one.
 
 `BlockOptions` is passed and returned by value. Its `HighPriority` and `Root`
 flags default to `false`.
@@ -414,6 +414,36 @@ store.OnError = func(index int, err error) {
 block, err, _ := eris.GetBlock(ctx, store, reference, eris.NoTTL, eris.BlockOptions{})
 ```
 
+Combined stores calculate `BatchSize()` from their wrapped sources and sinks. If
+all report zero, the combined store also reports zero and accepts any batch
+size. Otherwise, it reports the smallest nonzero limit. For example, limits
+`[0, 8, 4]` give a combined limit of 4. Entries that implement neither interface
+are ignored. A store with no compatible entries reports one. Limits are read on
+each call, so changes to child limits also apply to nested combined stores. The
+encoder and reader use this limit automatically. Volumes report one, so
+`volume.Chain` retains its limit of one and its existing fallback behavior.
+
+Each child call respects that child's batch limit. Zero means unlimited for the
+child; an invalid negative child limit is treated as one. Successful writes are
+not repeated. After a partial write failure, only the failed request goes to
+fallback stores before later writes resume at the first store. Consecutive
+missing reads and unchanged option updates can go to fallback stores as a batch.
+Results remain in request order, with missing read slots and completed prefixes
+on stopping errors, as defined by the storage interfaces. If a write returns an
+error with a full list of references, the combined store returns those
+references and the error without replaying the writes.
+
+Batching can change the order of child calls and `OnError` callbacks. A child
+can process later requests before an earlier request needs fallback. Thus an
+option update can have effects beyond the returned prefix if fallback fails.
+Each fallback group reports its discarded error before the next attempt;
+separate groups can report the same child batch error. Single-request calls keep
+their existing call and callback order. Set `OnError` before concurrent use.
+
+Read errors can retain additional missing-block details from a child's batch
+error. The first missing error and any stopping error remain available through
+`errors.Is`.
+
 Each operation stops at the first success. Writes skip entries without a sink
 and store the block in the first successful sink. The wrapper above exposes
 `GetBlock` and `BatchSize`. Assigning a store to a `BlockSource` variable alone
@@ -430,14 +460,14 @@ its error is kept even if the context was canceled during that attempt.
 Otherwise, cancellation stops further attempts and returns the context error. An
 already canceled context takes priority over `eris.ErrNoBlockStorage`.
 
-If all compatible entries fail, the method returns the last error unchanged and
-a zero result. `OnError` receives each discarded attempt's error and its
-original index in the constructor's input. Calls are synchronous and occur
-before the next attempt, or before returning a context error if cancellation
-prevents that attempt. The final attempt is not reported when its error is
-returned to the caller. Separate attempts can return the same error value. Leave
-`OnError` nil to discard these reports. If no entry supports the operation, the
-method returns `eris.ErrNoBlockStorage`.
+For a single request, if all compatible entries fail, the method returns the
+last error unchanged and a zero result. `OnError` receives each discarded
+attempt's error and its original index in the constructor's input. Calls are
+synchronous and occur before the next attempt, or before returning a context
+error if cancellation prevents that attempt. The final attempt is not reported
+when its error is returned to the caller. Separate attempts can return the same
+error value. Leave `OnError` nil to discard these reports. If no entry supports
+the operation, the method returns `eris.ErrNoBlockStorage`.
 
 Concurrent calls are safe when `OnError` stays fixed and the stores and callback
 support concurrent calls.
