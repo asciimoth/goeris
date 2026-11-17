@@ -7,7 +7,9 @@
 // an in-memory BlockSet, and a CombinedBlockStore that tries caller-supplied
 // stores in order. EncodeContent and EncodeContentRecommended stream content
 // from an io.Reader to a BlockSink and return its read capability. NewReader
-// decodes content from a BlockSource with sequential and random access.
+// decodes content from a BlockSource with sequential and random access. Readers
+// send best-effort PrefetchBlock hints for likely reads. Prefetch requests all
+// content blocks by reading internal nodes and sending hints for leaves.
 // Applications supply persistent storage, network transports, content I/O,
 // and secret generation.
 //

@@ -232,3 +232,6 @@ func (s *Client) UpdateBlockOptions(ctx context.Context, requests []eris.BlockRe
 		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
 	})
 }
+
+// PrefetchBlock ignores prefetch hints. This terminal source does not prefetch.
+func (*Client) PrefetchBlock(context.Context, []eris.BlockRequest) {}

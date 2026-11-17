@@ -16,7 +16,9 @@
 // retain it. Later FS calls accept their own contexts.
 // OpenFile also gives typed access to seeking and random-access reads for
 // uncompressed files. AddCompressedFile creates deterministic Lzip content;
-// compressed files are read sequentially with Open.
+// compressed files are read sequentially with Open. Both use ERIS reader
+// read-ahead hints. FS.Prefetch explicitly requests a file or directory tree;
+// it reads required indexes and sends best-effort hints for file leaves.
 // AddAutoFile selects compression with the fixed ERIS-FS-AUTO-1 sample policy.
 // ChooseCompression exposes the same decision without encoding a file.
 //

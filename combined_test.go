@@ -765,3 +765,5 @@ type separateBlockStore struct {
 }
 
 func (separateBlockStore) BatchSize() int { return 1 }
+
+func (*combinedProbe) PrefetchBlock(context.Context, []BlockRequest) {}

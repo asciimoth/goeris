@@ -231,6 +231,37 @@ size is known; it opens without block I/O and checks tree shape and padding as
 content is read. Readers support `Read`, `ReadAt`, `Seek`, and `Close`. Closing
 a reader does not close its block source.
 
+Readers send best-effort prefetch hints for demand blocks and likely next
+blocks. Sequential reads start with four leaves of read-ahead and grow to at
+most 32. A random jump resets this window. Demand hints and read-ahead cover at
+most 64 leaves per iteration. Speculation follows cached indexes only; it never
+adds block reads. `Seek` hints its target through the same cached paths. A
+bounded cache of 128 references suppresses repeated hints. ERIS-FS regular files
+and compressed streams use this reader policy too.
+
+To request all content in advance, use:
+
+```go
+err := eris.Prefetch(ctx, capability, source, eris.NoTTL, options)
+err = reader.Prefetch(ctx)          // Keeps the reader position.
+err = image.Prefetch(ctx, ".")      // All files and nested ERIS-FS indexes.
+err = image.Prefetch(ctx, "docs")   // Only this file or directory.
+```
+
+These traversal calls can block: they read internal nodes and ERIS-FS indexes
+needed to discover references. They send hints for file leaves without reading
+or decompressing them, including the final padding leaf. Repeated internal
+subtrees and repeated filesystem capabilities are scanned once per traversal.
+Directory traversal skips symbolic links; the explicitly named path follows
+links as `Open` does. `sub.Prefetch(ctx, ".")` visits only the selected
+directory. As with `Sub.Open`, an explicitly named link can resolve outside that
+subtree but remains inside the image. `NewIOFS(ctx, image).Prefetch(name)` uses
+the bound context. Custom implementations of the ERIS-FS `FileSystem` interface
+must also supply `Prefetch`. Traversal errors report index-read or cancellation
+failures, not failures of background hints. Success does not guarantee that
+content exists or is cached. Use a goroutine managed by the caller if the
+traversal must run in the background.
+
 Raw content APIs now belong to the root package. Replace `fs.EncodeContent` with
 `eris.EncodeContent`. The shared reader has moved from `internal/erisreader` to
 `eris`; its size-limit error is `eris.ErrDecodedTooLarge`. The root streaming
@@ -257,14 +288,16 @@ The interfaces are:
 
 ```go
 GetBlock(ctx context.Context, requests []BlockRequest) ([]Block, error)
+PrefetchBlock(ctx context.Context, requests []BlockRequest)
 PutBlock(ctx context.Context, requests []PutBlockRequest) ([]Reference, error)
 UpdateBlockOptions(ctx context.Context, requests []BlockRequest) ([]bool, error)
 BatchSize() int
 ```
 
-This is a breaking API change. Custom sources and sinks must implement the batch
-methods and `BatchSize`. Replace single-block method calls with the package
-helpers shown below, or supply a one-request slice to the new methods.
+This is a breaking API change. Custom sources and sinks must implement their
+batch methods and `BatchSize`. Sources must also implement `PrefetchBlock`;
+write-only sinks do not need it. Replace single-block method calls with the
+package helpers shown below, or supply a one-request slice to the new methods.
 
 `BlockRequest` has `Reference`, `TTL`, and `Options` fields. `PutBlockRequest`
 has `Data`, `TTL`, `Options`, and an optional `Expected *Reference`. A reference
@@ -273,9 +306,25 @@ block against its requested reference. Read results include stored options.
 
 Both interfaces use the same `BatchSize` limit for all operations. Zero permits
 any size. Implementations with an unknown limit, such as network API clients,
-must report one as a safe default. Oversized batches return `ErrBatchTooLarge`
-before processing any request. Empty batches succeed without I/O, even when the
-context is canceled.
+must report one as a safe default. Oversized read and write batches return
+`ErrBatchTooLarge` before processing any request. Oversized prefetch batches are
+silently discarded. Empty batches succeed without I/O, even when the context is
+canceled.
+
+`PrefetchBlock` has the same arguments as `GetBlock` and returns nothing. It
+must return immediately after accepting or discarding hints, without waiting for
+block I/O, queue space, or background work. Hints are best-effort and may be
+ignored. Empty, canceled, and oversized hint batches are discarded. Sources must
+copy request slices before keeping them after return. Background work must honor
+the supplied context. Middleware preserves TTL and options. Current terminal
+sources (`BlockSet`, volumes, HTTP, CoAP, and S3 clients) ignore hints; no
+network prefetch protocol is added. Custom sources can implement a no-op:
+
+```go
+func (s *MySource) PrefetchBlock(context.Context, []eris.BlockRequest) {}
+```
+
+Use `eris.PrefetchBlock(ctx, source, ref, ttl, options)` for a single hint.
 
 Read results keep their request positions. A missing block has nil `Data` and
 zero `Options`. `GetBlock` continues after missing blocks and returns every
@@ -444,10 +493,12 @@ Read errors can retain additional missing-block details from a child's batch
 error. The first missing error and any stopping error remain available through
 `errors.Is`.
 
-Each operation stops at the first success. Writes skip entries without a sink
-and store the block in the first successful sink. The wrapper above exposes
-`GetBlock` and `BatchSize`. Assigning a store to a `BlockSource` variable alone
-does not hide its write methods from the constructor.
+Reads and writes stop at the first success. Prefetch hints go to every
+downstream source, including nested combined stores. Writes skip entries without
+a sink and store the block in the first successful sink. The wrapper above
+exposes `GetBlock`, `PrefetchBlock`, and `BatchSize`. Assigning a store to a
+`BlockSource` variable alone does not hide its write methods from the
+constructor.
 
 The constructor also accepts sinks. It selects methods for each operation and
 skips entries without a suitable method. Changing the input slice after

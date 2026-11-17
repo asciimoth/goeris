@@ -387,3 +387,5 @@ func (s *countingSource) GetBlock(ctx context.Context, requests []eris.BlockRequ
 		return eris.Block{Data: data, Options: options}, err
 	})
 }
+
+func (*countingSource) PrefetchBlock(context.Context, []eris.BlockRequest) {}

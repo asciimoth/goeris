@@ -226,3 +226,6 @@ func (s *Client) GetBlock(ctx context.Context, requests []eris.BlockRequest) ([]
 		return eris.Block{Data: data, Options: options}, err
 	})
 }
+
+// PrefetchBlock ignores prefetch hints. This terminal source does not prefetch.
+func (*Client) PrefetchBlock(context.Context, []eris.BlockRequest) {}

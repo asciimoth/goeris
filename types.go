@@ -282,3 +282,6 @@ func (s BlockSet) UpdateBlockOptions(ctx context.Context, requests []BlockReques
 		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
 	})
 }
+
+// PrefetchBlock ignores prefetch hints. This terminal source does not prefetch.
+func (BlockSet) PrefetchBlock(context.Context, []BlockRequest) {}

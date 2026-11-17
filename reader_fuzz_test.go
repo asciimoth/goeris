@@ -104,6 +104,10 @@ func FuzzTreeShape(f *testing.F) {
 		if (sizedErr == nil) != valid {
 			t.Fatalf("counts %v: sized reader = %v; valid = %t", counts, sizedErr, valid)
 		}
+		prefetchErr := Prefetch(context.Background(), capability, blocks, NoTTL, BlockOptions{})
+		if (prefetchErr == nil) != valid {
+			t.Fatalf("counts %v: prefetch = %v; valid = %t", counts, prefetchErr, valid)
+		}
 		valid = valid && int64(wantSize) <= limit
 		decoded, coreErr := DecodeWithLimit(capability, blocks, limit)
 		reader, readerErr := NewReaderWithLimit(context.Background(), capability, blocks, limit, NoTTL, BlockOptions{})

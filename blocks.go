@@ -36,8 +36,9 @@ var ErrBatchTooLarge = batch.ErrTooLarge
 // never return more results than requests.
 var ErrInvalidBatchResult = errors.New("eris: invalid batch result count")
 
-// BlockRequest identifies one read or options update. Each request has its own
-// TTL and options. Read options do not change the stored options.
+// BlockRequest identifies one read, prefetch hint, or options update. Each
+// request has its own TTL and options. Read and prefetch options do not change
+// the stored options.
 type BlockRequest struct {
 	Reference Reference
 	TTL       TTL
@@ -82,8 +83,19 @@ type PutBlockRequest struct {
 type BlockSource interface {
 	GetBlock(ctx context.Context, requests []BlockRequest) ([]Block, error)
 
-	// BatchSize is the maximum number of requests per call, for both reads
-	// and writes. Zero permits any size. The value must not be negative.
+	// PrefetchBlock hints that these blocks may be read soon. It returns
+	// immediately after accepting or discarding the hints. It must not wait
+	// for block I/O, queue space, or background work. It returns no result and
+	// gives no guarantee of availability, retention, or faster reads.
+	// Implementations may ignore all hints. Empty, canceled, and oversized
+	// batches are discarded. BatchSize and request ownership rules apply:
+	// copy requests before retaining them. Context, TTL, and options have
+	// the same meaning as for GetBlock. Background work must honor ctx.
+	PrefetchBlock(ctx context.Context, requests []BlockRequest)
+
+	// BatchSize is the maximum number of requests per call for reads,
+	// prefetch hints, and writes. Zero permits any size. The value must not
+	// be negative.
 	// If the limit is unknown (for example, a remote API), return 1 as a
 	// safe default. Callers can use smaller batches to bound memory use.
 	BatchSize() int
@@ -158,4 +170,10 @@ func UpdateBlockOptions(ctx context.Context, sink BlockSink, ref Reference, ttl 
 		return false, ErrInvalidBatchResult
 	}
 	return results[0], nil
+}
+
+// PrefetchBlock hints one block without constructing a request slice.
+// It has the same best-effort, nonblocking contract as BlockSource.PrefetchBlock.
+func PrefetchBlock(ctx context.Context, source BlockSource, ref Reference, ttl TTL, options BlockOptions) {
+	source.PrefetchBlock(ctx, []BlockRequest{{Reference: ref, TTL: ttl, Options: options}})
 }

@@ -657,3 +657,5 @@ func (s contextSourceFunc) GetBlock(ctx context.Context, requests []eris.BlockRe
 		return eris.Block{Data: data, Options: options}, err
 	})
 }
+
+func (contextSourceFunc) PrefetchBlock(context.Context, []eris.BlockRequest) {}

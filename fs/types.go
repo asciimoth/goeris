@@ -53,6 +53,9 @@ var (
 // file-system operations with context, link metadata, and typed access to
 // regular files that support seeking and random-access reads.
 type FileSystem interface {
+	// Prefetch requests all content below name. It can block on index reads.
+	// See FS.Prefetch for traversal and best-effort semantics.
+	Prefetch(ctx context.Context, name string) error
 	Open(ctx context.Context, name string) (stdfs.File, error)
 	OpenFile(ctx context.Context, name string) (ReadSeekCloser, error)
 	ReadFile(ctx context.Context, name string) ([]byte, error)

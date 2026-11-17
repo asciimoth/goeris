@@ -42,3 +42,7 @@ var (
 	_ stdfs.StatFS     = (*IOFS)(nil)
 	_ stdfs.SubFS      = (*IOFS)(nil)
 )
+
+// Prefetch requests all content below name using the bound context.
+// It can block on index reads; see FS.Prefetch.
+func (f *IOFS) Prefetch(name string) error { return f.fs.Prefetch(f.ctx, name) }

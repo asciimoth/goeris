@@ -537,3 +537,9 @@ func (s storeFunc) UpdateBlockOptions(ctx context.Context, requests []eris.Block
 		return s.updateBlockOptions(ctx, r.Reference, r.TTL, r.Options)
 	})
 }
+
+func (sourceFunc) PrefetchBlock(context.Context, []eris.BlockRequest) {}
+
+func (storeFunc) PrefetchBlock(context.Context, []eris.BlockRequest) {}
+
+func (*contextStore) PrefetchBlock(context.Context, []eris.BlockRequest) {}

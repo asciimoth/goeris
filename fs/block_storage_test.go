@@ -199,3 +199,5 @@ func (s *opaqueBlocks) GetBlock(ctx context.Context, requests []eris.BlockReques
 		return eris.Block{Data: data, Options: options}, err
 	})
 }
+
+func (*opaqueBlocks) PrefetchBlock(context.Context, []eris.BlockRequest) {}

@@ -25,7 +25,11 @@ type treeSummary struct {
 // is not ready for use. The source must verify block references as required by
 // BlockSource. Every block read uses the context supplied at construction,
 // unchanged. Each block read receives a copy of the construction options.
-// Cancellation stops later reads, including reads from the cache.
+// Cancellation stops later reads, including reads from the cache. Read and
+// ReadAt send best-effort hints for demand blocks and a bounded sequential
+// read-ahead window. Seek hints its target through cached indexes only.
+// Hints do not add block reads or change read error handling. At most 128
+// recently hinted references are kept to suppress repeated hints.
 type Reader struct {
 	ctx         context.Context
 	mu          sync.Mutex
@@ -44,6 +48,13 @@ type Reader struct {
 	lastChecked bool
 	leafID      Pair
 	leafData    []byte
+	prefetchAll bool
+	readStarted bool
+	readEnd     int64
+	readAhead   int
+	hintStart   int64
+	hintEnd     int64
+	hinted      map[Reference]bool
 }
 
 // NewReader opens an ERIS byte sequence from an abstract block source. It
@@ -183,12 +194,17 @@ func (reader *Reader) readAt(buffer []byte, offset int64) (int, error) {
 	if int64(requested) > reader.size-offset {
 		requested = int(reader.size - offset)
 	}
+	reader.preparePrefetch(offset)
 	written := 0
 	blockSize := int64(reader.capability.BlockSize)
 	for written < requested {
 		if err := reader.ctx.Err(); err != nil {
 			return written, err
 		}
+		first := offset / blockSize
+		demand := 1 + (int(offset%blockSize)+requested-written-1)/int(blockSize)
+		end := first + min(reader.leaves-first, int64(min(64, demand+reader.readAhead)))
+		reader.prefetchRange(first, end)
 		// Batch only leaves needed by this read. Resolve internal paths through
 		// the existing bounded cache and keep no additional leaves between calls.
 		count := min(batch.Limit(reader.source.BatchSize()), 1+(int(offset%blockSize)+requested-written-1)/int(blockSize))
@@ -221,6 +237,7 @@ func (reader *Reader) readAt(buffer []byte, offset int64) (int, error) {
 		written += amount
 		offset += int64(amount)
 	}
+	reader.readEnd = offset
 	if offset == reader.size {
 		if err := reader.checkLast(); err != nil {
 			return written, err
@@ -313,6 +330,10 @@ func (reader *Reader) Seek(offset int64, whence int) (int64, error) {
 		return reader.position, stdfs.ErrInvalid
 	}
 	reader.position = base + offset
+	if reader.position < reader.size {
+		first := reader.position / int64(reader.capability.BlockSize)
+		reader.hintRange(reader.capability.Root, reader.capability.Level, first, first+1)
+	}
 	return reader.position, nil
 }
 
@@ -327,6 +348,7 @@ func (reader *Reader) Close() error {
 	reader.source = nil
 	reader.ctx = nil
 	reader.leafData = nil
+	reader.hinted = nil
 	return nil
 }
 
@@ -346,6 +368,11 @@ func (reader *Reader) inspect(pair Pair, level Level, root bool) (int64, Pair, e
 	}
 	if root && len(pairs) < 2 {
 		return 0, Pair{}, ErrInvalidNode
+	}
+	// Scans will visit all internal children. Explicit prefetch also hints
+	// leaves, but never reads them to discover size or check padding.
+	if reader.prefetchAll || level > 1 {
+		prefetchPairs(reader.ctx, reader.source, pairs, reader.ttl, reader.options)
 	}
 	capacity := subtreeLeafCapacity(reader.capability.BlockSize, level-1)
 	var total int64
@@ -428,6 +455,9 @@ func (reader *Reader) checkLast() error {
 	if !reader.sized || reader.lastChecked {
 		return nil
 	}
+	// Exact-block content has a separate padding leaf. Include it even when
+	// a random read has no read-ahead window.
+	reader.hintRange(reader.capability.Root, reader.capability.Level, reader.leaves-1, reader.leaves)
 	pair, err := reader.leafPair(reader.leaves - 1)
 	if err != nil {
 		return err
@@ -465,6 +495,7 @@ func (reader *Reader) leafPair(index int64) (Pair, error) {
 	pair := reader.capability.Root
 	base := int64(0)
 	for level := reader.capability.Level; level > 0; level-- {
+		_, cached := reader.cache[decodeNodeID{pair: pair, level: level}]
 		pairs, err := reader.internal(pair, level, level == reader.capability.Level)
 		if err != nil {
 			return Pair{}, err
@@ -480,6 +511,12 @@ func (reader *Reader) leafPair(index int64) (Pair, error) {
 		child := index / span
 		if child >= int64(len(pairs)) {
 			return Pair{}, ErrInvalidNode
+		}
+		// Newly loaded indexes can now expose the bounded demand/read-ahead
+		// range. This sends hints only; speculative paths are never read.
+		if !cached {
+			end := min(int64(len(pairs)), (max(base+index+1, reader.hintEnd)-base-1)/span+1)
+			reader.hintPairs(pairs[child:end])
 		}
 		pair = pairs[child]
 		base += child * span

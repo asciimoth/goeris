@@ -395,3 +395,5 @@ func (s sourceWithContext) GetBlock(ctx context.Context, requests []eris.BlockRe
 		return eris.Block{Data: data, Options: options}, err
 	})
 }
+
+func (sourceWithContext) PrefetchBlock(context.Context, []eris.BlockRequest) {}

@@ -14,7 +14,8 @@ var ErrNoBlockStorage = errors.New("eris: no compatible block storage")
 // CombinedBlockStore reads and writes blocks through an ordered list of stores.
 // Each request tries compatible entries in order until one succeeds. A write
 // stops at the first success; it does not copy the block to later stores.
-// An options update continues until a sink returns true, nil.
+// An options update continues until a sink returns true, nil. Prefetch hints
+// go to every downstream source.
 // Use NewCombinedBlockStore to resolve the methods for each operation once.
 //
 // For a single request, if all compatible entries fail, the operation returns
@@ -52,6 +53,7 @@ type CombinedBlockStore struct {
 	putBatch    []combinedBatchMethod[PutBlockRequest, Reference]
 	updateBatch []combinedBatchMethod[BlockRequest, bool]
 	batchLimits []func() int
+	prefetch    []func(context.Context, []BlockRequest)
 
 	// OnError receives errors that an operation discards. The index is the
 	// zero-based position in the constructor's input, including skipped entries.
@@ -88,6 +90,7 @@ func NewCombinedBlockStore(stores ...any) *CombinedBlockStore {
 	for index, entry := range stores {
 		source, reads := entry.(BlockSource)
 		if reads {
+			combined.prefetch = append(combined.prefetch, source.PrefetchBlock)
 			combined.batchLimits = append(combined.batchLimits, source.BatchSize)
 			combined.getBatch = append(combined.getBatch, combinedBatchMethod[BlockRequest, Block]{index, source.BatchSize, source.GetBlock})
 			//nolint:staticcheck // ST1008: the single-block helper keeps its return order.
@@ -271,4 +274,23 @@ func (s *CombinedBlockStore) UpdateBlockOptions(ctx context.Context, requests []
 		retry: func(changed bool) bool { return !changed },
 	}
 	return operation.run(ctx, requests)
+}
+
+// PrefetchBlock sends hints to every downstream source in input order.
+// It discards oversized batches before forwarding any hints. Downstream
+// methods must return immediately, as required by BlockSource. No goroutines
+// or unbounded queues are created by this middleware.
+func (s *CombinedBlockStore) PrefetchBlock(ctx context.Context, requests []BlockRequest) {
+	if len(requests) == 0 || s == nil {
+		return
+	}
+	if limit := s.BatchSize(); limit > 0 && len(requests) > limit {
+		return
+	}
+	for _, prefetch := range s.prefetch {
+		if ctx.Err() != nil {
+			return
+		}
+		prefetch(ctx, requests)
+	}
 }

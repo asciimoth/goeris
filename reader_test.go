@@ -388,3 +388,5 @@ func (s *failAfterSource) GetBlock(ctx context.Context, requests []BlockRequest)
 		return Block{Data: data, Options: options}, err
 	})
 }
+
+func (malformedSource) PrefetchBlock(context.Context, []BlockRequest) {}
