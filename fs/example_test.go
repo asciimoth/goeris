@@ -108,3 +108,79 @@ func ExampleNewIOFS() {
 	fmt.Println(string(content))
 	// Output: hello
 }
+
+func ExampleNewMount() {
+	ctx := context.Background()
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	if err := builder.AddFile(ctx, "hello.txt", strings.NewReader("Hello, ERIS!\n"), false); err != nil {
+		panic(err)
+	}
+	capability, err := builder.Finish(ctx)
+	if err != nil {
+		panic(err)
+	}
+
+	// Pass mount to an adapter that accepts io/fs.FS. Capability names resolve
+	// on demand; they do not appear in the mount's directory listings.
+	mount := erisfs.NewMount(ctx, blocks, eris.BlockOptions{})
+	content, err := fs.ReadFile(mount, "fs/"+capability.String()+"/hello.txt")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Print(string(content))
+
+	// The same capability at the root returns the decoded index bytes.
+	index, err := fs.ReadFile(mount, capability.String())
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("index:", erisfs.HasIndexHeader(index))
+
+	// A hash path returns one complete encrypted block, including its padding.
+	hash := capability.Root.Reference.String()
+	block, err := fs.ReadFile(mount, hash[:3]+"/"+hash[3:6]+"/"+hash[6:9]+"/"+hash[9:])
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("encrypted block bytes:", len(block))
+	// Output:
+	// Hello, ERIS!
+	// index: true
+	// encrypted block bytes: 1024
+}
+
+func ExampleMount_WithListingCache() {
+	ctx := context.Background()
+	capability, blocks, err := eris.Encode([]byte("hello"), eris.Secret{}, eris.BlockSize1KiB)
+	if err != nil {
+		panic(err)
+	}
+	base := erisfs.NewMount(ctx, blocks, eris.BlockOptions{})
+	// Enable independent LRU limits for 128 capabilities and 256 raw blocks.
+	// The original mount keeps its default listings.
+	mount, err := base.WithListingCache(128, 256)
+	if err != nil {
+		panic(err)
+	}
+	if _, err := mount.ReadFile(capability.String()); err != nil {
+		panic(err)
+	}
+	if _, err := mount.ReadFile(capability.Root.Reference.String()); err != nil {
+		panic(err)
+	}
+	entries, err := fs.ReadDir(mount, ".")
+	if err != nil {
+		panic(err)
+	}
+	// fs, one capability, one flat hash, and its first volume prefix.
+	fmt.Println("remembered root entries:", len(entries))
+	entries, err = fs.ReadDir(base, ".")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("default root entries:", len(entries))
+	// Output:
+	// remembered root entries: 4
+	// default root entries: 1
+}

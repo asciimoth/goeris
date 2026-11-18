@@ -3,6 +3,55 @@
 Base ERIS test vectors are in
 [the root test data directory](../../testdata/README.md).
 
+## Mount compatibility and fuzz tests
+
+`mount_test.go` uses the exact v1 index bytes and three capabilities from the
+[eris-go layout example](../../specs/eris-go-fuse-layout.md). It checks decoded
+content and image access through the same block source. The tests also cover v2
+images, nested indexes, compressed files, links, context cancellation, storage
+errors, and concurrent reads. `testing/fstest` checks the virtual directories
+and selected image trees.
+
+`mount_block_test.go` checks encrypted blocks at volume and flat paths,
+including ASCII case aliases. Files exported at `volume.BlockPath` are read back
+through `volume.Open`. Tests also cover both block sizes, prefix directory
+views, corrupt source data, concurrent file operations, and case-sensitive image
+names.
+
+`mount_cache_test.go` checks opt-in listing caches, independent limits,
+canonical aliases, LRU eviction, shared virtual `Sub` views, directory
+snapshots, failed loads, metadata reads, and concurrent operations.
+
+The mount fuzz files contain six targets:
+
+- `FuzzMountPaths`: public operations, path validation, capability aliases,
+  error paths, and directory listings.
+- `FuzzMountContent`: sequential and random-access reads against `bytes.Reader`,
+  both block sizes, and raw and image paths.
+- `FuzzMountIndex`: valid and malformed index bytes through block storage, while
+  checking that raw reads preserve the original content.
+- `FuzzMountLinks`: link targets and lookup results against the image API.
+- `FuzzMountBlocks`: encrypted bytes and random access against `bytes.Reader`,
+  with both block sizes, flat and volume paths, case aliases, and prefix views.
+- `FuzzMountListingCache`: operation sequences against an independent LRU model,
+  including failures, aliases, listings, prefix views, snapshots, and cache
+  resets.
+
+`FuzzIndexDecode` also includes the eris-go example as a seed. Run the mount
+targets separately for longer sessions, for example:
+
+```sh
+go test ./fs -run '^$' -fuzz '^FuzzMountPaths$' -fuzztime=1m
+go test ./fs -run '^$' -fuzz '^FuzzMountContent$' -fuzztime=1m
+go test ./fs -run '^$' -fuzz '^FuzzMountIndex$' -fuzztime=1m
+go test ./fs -run '^$' -fuzz '^FuzzMountLinks$' -fuzztime=1m
+go test ./fs -run '^$' -fuzz '^FuzzMountBlocks$' -fuzztime=1m
+go test ./fs -run '^$' -fuzz '^FuzzMountListingCache$' -fuzztime=1m
+```
+
+`just check` runs all repository fuzz targets, with five seconds per target by
+default. Set `FUZZ_TIME` to change that duration.
+
 ## Lzip regression vectors
 
 `lzip-conformance-v1.json` fixes the output of the

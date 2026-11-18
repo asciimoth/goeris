@@ -78,8 +78,9 @@ func (index Index) MarshalBinary() ([]byte, error) {
 }
 
 // UnmarshalBinary parses a deterministic ERIS-FS version 1 or 2 index.
-// Version 1 also accepts the text targets and length-first key order written
-// by older releases. Version 1 file sizes are set to -1.
+// Version 1 also accepts slash-separated text paths used by eris-go, and the
+// text targets and length-first key order written by older releases.
+// Version 1 file sizes are set to -1.
 // The receiver is not changed on failure.
 func (index *Index) UnmarshalBinary(data []byte) error {
 	if index == nil || !HasIndexHeader(data) {
@@ -144,22 +145,33 @@ type cborDecoder struct {
 }
 
 func (decoder *cborDecoder) entry(version uint64) (Entry, int, error) {
-	pathLength, err := decoder.head(4)
-	if err != nil || pathLength == 0 || pathLength > uint64(len(decoder.data)) {
-		return Entry{}, 0, ErrInvalidIndex
-	}
 	var entry Entry
-	for range pathLength {
-		component, err := decoder.text()
+	if version == LegacySpecificationVersion && decoder.offset < len(decoder.data) && decoder.data[decoder.offset]>>5 == 3 {
+		name, err := decoder.text()
 		if err != nil {
 			return Entry{}, 0, err
 		}
-		// Reject invalid components before allocating the rest of an
-		// untrusted path array. Validate uses the same component rules.
-		if !validPathComponent(component) {
+		entry.Path, err = splitPath(name)
+		if err != nil {
 			return Entry{}, 0, ErrInvalidIndex
 		}
-		entry.Path = append(entry.Path, component)
+	} else {
+		pathLength, err := decoder.head(4)
+		if err != nil || pathLength == 0 || pathLength > uint64(len(decoder.data)) {
+			return Entry{}, 0, ErrInvalidIndex
+		}
+		for range pathLength {
+			component, err := decoder.text()
+			if err != nil {
+				return Entry{}, 0, err
+			}
+			// Reject invalid components before allocating the rest of an
+			// untrusted path array. Validate uses the same component rules.
+			if !validPathComponent(component) {
+				return Entry{}, 0, ErrInvalidIndex
+			}
+			entry.Path = append(entry.Path, component)
+		}
 	}
 	keyEnd := decoder.offset
 	length, err := decoder.head(4)

@@ -134,3 +134,39 @@ These names do not overlap on a case-sensitive Linux mount. A volume prefix is
 three uppercase Base32 characters, `fs` is lowercase, and a complete capability
 has a different length from the 52-character flat block name. The paths under
 `M/fs/C/` belong to the decoded ERIS-FS tree and do not affect raw-block lookup.
+
+The `goeris/fs.Mount` implementation exposes both the canonical volume path and
+the flat path `M/H`. Both names select the same encrypted block from its
+`BlockSource`. The three prefix directories resolve on demand and have empty
+listings by default. Reads verify the block size and hash.
+
+Mount also accepts ASCII case variants of block hashes, capability names, and
+the reserved `fs` component. These aliases do not conflict: a prefix has three
+characters, `fs` has two, a flat hash has 52, and each capability form is
+longer. Unused base32 bits must still be zero; padding and other directory
+splits are rejected. These aliases apply only to mount lookup. The canonical
+volume names remain uppercase. Names and link targets inside `M/fs/C/` keep
+their original case-sensitive meaning, so entries named `File` and `file` stay
+distinct.
+
+`ReadLink` checks each target with link expansion before returning it. A link
+that can leave its ERIS-FS image returns an error, including a link that crosses
+the boundary through another link. Safe targets keep their original spelling.
+Targets with a backslash, colon, or NUL byte are rejected because a native
+adapter can interpret them as a host path.
+
+Callers can explicitly enable recent listings with
+`Mount.WithListingCache(capabilityLimit, blockLimit)`. Both categories are
+disabled by default. Each has a separate entry limit and least-recently-used
+eviction. Canonical URNs appear at the root after successful content opens,
+metadata queries, or index loads. Only capabilities loaded as valid indexes
+appear under `fs`. Verified raw-block loads add both flat hash entries and their
+volume paths. Alias names share one cache entry. The cache holds only
+identifiers and metadata; direct reads still use the block source. Listing
+virtual directories (the root, `fs`, and volume prefixes) does not refresh
+recency. Reading a directory inside `fs/C` loads its index and refreshes `C`. An
+open directory retains a snapshot after eviction; closing it releases that
+snapshot.
+
+Capability URNs contain decryption keys. Enabling capability listings exposes
+these keys to callers who can list the mount directories.

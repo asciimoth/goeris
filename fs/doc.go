@@ -1,6 +1,7 @@
 // Package fs writes version 2 of the [ERIS-FS recommendation] and reads
-// versions 1 and 2. It also reads the text symlink targets and length-first
-// map order used by earlier releases of this library.
+// versions 1 and 2. It also reads the version 1 text paths used by eris-go,
+// and the text symlink targets and length-first map order used by earlier
+// releases of this library.
 //
 // The low-level API contains Index, Entry, and the index codecs. It uses
 // the block source and sink interfaces in the eris package so applications can
@@ -21,6 +22,24 @@
 // it reads required indexes and sends best-effort hints for file leaves.
 // AddAutoFile selects compression with the fixed ERIS-FS-AUTO-1 sample policy.
 // ChooseCompression exposes the same decision without encoding a file.
+//
+// NewMount(ctx, source, options) exposes the [eris-go mount layout] through
+// io/fs. Paths at C return decoded content; paths at fs/C expose an ERIS-FS
+// image, where C is a full capability URN, unprefixed base32, or hexadecimal.
+// By default, the root lists only fs, and fs lists no entries. Capabilities
+// resolve on demand. NewMountWithLimit limits each decoded index. Mount keeps
+// no image cache; Sub retains a selected image for repeated access. The caller
+// can use Mount in a FUSE or 9P adapter. It does not mount a host filesystem.
+// For a base32 block hash H, Mount also exposes encrypted block bytes at
+// H[:3]/H[3:6]/H[6:9]/H[9:], matching volume.BlockPath, and at the flat path H.
+// Prefix directories resolve on demand and have empty listings by default.
+// Hashes, capabilities, and fs accept ASCII case variants; image entry paths keep
+// their original case-sensitive lookup rules.
+// Mount.WithListingCache enables bounded LRU listings for recently opened
+// capabilities and verified raw blocks. Limits are separate for each category;
+// zero disables a category. Only known image capabilities appear under fs.
+// The cache holds identifiers and metadata, not content. Virtual Sub views
+// share it, and open directories retain snapshots through later evictions.
 //
 // ResolveRoot and ResolvePath find absolute host paths on compatible ERIS-FS
 // mounts. Supply the directory that contains capability trees, such as /eris/fs.
@@ -80,13 +99,15 @@
 // Image paths use io/fs rules. Backslashes and names that are special on a host
 // operating system are not converted or filtered by the image APIs. ResolvePath
 // converts io/fs names to native paths and rejects names that cannot be
-// represented on the host. Applications that extract an image must check native
-// paths and symlink targets before writing them.
-// Open follows links only inside the image, but Sub does not confine links to
-// the selected subdirectory.
+// represented on the host. ReadLink rejects targets that can leave the image
+// or contain a backslash, colon, or NUL byte. Applications that extract an
+// image must still check native paths before writing them. Open follows links
+// only inside the image, but Sub does not confine links to the selected
+// subdirectory.
 //
 // [ERIS-FS recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/eris-fs/index.md
 // [deterministic encoding procedures]: https://github.com/asciimoth/goeris/blob/master/specs/eris-fs-encoding.md
+// [eris-go mount layout]: https://github.com/asciimoth/goeris/blob/master/specs/eris-go-fuse-layout.md
 package fs
 
 const (

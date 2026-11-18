@@ -15,6 +15,8 @@ import (
 )
 
 func FuzzIndexDecode(f *testing.F) {
+	_, mountVector := mountFixture(f)
+	f.Add(mountVector)
 	valid, _ := (Index{}).MarshalBinary()
 	f.Add(valid)
 	f.Add([]byte{})

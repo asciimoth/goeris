@@ -75,6 +75,58 @@ with version 1 read support:
 - deterministic Lzip compression and sequential reads with checksum and length
   checks.
 
+To build a mount adapter, use `fs.NewMount(ctx, source, options)`. It wraps an
+`eris.BlockSource` and implements the standard `io/fs` interfaces with the
+[eris-go mount layout](specs/eris-go-fuse-layout.md): `<capability>` returns
+decoded content, and `fs/<capability>/...` exposes an ERIS-FS tree. Full URNs,
+unprefixed base32, and hexadecimal capabilities are accepted. By default, the
+root lists only `fs`; capability names resolve on demand and are not listed.
+`OpenFile` supports `ReadAt` and `Seek` for uncompressed files. `ReadLink` and
+`Lstat` provide link targets and metadata for FUSE or 9P adapters. `Sub` retains
+an image for repeated access. The caller supplies the mount mechanism.
+
+`NewMountWithLimit` sets the decoded size limit for each index, including nested
+indexes. The default is 64 MiB. This does not limit file content. All operations
+retain the supplied context and block options. Image links resolve only within
+their image; `ReadLink` returns the original target for safe links and rejects
+escaping targets. Missing blocks match both `io/fs.ErrNotExist` and
+`eris.ErrMissingBlock` in errors returned by `Mount` methods.
+
+For a base32 block hash `H`, the mount also exposes the complete encrypted block
+at `H[:3]/H[3:6]/H[6:9]/H[9:]`, as specified by `volume.BlockPath`, and at the
+flat path `H`. Both names select the same source block. Reads verify its size
+and hash. Prefix directories resolve on demand and list no entries by default.
+Hashes, capabilities, and the reserved `fs` name accept ASCII case variants.
+Paths inside an ERIS-FS image stay case-sensitive, so entries such as `File` and
+`file` remain distinct. These lookup aliases do not change the strict parsing
+rules in the `eris` or `volume` packages.
+
+To list recent accesses, enable the optional cache explicitly:
+
+```go
+mount, err := fs.NewMount(ctx, source, options).WithListingCache(128, 256)
+```
+
+The two limits count capabilities and raw blocks separately. Zero disables a
+category; negative limits return `io/fs.ErrInvalid`. The returned mount starts
+with an empty cache and leaves the original mount unchanged. Each category
+evicts its least recently used entry. Successful content opens or stats, index
+loads, and verified raw-block loads refresh recency. Listing virtual directories
+(the root, `fs`, and volume prefixes) or reading entry metadata does not.
+Reading a directory inside `fs/C` loads its index and refreshes `C`. Aliases
+share one canonical entry.
+
+The root lists remembered capability URNs, flat hashes, and volume prefixes. The
+`fs` directory lists only capabilities successfully loaded as images. Prefix
+directories list the next components of remembered block paths. Internal decoder
+block reads and file capabilities found inside an image do not populate these
+listings. The cache holds identifiers and metadata, not content; it does not
+serve reads or guarantee source availability. Virtual `Sub` views share the
+cache. Open directories keep a snapshot of their listing across later evictions.
+
+Capability URNs contain decryption keys. If you enable capability listings,
+restrict access to the mount when those keys must stay private.
+
 Use `fs.ResolveRoot(capability)` to find a mounted ERIS-FS root directory, or
 `fs.ResolvePath(capability, "docs/readme.txt")` to find a file or subdirectory
 inside it. Entry names use `io/fs` path rules; `"."` selects the root. Both

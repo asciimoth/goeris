@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"io"
 	stdfs "io/fs"
 	"path"
@@ -14,6 +15,10 @@ import (
 )
 
 const directoryType EntryType = 255
+
+// errLinkEscape distinguishes a link that leaves the image from a missing
+// entry. Public lookup methods still report fs.ErrNotExist for both cases.
+var errLinkEscape = errors.New("eris-fs: symbolic link leaves image")
 
 // FS provides context-aware access to an ERIS-FS image. Use NewIOFS to
 // use the standard library file-system interfaces. Nested ERIS-FS indexes are
@@ -31,6 +36,9 @@ type FS struct {
 }
 
 type node struct {
+	// block is verified encrypted content for a Mount raw-block file only.
+	// Image nodes leave it nil and read through their capability instead.
+	block       []byte
 	mu          sync.Mutex
 	source      eris.BlockSource
 	options     eris.BlockOptions
@@ -146,6 +154,19 @@ func (item *node) load(ctx context.Context) error {
 }
 
 func (fileSystem *FS) find(ctx context.Context, name string, followFinal bool) (*node, error) {
+	item, err := fileSystem.findWithEscape(ctx, name, followFinal)
+	if errors.Is(err, errLinkEscape) {
+		return nil, stdfs.ErrNotExist
+	}
+	return item, err
+}
+
+// findWithEscape keeps link escapes distinct for ReadLink. Its other lookup
+// behavior is the same as find.
+func (fileSystem *FS) findWithEscape(ctx context.Context, name string, followFinal bool) (*node, error) {
+	if ctx == nil {
+		return nil, stdfs.ErrInvalid
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -188,7 +209,7 @@ func (fileSystem *FS) find(ctx context.Context, name string, followFinal bool) (
 			continue
 		case "..":
 			if len(ancestors) == 1 {
-				return nil, stdfs.ErrNotExist
+				return nil, errLinkEscape
 			}
 			ancestors = ancestors[:len(ancestors)-1]
 			continue
@@ -210,8 +231,11 @@ func (fileSystem *FS) find(ctx context.Context, name string, followFinal bool) (
 			return nil, stdfs.ErrInvalid
 		}
 		links++
-		if next.target == "" || strings.HasPrefix(next.target, "/") {
+		if next.target == "" {
 			return nil, stdfs.ErrNotExist
+		}
+		if strings.HasPrefix(next.target, "/") {
+			return nil, errLinkEscape
 		}
 		// Resolve each target component before processing its parent segments.
 		// Cleaning the text first can select a different file through a link.
@@ -261,6 +285,9 @@ func (fileSystem *FS) ReadFile(ctx context.Context, name string) ([]byte, error)
 }
 
 func (fileSystem *FS) openRegular(ctx context.Context, item *node, path string) (ReadSeekCloser, error) {
+	if item.block != nil {
+		return newMountBlockFile(ctx, item), nil
+	}
 	var reader *eris.Reader
 	var err error
 	item.mu.Lock()
@@ -337,8 +364,11 @@ func (fileSystem *FS) ReadDir(ctx context.Context, path string) ([]stdfs.DirEntr
 	return item.dirEntries(ctx), nil
 }
 
-// ReadLink reads a symbolic link. The returned target is not cleaned or
-// restricted because ERIS-FS permits targets outside the image.
+// ReadLink reads a symbolic link only when following it cannot leave this
+// image. It preserves the target text. A dangling link can still be read.
+// A cycle or a chain past the expansion limit returns fs.ErrInvalid because
+// safety cannot be proved. An escaping or absolute link returns fs.ErrNotExist,
+// as it does when opened.
 func (fileSystem *FS) ReadLink(ctx context.Context, path string) (string, error) {
 	item, err := fileSystem.find(ctx, path, false)
 	if err != nil {
@@ -346,6 +376,21 @@ func (fileSystem *FS) ReadLink(ctx context.Context, path string) (string, error)
 	}
 	if item.kind != Symlink {
 		return "", pathError("readlink", path, stdfs.ErrInvalid)
+	}
+	// Check the path with normal component-by-component link expansion. A
+	// lexical check alone is insufficient: another link in the target can
+	// change the depth before a later ".." component is processed.
+	_, err = fileSystem.findWithEscape(ctx, path, true)
+	if errors.Is(err, errLinkEscape) {
+		return "", pathError("readlink", path, stdfs.ErrNotExist)
+	}
+	// These bytes can change the meaning of a target in native adapters.
+	// Backslash is a separator and colon can select a drive on Windows.
+	if strings.ContainsAny(item.target, "\\:\x00") {
+		return "", pathError("readlink", path, stdfs.ErrInvalid)
+	}
+	if err != nil && !errors.Is(err, stdfs.ErrNotExist) {
+		return "", pathError("readlink", path, err)
 	}
 	return item.target, nil
 }
@@ -519,6 +564,8 @@ func (file *directoryFile) ReadDir(count int) ([]stdfs.DirEntry, error) {
 func (file *directoryFile) Close() error {
 	file.closed = true
 	file.entries = nil
+	file.node = nil
+	file.ctx = nil
 	return nil
 }
 
