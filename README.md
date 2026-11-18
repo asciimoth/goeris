@@ -17,6 +17,19 @@ The `eris` package implements:
   with sequential and random access; and
 - combined block storage with ordered fallback and optional error reporting.
 
+Use `eris.ResolvePath(capability)` to find decoded content on a local mount that
+uses the [ERIS FUSE path layout](specs/eris-go-fuse-layout.md). It uses
+`ERIS_MNT` if set and nonempty. Otherwise, it tries `/n/eris`, then `/eris`. To
+select one mount, call `eris.ResolvePath(capability, mountPath)`. An empty mount
+path uses the same defaults as an omitted argument. An explicit mount or a
+nonempty `ERIS_MNT` limits the search to that mount.
+
+The function returns an absolute path to the regular file at
+`<mount>/<full capability URN>`, or `""` if none is found. Relative mount paths
+use the current working directory. Invalid capabilities and file-system errors
+also return `""`. For an ERIS-FS capability, the result is the decoded index
+file. The function checks file metadata and trusts the mount to verify content.
+
 The `volume` package implements [local block volumes](specs/eris-volume.md). It
 stores each block at a fixed `AAA/BBB/CCC/<remaining hash>` path and also reads
 flat block files. It verifies block size and hash on reads, publishes writes
@@ -61,6 +74,20 @@ with version 1 read support:
   `io.Seeker`, with bounded caching; and
 - deterministic Lzip compression and sequential reads with checksum and length
   checks.
+
+Use `fs.ResolveRoot(capability)` to find a mounted ERIS-FS root directory, or
+`fs.ResolvePath(capability, "docs/readme.txt")` to find a file or subdirectory
+inside it. Entry names use `io/fs` path rules; `"."` selects the root. Both
+functions return an absolute host path, or `""` if no matching path is found.
+They check file metadata and trust the mount to interpret and verify the image.
+
+The optional mount argument points to the directory that contains capability
+trees. For an eris-go mount at `/eris`, pass `/eris/fs`, for example
+`fs.ResolvePath(capability, "docs", "/eris/fs")`. An omitted or empty argument
+uses the first nonempty setting: `ERIS_FS_MNT` as is, then `ERIS_MNT` with `/fs`
+appended. If both variables are empty or unset, the functions try `/n/eris/fs`,
+then `/eris/fs`. An explicit path or a nonempty environment setting limits the
+search to that mount, even when the requested content is missing there.
 
 The `dns` package implements [ERIS DNSLink records](specs/eer/dnslink/index.md):
 

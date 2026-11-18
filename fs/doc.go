@@ -22,6 +22,13 @@
 // AddAutoFile selects compression with the fixed ERIS-FS-AUTO-1 sample policy.
 // ChooseCompression exposes the same decision without encoding a file.
 //
+// ResolveRoot and ResolvePath find absolute host paths on compatible ERIS-FS
+// mounts. Supply the directory that contains capability trees, such as /eris/fs.
+// Without an explicit path, they use ERIS_FS_MNT, then ERIS_MNT with /fs
+// appended, selecting the first nonempty setting. If both are empty or unset, they
+// search /n/eris/fs and /eris/fs in order. A configured mount limits the search
+// to that mount. Both functions return "" when no matching path is found.
+//
 // # Deterministic encoding
 //
 // To match capabilities across implementations, use Builder.AddFile for every
@@ -43,9 +50,9 @@
 //
 // # Input and decoding limits
 //
-// The package operates only on io.Reader values and abstract ERIS block
-// stores. It does not access the host file system, network, clock, or random
-// source.
+// The image APIs operate on io.Reader values and abstract ERIS block stores.
+// They do not access the host file system, network, clock, or random source.
+// ResolveRoot and ResolvePath read environment variables and host file metadata.
 // Encoding returns io.ErrNoProgress after 100 consecutive empty reads from
 // an input. Temporary empty reads below this limit do not change the output.
 // Encoding stops at the first io.EOF, including EOF returned with data.
@@ -70,9 +77,11 @@
 // is reached. MaxLzipDictionarySize limits each decoder, not total process
 // memory or the number of open files.
 //
-// Paths use io/fs rules. Backslashes and names that are special on a host
-// operating system are not converted or filtered. Applications that extract
-// an image must check native paths and symlink targets before writing them.
+// Image paths use io/fs rules. Backslashes and names that are special on a host
+// operating system are not converted or filtered by the image APIs. ResolvePath
+// converts io/fs names to native paths and rejects names that cannot be
+// represented on the host. Applications that extract an image must check native
+// paths and symlink targets before writing them.
 // Open follows links only inside the image, but Sub does not confine links to
 // the selected subdirectory.
 //
