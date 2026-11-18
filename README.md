@@ -341,6 +341,50 @@ failures, not failures of background hints. Success does not guarantee that
 content exists or is cached. Use a goroutine managed by the caller if the
 traversal must run in the background.
 
+Use `github.com/asciimoth/goeris/cache` to keep encrypted blocks in a bounded
+memory cache and process prefetch hints with a fixed worker pool:
+
+```go
+cached, err := cache.New(source, cache.Config{
+	CapacityBytes: 16 << 20, // At most 16 MiB of retained block data.
+	Workers:       4,
+	QueueSize:     64, // Waiting block requests, excluding active workers.
+})
+if err != nil {
+	return err
+}
+defer cached.Close()
+
+reader, err := eris.NewReader(ctx, capability, cached, eris.BlockOptions{})
+```
+
+All three limits must be positive. Blocks larger than `CapacityBytes` can be
+read but are not cached. The byte limit excludes metadata, queued contexts,
+returned copies, and reads in progress. Within each priority class, eviction
+removes the least recently used block. Regular blocks are evicted before
+high-priority blocks. A regular block cannot displace a high-priority block. If
+it cannot fit beside protected blocks, existing entries are left in place. A
+stored `HighPriority` flag or a read/prefetch hint protects the cache entry
+until eviction or invalidation; the hint does not change the options returned by
+storage. `Root` does not affect eviction.
+
+Prefetch calls copy accepted requests into the bounded queue and return without
+waiting for block I/O, queue space, or a busy cache lock. Workers issue matching
+`GetBlock` calls and cache successful results. Hints can be dropped, and
+background errors are ignored. Request cancellation also cancels background
+reads. `Close` cancels those reads, discards queued work, and waits for the
+workers. It does not close the source or wait for foreground calls already in
+progress. The source must support concurrent calls and honor context
+cancellation.
+
+If the source also implements `eris.BlockSink`, puts and option updates pass
+through and invalidate the affected entry. The next read loads the actual stored
+options, including flags retained by repeated puts or ignored by the source. Use
+the wrapper for all option changes that must be visible through the cache; it
+does not track changes made directly to the source. A read-only source returns
+`eris.ErrNoBlockStorage` for writes. TTL values pass through unchanged and do
+not set cache expiry times.
+
 Raw content APIs now belong to the root package. Replace `fs.EncodeContent` with
 `eris.EncodeContent`. The shared reader has moved from `internal/erisreader` to
 `eris`; its size-limit error is `eris.ErrDecodedTooLarge`. The root streaming
