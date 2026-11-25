@@ -47,6 +47,22 @@ entire fetch. The caller supplies the HTTP client and its destination policy.
 Set `url.Config.Progress` to receive download updates, or use `url.NodeProgress`
 to display them on a Zig progress node.
 
+Go's HTTP client can reject percent-encoded ASCII host characters in source URLs
+and redirect targets.
+
+Set `url.Config.Locks` to a `fetch.LockDB` to reuse capabilities across
+requests. Leave it `nil` to disable locks. The fetcher checks the exact source
+hash first. Requests without a checksum can also use minified locks for the
+primary URL and mirrors, in request order. A minified source contains one URL
+and keeps its output settings, with defaults omitted. A lock hit returns the
+stored capability. A minified hit also tries to record the capability under the
+exact source hash. After a successful download and encoding, the fetcher tries
+to record the exact source and the minified source for the URL that supplied the
+data. Lock hits require no HTTP request or block access. Share a trusted
+database with callers authorized to use its capabilities and able to read the
+corresponding blocks. Concurrent misses can download independently and each
+returns its own result. The first stored binding for each key stays in place.
+
 The `volume` package implements [local block volumes](specs/eris-volume.md). It
 stores each block at a fixed `AAA/BBB/CCC/<remaining hash>` path and also reads
 flat block files. It verifies block size and hash on reads, publishes writes

@@ -31,7 +31,16 @@ func response(status int, body string) *http.Response {
 }
 func setup(t testing.TB, rt transport) *Fetcher {
 	t.Helper()
-	f, err := New(Config{Client: &http.Client{Transport: rt}, Store: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}})
+	return setupWithLocks(t, rt, nil)
+}
+
+func setupWithLocks(t testing.TB, rt transport, locks fetch.LockDB) *Fetcher {
+	t.Helper()
+	f, err := New(Config{
+		Client: &http.Client{Transport: rt},
+		Store:  eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)},
+		Locks:  locks,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +152,9 @@ func TestHTTPMirrorFetch(t *testing.T) {
 		paths = append(paths, r.URL.Path)
 		return base.RoundTrip(r)
 	})
+	var locks recordingLocks
 	handler, err := New(Config{
-		Client: client, Store: store, MaxBytes: 13, TempStorage: fetch.TempDir(tempDir),
+		Client: client, Store: store, Locks: &locks, MaxBytes: 13, TempStorage: fetch.TempDir(tempDir),
 		Progress: func(progress ProgressNode) {
 			if progress.Child != nil {
 				checkTempFiles(1)
@@ -155,7 +165,8 @@ func TestHTTPMirrorFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	desc := "type url\nurl " + origin.URL + "/partial\nalt " + origin.URL + "/mismatch\nalt " + origin.URL + "/redirect?token=fixture\n" + checksum
-	got := handler.Fetch(t.Context(), source(t, desc))
+	exact := source(t, desc)
+	got := handler.Fetch(t.Context(), exact)
 	checkTempFiles(0)
 	if want := []string{"/partial", "/mismatch", "/redirect", "/body"}; !slices.Equal(paths, want) {
 		t.Fatalf("got paths %v, want %v", paths, want)
@@ -166,6 +177,22 @@ func TestHTTPMirrorFetch(t *testing.T) {
 	body, err := eris.Decode(got.Cap, store)
 	if err != nil || string(body) != "Hello world!" {
 		t.Fatalf("decoded body %q, error %v", body, err)
+	}
+	selected := source(t, "type url\nurl "+origin.URL+"/redirect?token=fixture\n")
+	if want := [][32]byte{exact.Hash(), selected.Hash()}; !slices.Equal(locks.writes, want) {
+		t.Fatalf("lock writes %x, want %x", locks.writes, want)
+	}
+
+	// A separate fetcher can reuse the mirror even when the new primary has
+	// never been seen and the new request omits the checksum.
+	second, err := New(Config{Client: client, Store: store, Locks: &locks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := source(t, "type url\nurl "+origin.URL+"/new\nalt "+origin.URL+"/redirect?token=fixture\n")
+	hit := second.Fetch(t.Context(), next)
+	if hit.Status != "ok" || hit.Kind != got.Kind || hit.Cap != got.Cap || len(paths) != 4 || !slices.Equal(locks.writes[2:], [][32]byte{next.Hash()}) {
+		t.Fatalf("mirror hit returned %+v, HTTP requests %v, writes %x", hit, paths, locks.writes)
 	}
 }
 
@@ -793,42 +820,41 @@ func FuzzBody(f *testing.F) {
 	})
 }
 
-// A sequence describes complete matches, mismatches, missing resources and
-// interrupted downloads. Check both the selected result and the stopping point.
+// A sequence describes complete bodies, missing resources and interrupted
+// downloads. Check where retrieval stops and which locks it uses.
 func FuzzMirrorSelection(f *testing.F) {
 	for _, seq := range [][]byte{{0}, {1, 2}, {3, 0, 1}, {2, 3}, {3, 2}, {1, 0}} {
-		f.Add(seq)
+		f.Add(seq, true)
+		f.Add(seq, false)
 	}
-	f.Fuzz(func(t *testing.T, seq []byte) {
+	f.Fuzz(func(t *testing.T, seq []byte, checked bool) {
 		if len(seq) == 0 || len(seq) > 32 {
 			return
 		}
-		desc := description + checksum + strings.Repeat("alt https://b.test/resource\n", len(seq)-1)
+		const mirror = "https://b.test/resource"
+		desc := description + strings.Repeat("alt "+mirror+"\n", len(seq)-1)
+		if checked {
+			desc += checksum
+		}
 		want := ""
 		attempts := 0
 		mismatch := false
-		for _, b := range seq {
-			attempts++
-			switch b % 4 {
-			case 0:
+		for i, b := range seq {
+			attempts = i + 1
+			outcome := b % 4
+			if outcome == 0 || outcome == 1 && !checked {
 				want = ""
-			case 1:
-				want = "integrity"
-				mismatch = true
-			case 2:
-				want = "not-found"
-			case 3:
-				want = "unavailable"
-			}
-			if b%4 == 0 {
 				break
 			}
-			if mismatch {
-				want = "integrity"
-			}
+			mismatch = mismatch || outcome == 1
+			want = [...]string{"", "integrity", "not-found", "unavailable"}[outcome]
+		}
+		if want != "" && mismatch {
+			want = "integrity"
 		}
 		calls := 0
-		handler := setup(t, func(*http.Request) (*http.Response, error) {
+		var db recordingLocks
+		handler := setupWithLocks(t, func(*http.Request) (*http.Response, error) {
 			b := seq[calls]
 			calls++
 			switch b % 4 {
@@ -843,14 +869,36 @@ func FuzzMirrorSelection(f *testing.F) {
 				r.ContentLength++
 				return r, nil
 			}
-		})
-		got := handler.Fetch(t.Context(), source(t, desc))
+		}, &db)
+		src := source(t, desc)
+		got := handler.Fetch(t.Context(), src)
 		status := "fail"
 		if want == "" {
 			status = "ok"
 		}
 		if calls != attempts || got.Status != status || got.Failure.Code != want {
 			t.Fatal(seq, got, calls)
+		}
+		exact := src.Hash()
+		primary := source(t, description).Hash()
+		alternate := source(t, "type url\nurl "+mirror+"\n").Hash()
+		reads := [][32]byte{exact}
+		if !checked && len(seq) > 1 {
+			reads = append(reads, primary, alternate)
+		}
+		var writes [][32]byte
+		if status == "ok" {
+			selected := primary
+			if attempts > 1 {
+				selected = alternate
+			}
+			writes = append(writes, exact)
+			if selected != exact {
+				writes = append(writes, selected)
+			}
+		}
+		if !slices.Equal(db.reads, reads) || !slices.Equal(db.writes, writes) {
+			t.Fatalf("lock reads %x, want %x, writes %x, want %x", db.reads, reads, db.writes, writes)
 		}
 	})
 }

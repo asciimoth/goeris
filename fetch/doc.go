@@ -19,5 +19,5 @@
 //
 // Tree uses the ERIS-FS builder for deterministic flat indexes and
 // optional ERIS-FS-AUTO-1 file compression. Use eris.EncodeContentRecommended
-// for blobs. Storage, lock updates, retrieval, and transport belong to the caller.
+// for blobs. Handlers can use LockDB to store a capability URN under Source.Hash.
 package fetch

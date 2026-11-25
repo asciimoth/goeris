@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"golang.org/x/crypto/blake2b"
+	"github.com/asciimoth/goeris/fetch/internal/sourcehash"
 )
 
 // Wire limits count bytes, including comments and separators for document limits.
@@ -20,7 +20,6 @@ const (
 	MaxLineSize     = 65535
 	MaxResponseSize = 64 << 20
 	MaxMarkerSize   = 1 << 18
-	sourcePrefix    = "eris-fetch/source/v1\x00"
 )
 
 // Failure is a protocol failure code with an optional offending key.
@@ -75,16 +74,23 @@ func (s Source) RawKey() []byte {
 	if s.canonical == "" {
 		return nil
 	}
-	return []byte(sourcePrefix + s.canonical)
+	return []byte(sourcehash.Prefix + s.canonical)
+}
+
+// Hash returns the binary source ID used by LockDB, or all zeros for a zero Source.
+func (s Source) Hash() [32]byte {
+	if s.canonical == "" {
+		return [32]byte{}
+	}
+	return sourcehash.Sum256(s.canonical)
 }
 
 // ID returns the prehashed Locks v1 identifier, or "" for the zero Source.
 func (s Source) ID() string {
-	raw := s.RawKey()
-	if raw == nil {
+	if s.canonical == "" {
 		return ""
 	}
-	d := blake2b.Sum256(raw)
+	d := s.Hash()
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(d[:]) + ":blake2"
 }
 

@@ -151,6 +151,17 @@ user chooses an alternative, that choice supplies this first observation. The
 caller may also retain the selected source for repair and index the capability
 under its source ID. The lock value can be just the canonical URN.
 
+A URL fetcher may also record a binding for the URL that supplied the accepted
+bytes. Use a single-URL description with the same effective output settings. Set
+`type` to `url` and use the selected candidate's original URI spelling for
+`url`, including when it redirected. Keep `name` if present. Include
+`eris.secret` for a nonzero secret, `erisfs.compression` for `auto`, and
+`executable` for `true`. Omit the other keys. After an exact miss, a request
+without a checksum may use these bindings in primary and mirror order. If a
+request supplies a checksum, only its exact lock can supply a capability without
+verifying the bytes. Bind the exact request when a single-URL lock supplies the
+result.
+
 Use atomic create-if-absent for the first observation. Equal simultaneous
 results agree. Different capabilities for the same ID are a lock conflict.
 Preserve the existing entry. Replacement requires an explicit refresh policy. A
@@ -333,9 +344,9 @@ Require exactly one colon, a nonempty algorithm name matching
 field is invalid. V1 defines `sha256` (SHA-256) and `blake2b-256` (the 32-byte
 BLAKE2b in §2). Both use exactly 64 lowercase hex digits. Unknown or
 unimplemented algorithms give `unsupported-option`. Malformed values for
-recognized algorithms give `invalid-source`. A supplied checksum must be
-checked, including on a byte cache hit. With no `checksum`, the source places no
-checksum requirement on the fetcher. For an archive it covers the downloaded
+recognized algorithms give `invalid-source`. Verify a supplied checksum on
+downloaded or cached bytes before encoding. A trusted exact lock can supply the
+result as described in §2. For an archive the checksum covers the downloaded
 container, including compression headers, before decompression. For the opening
 fixture the optional field is the following line.
 

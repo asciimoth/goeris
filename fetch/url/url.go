@@ -11,12 +11,13 @@ import (
 
 	eris "github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/fetch"
+	"github.com/asciimoth/goeris/fetch/internal/sourcehash"
 	"github.com/asciimoth/goeris/internal/streamio"
 )
 
-// Config supplies all external dependencies. Callbacks run synchronously
-// within each fetch. Concurrent fetches require dependencies that support
-// concurrent use. The client must enforce any caller-specific destination
+// Config supplies the fetcher's dependencies. Callbacks run
+// synchronously within each fetch. Dependencies must support concurrent use
+// if fetches overlap. The client must enforce any caller-specific destination
 // and credential policy, including checks on resolved network addresses.
 // A transport, redirect policy or block sink can return
 // fetch.Failure{Code: "denied"} to report a policy refusal.
@@ -27,6 +28,8 @@ type Config struct {
 	Progress Progress
 	Log      func(string)
 	Verbose  bool
+	// Locks reuses capabilities from a trusted database. Nil disables locks.
+	Locks fetch.LockDB
 	// TempStorage holds each download before checksum verification and encoding.
 	// Nil uses memory.
 	TempStorage fetch.TempStorage
@@ -69,7 +72,7 @@ func New(c Config) (*Fetcher, error) {
 		return nil
 	}
 	c.Client = &http.Client{Transport: client.Transport, Jar: client.Jar, Timeout: client.Timeout, CheckRedirect: checkRedirect}
-	return &Fetcher{c}, nil
+	return &Fetcher{config: c}, nil
 }
 
 func httpPort(u *neturl.URL) string {
@@ -92,8 +95,12 @@ func stopCode(err error) string {
 	return "cancelled"
 }
 
-// Fetch tries the primary and then each mirror. It buffers and verifies each
-// candidate before it starts to write blocks for that candidate.
+// Fetch validates the source and checks the exact lock if configured. A request
+// without a checksum can also use a minified lock for its primary URL or a
+// mirror. On a miss Fetch tries each location in order. It attempts to bind the
+// exact source after a minified lock hit or after successful retrieval and
+// encoding. In the latter case it also attempts to bind the minified source for
+// the URL that supplied the data.
 func (f *Fetcher) Fetch(ctx context.Context, s fetch.Source) fetch.Response {
 	if s.Type() != "url" {
 		return fetch.Response{Status: "fail", Failure: fetch.Failure{Code: "unsupported-type", Key: "type"}}
@@ -105,15 +112,60 @@ func (f *Fetcher) Fetch(ctx context.Context, s fetch.Source) fetch.Response {
 	if err := ctx.Err(); err != nil {
 		return failure(stopCode(err))
 	}
+	candidates := append(s.Values("url"), s.Values("alt")...)
 	var checksum *fetch.Checksum
-	if v := s.Values("checksum"); len(v) > 0 {
+	if values := s.Values("checksum"); len(values) != 0 {
 		// Validate checked the checksum grammar above.
-		c, _ := fetch.ParseChecksum(v[0])
+		c, _ := fetch.ParseChecksum(values[0])
 		checksum = &c
 	}
+	locks := f.config.Locks
+	if locks == nil {
+		result, _ := f.retrieve(ctx, s, opts, candidates, checksum)
+		return result
+	}
+
+	exact := s.Hash()
+	aliases := candidates
+	if checksum != nil {
+		aliases = nil
+	}
+	for hash := range lockHashes(exact, s, opts, aliases) {
+		if err := ctx.Err(); err != nil {
+			return failure(stopCode(err))
+		}
+		urn := locks.Lookup(ctx, hash)
+		if err := ctx.Err(); err != nil {
+			return failure(stopCode(err))
+		}
+		cap, err := eris.ParseURN(urn)
+		if err != nil {
+			continue
+		}
+		if hash != exact && ctx.Err() == nil {
+			locks.Add(ctx, exact, urn)
+		}
+		return fetch.Response{Status: "ok", Kind: opts.Kind, Cap: cap}
+	}
+	result, selected := f.retrieve(ctx, s, opts, candidates, checksum)
+	if result.Status != "ok" || ctx.Err() != nil {
+		return result
+	}
+	urn := result.Cap.String()
+	locks.Add(ctx, exact, urn)
+	if ctx.Err() != nil {
+		return result
+	}
+	alias := sourcehash.Sum256(minifiedURLPrefix(s, opts) + selected + "\n")
+	if alias != exact && ctx.Err() == nil {
+		locks.Add(ctx, alias, urn)
+	}
+	return result
+}
+
+func (f *Fetcher) retrieve(ctx context.Context, s fetch.Source, opts fetch.Options, candidates []string, checksum *fetch.Checksum) (fetch.Response, string) {
 	var last string
 	mismatch := false
-	candidates := append(s.Values("url"), s.Values("alt")...)
 	report := f.config.Progress
 	root := ProgressNode{Name: "Checking URLs", Total: uint64(len(candidates))}
 	var downloading func(uint64, int64)
@@ -139,25 +191,25 @@ func (f *Fetcher) Fetch(ctx context.Context, s fetch.Source) fetch.Response {
 	}
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
-			return failure(stopCode(err))
+			return failure(stopCode(err)), ""
 		}
 		if f.config.Verbose && f.config.Log != nil {
 			f.config.Log("Fetching URL candidate")
 		}
 		result, retry := f.fetchCandidate(ctx, s, opts, candidate, checksum, downloading, completed)
 		if err := ctx.Err(); err != nil {
-			return failure(stopCode(err))
+			return failure(stopCode(err)), ""
 		}
 		if !retry {
-			return result
+			return result, candidate
 		}
 		last = result.Failure.Code
 		mismatch = mismatch || last == "integrity"
 	}
 	if mismatch {
-		return failure("integrity")
+		return failure("integrity"), ""
 	}
-	return failure(last)
+	return failure(last), ""
 }
 
 func (f *Fetcher) fetchCandidate(ctx context.Context, s fetch.Source, opts fetch.Options, uri string, checksum *fetch.Checksum, progress func(uint64, int64), completed func()) (result fetch.Response, retry bool) {

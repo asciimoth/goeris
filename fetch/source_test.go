@@ -3,6 +3,7 @@ package fetch
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base32"
 	"errors"
 	"fmt"
 	"io"
@@ -36,7 +37,12 @@ func TestSourceIDs(t *testing.T) {
 		{opening + a + b, "5UZVXYW5TYYW5QBH35FNTI2L5U36S5D3WR3CD3NTRGCAQLZYXLGA"},
 		{opening + b + a, "VXQJBNKSSWY765UPRBL6YUMJR3YDDULPPXRVGPOSFZFE42XABFJA"},
 	} {
-		if id := source(t, tc.text).ID(); id != tc.id+":blake2" {
+		s := source(t, tc.text)
+		hash := s.Hash()
+		if got := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:]); got != tc.id {
+			t.Errorf("source hash = %s, want %s", got, tc.id)
+		}
+		if id := s.ID(); id != tc.id+":blake2" {
 			t.Errorf("%q: %s", tc.text, id)
 		}
 	}
@@ -243,7 +249,7 @@ func TestChecksumCancellation(t *testing.T) {
 
 func TestReadFailureHasNoID(t *testing.T) {
 	s, err := ParseSource(io.MultiReader(strings.NewReader(opening), iotest.ErrReader(io.ErrUnexpectedEOF)))
-	if !errors.Is(err, Failure{Code: "unavailable"}) || s.ID() != "" || s.RawKey() != nil {
+	if !errors.Is(err, Failure{Code: "unavailable"}) || s.ID() != "" || s.RawKey() != nil || s.Hash() != ([32]byte{}) {
 		t.Fatal("partial source", err)
 	}
 }
