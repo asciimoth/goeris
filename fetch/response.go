@@ -244,11 +244,11 @@ func ParseResponse(r io.Reader) (Response, error) {
 // kind, permitted Git edits, object format, labels, and branch tip position.
 // A valid fail frame also returns nil. Inspect Status to determine the fetch
 // outcome. Checking reachability and tag ordering requires repository data.
-func (r Response) ValidateFor(s Source, lzip bool) error {
+func (r Response) ValidateFor(s Source, autoCompression bool) error {
 	if r.Status == "fail" {
 		return nil
 	}
-	opt, err := s.validate(lzip, false)
+	opt, err := s.validate(autoCompression, false)
 	if err != nil {
 		return err
 	}

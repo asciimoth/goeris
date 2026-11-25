@@ -92,7 +92,7 @@ func TestSchema(t *testing.T) {
 		{"url", "erisfs.use true", "invalid-source", "name"}, {"url", "name ..", "invalid-source", "name"}, {"url", "name ok\nerisfs.use false", "invalid-source", "name"},
 		{"url", "executable true", "invalid-source", "executable"}, {"url", "checksum sha256:FF", "invalid-source", "checksum"},
 		{"url", "checksum sha256:ff", "invalid-source", "checksum"}, {"url", "checksum sha1:0", "unsupported-option", "checksum"},
-		{"archive", "erisfs.layout nested", "unsupported-option", "erisfs.layout"}, {"archive", "erisfs.compression lzip-v1", "unsupported-option", "erisfs.compression"},
+		{"archive", "erisfs.layout nested", "unsupported-option", "erisfs.layout"}, {"archive", "erisfs.compression auto", "unsupported-option", "erisfs.compression"},
 		{"archive", "format gzip", "unsupported-option", "format"}, {"archive", "format rar", "unsupported-option", "format"},
 		{"archive", "strip-root false\nerisfs.use false", "unsupported-option", "strip-root"},
 		{"git", "erisfs.use false", "unsupported-option", "erisfs.use"}, {"git", "commit abc", "invalid-source", "commit"}, {"git", "branch main\ntag v1", "invalid-source", "tag"},
@@ -109,7 +109,7 @@ func TestSchema(t *testing.T) {
 		text, kind, comp string
 		direct           bool
 	}{
-		{opening, "blob", "", true}, {opening + "name a\\b\neris.secret " + strings.Repeat("ab", 32) + "\nexecutable true\nerisfs.version 2\nerisfs.layout flat\nerisfs.compression lzip-v1", "erisfs", "lzip-v1", true},
+		{opening, "blob", "", true}, {opening + "name a\\b\neris.secret " + strings.Repeat("ab", 32) + "\nexecutable true\nerisfs.version 2\nerisfs.layout flat\nerisfs.compression auto", "erisfs", "auto", true},
 		{opening + "alt custom:example\nchecksum " + helloChecksum, "blob", "", true},
 		{"type archive\nurl https://e\nformat zip", "erisfs", "none", true}, {"type archive\nurl https://e\nformat gzip\nerisfs.use false", "blob", "", true},
 		{"type git\nurl https://e\nsubdir a/b\nbranch main", "erisfs", "none", false}, {"type git\nurl https://e\ntag releases/v1", "erisfs", "none", true},
@@ -121,6 +121,9 @@ func TestSchema(t *testing.T) {
 		if strings.Contains(tc.text, "eris.secret") && o.Secret[31] != 0xab {
 			t.Fatal("secret")
 		}
+	}
+	if _, err := source(t, opening+"name file\nerisfs.compression lzip-v1").Validate(true); !errors.Is(err, Failure{"unsupported-option", "erisfs.compression"}) {
+		t.Fatalf("removed compression profile: %v", err)
 	}
 	for _, text := range []string{"type url", "type git\nurl file:/C:/repo"} {
 		if _, err := source(t, text).Validate(false); err == nil {

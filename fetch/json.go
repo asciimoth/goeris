@@ -9,7 +9,7 @@ import (
 )
 
 // ParseJSON reads the structured front end for the three standard types. It
-// validates the schema with lzip-v1 enabled. A handler can call Validate
+// accepts the optional auto compression profile. A handler can call Validate
 // to check native file paths and compression support. Wire limits apply to
 // the emitted records. The caller controls the size of the JSON input buffer.
 func ParseJSON(data []byte) (Source, error) {

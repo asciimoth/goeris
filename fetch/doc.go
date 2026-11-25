@@ -17,7 +17,7 @@
 // against the request, and Response.Proposal assembles one selected choice.
 // Handlers can use Response.MarshalText to write a result.
 //
-// Tree uses the ERIS-FS builder for deterministic flat indexes and the
-// optional lzip-v1 file profile. Use eris.EncodeContentRecommended for blobs.
-// Storage, lock updates, retrieval, and transport belong to the caller.
+// Tree uses the ERIS-FS builder for deterministic flat indexes and
+// optional ERIS-FS-AUTO-1 file compression. Use eris.EncodeContentRecommended
+// for blobs. Storage, lock updates, retrieval, and transport belong to the caller.
 package fetch

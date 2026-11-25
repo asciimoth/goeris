@@ -15,6 +15,15 @@ import (
 const emptyTreeCap = "urn:eris:BIAMBMAQBTL6WWRPPQRYWPQFOPBX27WPOWGLPWNYCO5X2FRMHHWRYAD4K3ORFSM7JNOMEJWDIBEG5VAQ6ULESJB6NB7U7Z26GYQXZRYYNA"
 
 func TestTreeVectors(t *testing.T) {
+	// Generate the 1024-byte xorshift32 input from the ERIS-FS-AUTO-1 vectors.
+	var random [1024]byte
+	x := uint32(1)
+	for i := range random {
+		x ^= x << 13
+		x ^= x >> 17
+		x ^= x << 5
+		random[i] = byte(x)
+	}
 	for _, tc := range []struct {
 		name, target, profile, expected string
 		data                            []byte
@@ -22,7 +31,8 @@ func TestTreeVectors(t *testing.T) {
 		{profile: "none", expected: emptyTreeCap},
 		{"hello", "", "none", "urn:eris:BIANO4IXQY4XU6EWRTRPBF6SMPKFQ5HUSYMIL2V7WNTBDS5WK7E4E32FKMDUIODQOEM2QUYS37TMRGZ6GCLKOR36VQQMGVU4LFVSR3CUJU", []byte("Hello world!")},
 		{"l", "/a//b/", "none", "urn:eris:BIAPFENWSCHVP33WLV5C52NICNFOBGU4HCE6QWN5DZW3B7AKMZ5XZ5R5NWT46WK5BGG4LDYKZKVRVWB7LQBGUJ4LARAXMJDJM7L72DPGRI", nil},
-		{"file", "", "lzip-v1", "urn:eris:BIACZ5E57FY2IDGF7I34DWENBOVRH3B4SWPEWEO2D3XPPVZOR5MNHD4MKZ43NFF5KRRCCLMMC6RVZHGEZKO7ACCP55TH2QIE5WVUWIJ53M", make([]byte, 1024)},
+		{"file", "", "auto", "urn:eris:BIACZ5E57FY2IDGF7I34DWENBOVRH3B4SWPEWEO2D3XPPVZOR5MNHD4MKZ43NFF5KRRCCLMMC6RVZHGEZKO7ACCP55TH2QIE5WVUWIJ53M", make([]byte, 1024)},
+		{"file", "", "auto", "urn:eris:BIAOWCYFF3SO3ZVEXC7WGJIL5RWP4LWFMXKK6D2NIUT75LKYCOJCGDCTP2MWYXAUNJG5CPAZ2A5ZKQR4WFH5H6KYHSUUECFBWUJC7C2PIM", random[:]},
 	} {
 		o := Options{Kind: "erisfs", Compression: tc.profile}
 		tree, err := o.NewTree(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, eris.BlockOptions{})
@@ -39,7 +49,7 @@ func TestTreeVectors(t *testing.T) {
 		}
 		cap, err := tree.Finish(t.Context())
 		if err != nil || cap.String() != tc.expected {
-			t.Fatal(cap, err)
+			t.Fatalf("%s tree with %q: got %v, want %s, error %v", tc.profile, tc.name, cap, tc.expected, err)
 		}
 	}
 }
@@ -51,13 +61,13 @@ func TestTreeBoundaries(t *testing.T) {
 		key     string
 	}{
 		{Options{Kind: "blob"}, "erisfs.use"},
-		{Options{Kind: "erisfs", Compression: "auto"}, "erisfs.compression"},
+		{Options{Kind: "erisfs", Compression: "lzip-v1"}, "erisfs.compression"},
 	} {
 		if _, err := tc.options.NewTree(store, eris.BlockOptions{}); !errors.Is(err, Failure{"unsupported-option", tc.key}) {
 			t.Fatalf("NewTree(%+v): %v", tc.options, err)
 		}
 	}
-	o := Options{Kind: "erisfs", Compression: "lzip-v1"}
+	o := Options{Kind: "erisfs", Compression: "auto"}
 	if _, err := o.NewTree(nil, eris.BlockOptions{}); !errors.Is(err, erisfs.ErrInvalidEntry) {
 		t.Fatalf("NewTree with nil sink: %v", err)
 	}
@@ -90,7 +100,7 @@ func TestTreeBoundaries(t *testing.T) {
 }
 
 func TestTreeChecksPathBeforeReading(t *testing.T) {
-	for _, profile := range []string{"none", "lzip-v1"} {
+	for _, profile := range []string{"none", "auto"} {
 		t.Run(profile, func(t *testing.T) {
 			options := Options{Kind: "erisfs", Compression: profile}
 			tree, err := options.NewTree(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, eris.BlockOptions{})
@@ -111,7 +121,7 @@ func TestTreeChecksPathBeforeReading(t *testing.T) {
 }
 
 func TestCompressedFileRetry(t *testing.T) {
-	options, err := source(t, opening+"name file\nerisfs.compression lzip-v1\n").Validate(true)
+	options, err := source(t, opening+"name file\nerisfs.compression auto\n").Validate(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,8 +131,8 @@ func TestCompressedFileRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The stream fails after the builder has selected compression.
-	want := bytes.Repeat([]byte("complete file\n"), 2000)
-	partial := io.MultiReader(bytes.NewReader(want[:1025]), iotest.ErrReader(io.ErrUnexpectedEOF))
+	want := bytes.Repeat([]byte("complete file\n"), 3000)
+	partial := io.MultiReader(bytes.NewReader(want[:erisfs.AutoCompressionSampleSize+1]), iotest.ErrReader(io.ErrUnexpectedEOF))
 	if err := tree.AddFile(t.Context(), "file", partial, false); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("partial file: %v", err)
 	}
@@ -144,7 +154,7 @@ func TestCompressedFileRetry(t *testing.T) {
 }
 
 func TestTreeConvergenceSecret(t *testing.T) {
-	options, err := source(t, opening+"name hello\neris.secret "+strings.Repeat("ab", 32)).Validate(false)
+	options, err := source(t, opening+"name hello\neris.secret "+strings.Repeat("ab", 32)).Validate(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +164,8 @@ func TestTreeConvergenceSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const data = "Hello world!"
+	// The default stores the original bytes even when the handler supports auto.
+	data := strings.Repeat("A", 1024)
 	ctx := t.Context()
 	if err := tree.AddFile(ctx, "hello", strings.NewReader(data), false); err != nil {
 		t.Fatal(err)

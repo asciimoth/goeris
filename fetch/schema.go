@@ -167,7 +167,7 @@ func validCommit(s string) bool {
 type Options struct {
 	Kind        string // "blob" or "erisfs"
 	Secret      eris.Secret
-	Compression string // empty for a blob
+	Compression string // "none" or "auto" for a tree, empty for a blob
 	Direct      bool
 }
 
@@ -183,16 +183,16 @@ func allowedKey(keys []string, key string) bool {
 }
 
 // Validate checks the standard schema for a handler on this machine.
-// Set lzip to true if the handler supports the optional lzip-v1 profile.
-func (s Source) Validate(lzip bool) (Options, error) {
-	return s.validate(lzip, runtime.GOOS == "windows")
+// Set autoCompression to true if the handler supports the optional auto profile.
+func (s Source) Validate(autoCompression bool) (Options, error) {
+	return s.validate(autoCompression, runtime.GOOS == "windows")
 }
 
-func (s Source) validate(lzip, windowsFiles bool) (Options, error) {
+func (s Source) validate(autoCompression, windowsFiles bool) (Options, error) {
 	if err := s.checkFields(windowsFiles); err != nil {
 		return Options{}, err
 	}
-	opt, err := s.outputOptions(lzip)
+	opt, err := s.outputOptions(autoCompression)
 	if err != nil {
 		return Options{}, err
 	}
@@ -241,7 +241,7 @@ func (s Source) checkFields(windowsFiles bool) error {
 	return nil
 }
 
-func (s Source) outputOptions(lzip bool) (Options, error) {
+func (s Source) outputOptions(autoCompression bool) (Options, error) {
 	opt := Options{Kind: "blob"}
 	if secret := s.value("eris.secret"); secret != "" {
 		if len(secret) != 64 || !lowerHex.MatchString(secret) {
@@ -262,8 +262,8 @@ func (s Source) outputOptions(lzip bool) (Options, error) {
 		if s.fields[k] == nil {
 			continue
 		}
-		if tree && lzip && k == "erisfs.compression" && s.value(k) == "lzip-v1" {
-			opt.Compression = "lzip-v1"
+		if tree && autoCompression && k == "erisfs.compression" && s.value(k) == "auto" {
+			opt.Compression = "auto"
 			continue
 		}
 		if !tree || s.value(k) != field.value {

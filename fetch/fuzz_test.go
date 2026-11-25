@@ -10,7 +10,7 @@ import (
 
 // Check identity, value order, and schema decisions after canonicalization.
 func FuzzSource(f *testing.F) {
-	for _, s := range []string{opening, "\xef\xbb\xbftype x", gitShared + "branch main\r", opening + "name  A#b \nerisfs.compression lzip-v1", opening + "alt https://x\nalt https://x", "type archive\rformat gzip\nerisfs.use false\rurl file:///C:/x"} {
+	for _, s := range []string{opening, "\xef\xbb\xbftype x", gitShared + "branch main\r", opening + "name  A#b \nerisfs.compression auto", opening + "alt https://x\nalt https://x", "type archive\rformat gzip\nerisfs.use false\rurl file:///C:/x"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, text string) {
@@ -22,9 +22,9 @@ func FuzzSource(f *testing.F) {
 		if !reflect.DeepEqual(s, again) || s.ID() != again.ID() {
 			t.Fatal("canonical source changed")
 		}
-		for _, lzip := range []bool{true, false} {
-			a, e := s.Validate(lzip)
-			b, e2 := again.Validate(lzip)
+		for _, autoCompression := range []bool{true, false} {
+			a, e := s.Validate(autoCompression)
+			b, e2 := again.Validate(autoCompression)
 			if (e == nil) != (e2 == nil) || a != b {
 				t.Fatal("schema changed")
 			}
@@ -141,7 +141,7 @@ func FuzzFileList(f *testing.F) {
 func FuzzStandardField(f *testing.F) {
 	for _, tc := range []struct{ typ, key, value string }{
 		{"url", "url", "https://[::1]:443/a?x"}, {"git", "commit", "sha256:" + strings.Repeat("a", 64)}, {"git", "tag", "v1.0.0"}, {"git", "subdir", "a/b"},
-		{"url", "checksum", helloChecksum}, {"url", "alt", "file:///C:/foo%2Fbar"}, {"url", "name", " x#y\t"}, {"archive", "format", "tar.gz"}, {"archive", "erisfs.compression", "lzip-v1"},
+		{"url", "checksum", helloChecksum}, {"url", "alt", "file:///C:/foo%2Fbar"}, {"url", "name", " x#y\t"}, {"archive", "format", "tar.gz"}, {"archive", "erisfs.compression", "auto"},
 	} {
 		f.Add(tc.typ, tc.key, tc.value)
 	}

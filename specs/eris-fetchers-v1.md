@@ -45,7 +45,7 @@ MUST, SHOULD and MAY denote requirements, recommendations and options. Octet
 counts are in bytes. A *description* is a map from a key to a nonempty sequence
 of text values. All values on the wire are strings. The selected source type
 defines each field's cardinality and interpretation. The core requirements and
-examples in §§1–8 define v1. The Lzip encoder is an optional output profile.
+examples in §§1–8 define v1. Automatic file compression is optional.
 
 1. Read in binary mode. Validate the entire input as UTF-8 (RFC 3629), including
    comments. Reject a leading UTF-8 BOM, byte `7f` and bytes `00` through `1f`
@@ -161,13 +161,13 @@ silently replace the original.
 
 ## 3. Result encoding
 
-| Key                  | Accepted values                                         | Default and scope                                            |
-| -------------------- | ------------------------------------------------------- | ------------------------------------------------------------ |
-| `eris.secret`        | Empty or 64 lowercase hexadecimal digits                | 32 zero bytes. Applies to every ERIS encoding in the result. |
-| `erisfs.use`         | `true`, `false`                                         | See the source-type table in §4.                             |
-| `erisfs.version`     | `2`                                                     | `2` for trees                                                |
-| `erisfs.compression` | `none` (required support), `lzip-v1` (optional support) | `none` for every regular and executable file                 |
-| `erisfs.layout`      | `flat`                                                  | `flat` for the index                                         |
+| Key                  | Accepted values                                      | Default and scope                                            |
+| -------------------- | ---------------------------------------------------- | ------------------------------------------------------------ |
+| `eris.secret`        | Empty or 64 lowercase hexadecimal digits             | 32 zero bytes. Applies to every ERIS encoding in the result. |
+| `erisfs.use`         | `true`, `false`                                      | See the source-type table in §4.                             |
+| `erisfs.version`     | `2`                                                  | `2` for trees                                                |
+| `erisfs.compression` | `none` (required support), `auto` (optional support) | `none` for every regular and executable file                 |
+| `erisfs.layout`      | `flat`                                               | `flat` for the index                                         |
 
 `eris.secret` supplies the **ERIS convergence secret**, the 32-byte input to
 leaf-key derivation. The ERIS algorithm derives the actual encryption keys.
@@ -180,10 +180,10 @@ retry budgets and store selection belong to the execution environment.
 Reject an unsupported version, layout, compression value or output mode with
 `unsupported-option`. For a blob reject all `erisfs.*` fields other than
 `erisfs.use`, even when they spell tree defaults. Validate unknown keys
-separately. The default requires no compressor. A handler accepting `lzip-v1`
-must implement the precise byte stream below. An implementation without this
-optional profile must reject it before retrieval, even if all the eventual files
-would be small.
+separately. The default requires no compressor. A handler accepting `auto` must
+implement the selection policy and the Lzip encoder specified below. An
+implementation without this optional profile must reject it before retrieval,
+even if all the eventual files would be small.
 
 ### Blob and tree construction
 
@@ -240,32 +240,40 @@ The fetch response carries the root capability only. On failure some immutable
 blocks may already exist. Reuse them on retry, without publishing a success or a
 lock for the failed request.
 
-### Optional Lzip profile
+### Optional automatic compression
 
-With `erisfs.compression lzip-v1`, leave files shorter than 1,024 original bytes
-uncompressed. Compress every regular and executable file of 1,024 bytes or more,
-including incompressible files. File names, extensions, read sizes and
-compression ratios have no effect on this decision. The index and symlink
-targets are always uncompressed. This simple size rule belongs to the fetch
-protocol. The selected byte encoder follows the pinned goeris Lzip profile.
+With `erisfs.compression auto`, apply ERIS-FS-AUTO-1 to each regular and
+executable file. Store the index and symlink targets uncompressed.
+[ERIS-FS-AUTO-1 selection policy and probe](eris-fs-auto-compression.md)
 
-Produce one Lzip v1 member. Start with hex `4c5a49500117`. Encode the entire
-original file with the LZMA algorithm of `github.com/ulikunitz/xz/lzma` v0.5.15,
-using its `HashTable4` matcher, 8,388,608-byte dictionary, 4,096-byte lookahead
-and `lc=3, lp=0, pb=2`. Use unknown input size, an end-of-stream marker, and no
-intermediate flush, dictionary reset or member split. Store the range-coded
-stream without the 13-byte standalone LZMA header. Append the IEEE CRC-32 of the
-original bytes (4 bytes), the original length (8 bytes), and the total member
-length including the trailer (8 bytes), all little-endian. Match the pinned
-encoder’s match selection, tie breaking and range coding. Another language can
-use any implementation that produces those exact bytes.
+1. Read the first 32,768 original bytes or the complete file if it is shorter.
+   Continue across short reads. Fail the operation on a read error.
+1. Let `N` be the sample length. If `N < 1024`, select uncompressed storage.
+1. Otherwise compute the policy's LZ77 probe size `P` on the sample. Select Lzip
+   if `8 * (P + 26) <= 7 * N`. Otherwise select uncompressed storage.
+1. Encode the entire file, including the sampled bytes, with the selected mode.
+   Keep the choice even if the remaining bytes have different properties or the
+   Lzip stream grows.
+   [Deterministic encoding with goeris auto compression](eris-fs-encoding.md#deterministic-encoding-with-goeris-auto-compression)
+
+When the policy selects Lzip, produce one Lzip v1 member. Start with hex
+`4c5a49500117`. Encode the entire original file with the LZMA algorithm of
+`github.com/ulikunitz/xz/lzma` v0.5.15, using its `HashTable4` matcher,
+8,388,608-byte dictionary, 4,096-byte lookahead and `lc=3, lp=0, pb=2`. Use
+unknown input size, an end-of-stream marker, and no intermediate flush,
+dictionary reset or member split. Store the range-coded stream without the
+13-byte standalone LZMA header. Append the IEEE CRC-32 of the original bytes (4
+bytes), the original length (8 bytes), and the total member length including the
+trailer (8 bytes), all little-endian. Match the pinned encoder’s match
+selection, tie breaking and range coding. Another language can use any
+implementation that produces those exact bytes.
 
 Use the complete **stored member length** for the ERIS block-size threshold. Set
 the index’s `length_field` to `tag(1280985424, original_byte_length)` for each
 compressed file. For example, a 50,000-byte file that compresses to 400 bytes
 uses 1,024-byte ERIS blocks and a tagged length of 50,000. ERIS-FS readers use
-the tag to identify Lzip content. The optional profile has a fixed byte vector
-in §8.
+the tag to identify Lzip content. Section 8 gives test vectors for both
+compression choices.
 [Pinned encoder behavior](https://github.com/asciimoth/goeris/blob/983b7c41be81cf34a5305e13c1257078ca7dd706/specs/eris-fs-encoding.md#lzip-encoding-profile)
 ·
 [LZMA implementation v0.5.15](https://pkg.go.dev/github.com/ulikunitz/xz@v0.5.15/lzma)
@@ -943,7 +951,7 @@ block-size bytes `0a`, `0f` and `0f` respectively. Apply that boundary
 independently to the complete index length. For map keys `["zzzz"]` and
 `["a","b"]` the one-component array sorts first despite its longer encoded key.
 
-**Optional compression vector.** With `lzip-v1`, one regular file named `file`
+**Automatic compression vectors.** With `auto`, one regular file named `file`
 containing 1,024 zero bytes has the 44-byte stored stream below. Its length
 field is hex `da4c5a4950190400`. At the zero secret, the resulting root is
 `urn:eris:BIACZ5E57FY2IDGF7I34DWENBOVRH3B4SWPEWEO2D3XPPVZOR5MNHD4MKZ43NFF5KRRCCLMMC6RVZHGEZKO7ACCP55TH2QIE5WVUWIJ53M`.
@@ -954,6 +962,12 @@ untagged integer 1,023.
 ```text
 4c5a4950011700006ffdffffa3b7800c82dbffff9ff000002eafb5ef00040000000000002c00000000000000
 ```
+
+For the same path and zero secret, use the 1,024-byte `xorshift32` input from
+the auto policy vectors. Its probe size is 1,032 bytes. Store the original bytes
+and encode the untagged length as hex `190400`. The resulting root is
+`urn:eris:BIAOWCYFF3SO3ZVEXC7WGJIL5RWP4LWFMXKK6D2NIUT75LKYCOJCGDCTP2MWYXAUNJG5CPAZ2A5ZKQR4WFH5H6KYHSUUECFBWUJC7C2PIM`.
+[Input recipe and probe values](eris-fs-auto-compression.md#conformance-vectors)
 
 ### Interoperability and failure cases
 
