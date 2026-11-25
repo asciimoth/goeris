@@ -42,7 +42,7 @@ func ParseConfig(r io.Reader) (map[string]Route, error) {
 			}
 			routes[typ] = Route{Exec: v}
 		case "http":
-			if len(v) != 1 || !httpURI(v[0]) {
+			if len(v) != 1 || !ValidHTTPURI(v[0]) {
 				return nil, ErrConfig
 			}
 			routes[typ] = Route{HTTP: v[0]}

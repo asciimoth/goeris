@@ -36,7 +36,16 @@ configuration for the [ERIS Fetch Protocol v1](specs/eris-fetchers-v1.md). Use
 machine. `Source.ID` returns the prehashed lock key. `fetch.LookupRoute` finds
 the first matching route in the configured file order. Handlers can use
 `Options.NewTree` to build a flat ERIS-FS result with the selected compression
-profile.
+profile. The `fetch/url` package retrieves HTTP and HTTPS sources and writes
+blob or tree results to a caller-provided block sink. It holds each download in
+memory before checksum verification and encoding. Set `url.Config.TempStorage`
+to `fetch.TempDir(dir)` to use temporary files, or supply a custom storage
+implementation. The fetcher releases the temporary data after each candidate.
+Set `MaxBytes` to stop the fetch if a candidate exceeds the byte limit. The HTTP
+client timeout applies to each candidate, and a context deadline applies to the
+entire fetch. The caller supplies the HTTP client and its destination policy.
+Set `url.Config.Progress` to receive download updates, or use `url.NodeProgress`
+to display them on a Zig progress node.
 
 The `volume` package implements [local block volumes](specs/eris-volume.md). It
 stores each block at a fixed `AAA/BBB/CCC/<remaining hash>` path and also reads

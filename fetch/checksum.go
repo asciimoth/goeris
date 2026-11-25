@@ -42,6 +42,12 @@ func ParseChecksum(s string) (Checksum, error) {
 // complete stream with a different digest gives integrity. After 100
 // consecutive empty reads it reports io.ErrNoProgress.
 func (c Checksum) Verify(r io.Reader) error {
+	return c.VerifyContext(context.Background(), r)
+}
+
+// VerifyContext is like Verify and checks ctx between reads. It cannot stop
+// a blocked read. Use a reader that observes ctx when reads can block.
+func (c Checksum) VerifyContext(ctx context.Context, r io.Reader) error {
 	var h hash.Hash
 	switch c.algorithm {
 	case "sha256":
@@ -56,7 +62,10 @@ func (c Checksum) Verify(r io.Reader) error {
 	}
 	var buffer [32 << 10]byte
 	for {
-		n, err := streamio.ReadFull(context.Background(), r, buffer[:])
+		n, err := streamio.ReadFull(ctx, r, buffer[:])
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil && err != io.EOF {
 			return errors.Join(Failure{Code: "unavailable"}, err)
 		}

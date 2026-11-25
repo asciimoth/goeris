@@ -130,7 +130,8 @@ func validURI(s string, windowsFiles bool) bool {
 	return true
 }
 
-func httpURI(s string) bool {
+// ValidHTTPURI reports whether s satisfies the HTTP source URI profile.
+func ValidHTTPURI(s string) bool {
 	return (strings.HasPrefix(s, "http:") || strings.HasPrefix(s, "https:")) && validURI(s, false)
 }
 
@@ -231,7 +232,7 @@ func (s Source) checkFields(windowsFiles bool) error {
 			}
 		}
 	}
-	if s.Type() == "git" && !httpURI(s.value("url")) {
+	if s.Type() == "git" && !ValidHTTPURI(s.value("url")) {
 		return Failure{"unsupported-scheme", "url"}
 	}
 	if s.fields["checksum"] != nil {

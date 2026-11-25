@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -214,6 +215,29 @@ func TestChecksum(t *testing.T) {
 	}
 	if (Failure{Code: "limit"}).Error() != "limit" || (Failure{"invalid-source", "type"}).Error() != "invalid-source (type)" {
 		t.Fatal("error text")
+	}
+}
+
+type checksumReadFunc func([]byte) (int, error)
+
+func (read checksumReadFunc) Read(p []byte) (int, error) { return read(p) }
+
+func TestChecksumCancellation(t *testing.T) {
+	checksum, err := ParseChecksum(helloChecksum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, readErr := range []error{nil, io.EOF} {
+		ctx, cancel := context.WithCancel(t.Context())
+		reads := 0
+		reader := checksumReadFunc(func(p []byte) (int, error) {
+			reads++
+			cancel()
+			return copy(p, "Hello world!"), readErr
+		})
+		if err := checksum.VerifyContext(ctx, reader); !errors.Is(err, context.Canceled) || reads != 1 {
+			t.Errorf("read error %v: verification error %v after %d reads", readErr, err, reads)
+		}
 	}
 }
 
