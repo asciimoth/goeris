@@ -39,6 +39,19 @@ func NewBuilder(sink eris.BlockSink, secret eris.Secret, options eris.BlockOptio
 	return &Builder{sink: sink, secret: secret, options: options}
 }
 
+// CheckPath reports whether a new entry can use path in the current index.
+// It reads no content and does not reserve the path.
+func (builder *Builder) CheckPath(path string) error {
+	if builder == nil || builder.sink == nil {
+		return ErrInvalidEntry
+	}
+	components, err := splitPath(path)
+	if err != nil {
+		return err
+	}
+	return builder.checkPath(components)
+}
+
 // AddFile reads and encodes one regular file with the recommended block size.
 // It buffers at most 16 KiB while it selects that size. Set executable to mark
 // the file as executable. A failed call does not add an index entry, but blocks
@@ -98,14 +111,10 @@ func (builder *Builder) AddLzipFile(ctx context.Context, path string, content io
 // compression for small or sequentially read files of at least 1 KiB; the
 // caller selects whether to compress each file.
 func (builder *Builder) AddCompressedFile(ctx context.Context, path string, content io.Reader, executable bool) error {
-	if builder == nil || builder.sink == nil || content == nil {
+	if content == nil {
 		return ErrInvalidEntry
 	}
-	components, err := splitPath(path)
-	if err != nil {
-		return err
-	}
-	if err := builder.checkPath(components); err != nil {
+	if err := builder.CheckPath(path); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -118,7 +127,7 @@ func (builder *Builder) AddCompressedFile(ctx context.Context, path string, cont
 		_ = output.CloseWithError(err)
 		done <- size
 	}()
-	err = builder.AddLzipFile(ctx, path, input, 0, executable)
+	err := builder.AddLzipFile(ctx, path, input, 0, executable)
 	_ = input.CloseWithError(err)
 	size := <-done
 	if err != nil {

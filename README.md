@@ -30,6 +30,14 @@ use the current working directory. Invalid capabilities and file-system errors
 also return `""`. For an ERIS-FS capability, the result is the decoded index
 file. The function checks file metadata and trusts the mount to verify content.
 
+The `fetch` package reads source descriptions, response frames, and route
+configuration for the [ERIS Fetch Protocol v1](specs/eris-fetchers-v1.md). Use
+`fetch.ParseSource` and `Source.Validate` to check a request on the fetcher’s
+machine. `Source.ID` returns the prehashed lock key. `fetch.LookupRoute` finds
+the first matching route in the configured file order. Handlers can use
+`Options.NewTree` to build a flat ERIS-FS result with the selected compression
+profile.
+
 The `volume` package implements [local block volumes](specs/eris-volume.md). It
 stores each block at a fixed `AAA/BBB/CCC/<remaining hash>` path and also reads
 flat block files. It verifies block size and hash on reads, publishes writes

@@ -47,14 +47,10 @@ func ChooseCompression(prefix []byte) Compression {
 // structure, and Lzip encoding profile. AutoCompressionVersion identifies only
 // the selection policy; a different Lzip encoder can produce different bytes.
 func (builder *Builder) AddAutoFile(ctx context.Context, path string, content io.Reader, executable bool) error {
-	if builder == nil || builder.sink == nil || content == nil {
+	if content == nil {
 		return ErrInvalidEntry
 	}
-	components, err := splitPath(path)
-	if err != nil {
-		return err
-	}
-	if err := builder.checkPath(components); err != nil {
+	if err := builder.CheckPath(path); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
