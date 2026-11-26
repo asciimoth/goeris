@@ -48,9 +48,14 @@ fuzz fuzztime=env_var_or_default('FUZZ_TIME', '5s'):
   done < <(rg --line-number --no-heading --replace '$1' '^func (Fuzz[[:alnum:]_]+)\(.*$' --glob '*_test.go'); \
   if ((found == 0)); then printf 'No Go fuzz targets found.\n'; fi
 
-# Build all packages.
+# Run the goeris command with the supplied arguments.
+[positional-arguments]
+run *args:
+  @go run ./cmd "$@"
+
+# Build the goeris binary.
 build:
-  go build ./...
+  go build -o goeris ./cmd
 
 # Show the available recipes.
 default:
