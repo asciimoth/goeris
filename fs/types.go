@@ -45,6 +45,8 @@ var (
 	ErrSizeMismatch = eris.ErrSizeMismatch
 	// ErrNotSeekable means that a compressed file does not support random access.
 	ErrNotSeekable = errors.New("eris-fs: compressed file is not seekable")
+	// ErrNoHostPath means that the resolver cannot expose the entry as a host path.
+	ErrNoHostPath = errors.New("eris-fs: no host path")
 	// ErrClosed is returned after an opened file is closed.
 	ErrClosed = stdfs.ErrClosed
 )

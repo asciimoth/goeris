@@ -41,6 +41,19 @@ func TestStoreFromMountedContent(t *testing.T) {
 	if err := image.Prefetch(ctx, "."); err != nil {
 		t.Fatal(err)
 	}
+	if got, err := image.ResolvePath(ctx, "latest.txt"); err != nil || got != filepath.Join(dir, mountHello) {
+		t.Fatalf("ResolvePath through link = (%q, %v)", got, err)
+	}
+	sub, err := image.Sub(ctx, "docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := sub.ResolvePath(ctx, "readme.txt"); err != nil || got != filepath.Join(dir, mountReadme) {
+		t.Fatalf("ResolvePath in subdirectory = (%q, %v)", got, err)
+	}
+	if got, err := image.ResolvePath(ctx, "docs"); got != "" || !errors.Is(err, ErrNoHostPath) {
+		t.Fatalf("ResolvePath for directory = (%q, %v)", got, err)
+	}
 	view := NewIOFS(ctx, image)
 	if _, err := view.Sub("missing"); !errors.Is(err, stdfs.ErrNotExist) {
 		t.Fatal(err)

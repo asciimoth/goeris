@@ -1,6 +1,8 @@
 package fs
 
 import (
+	"context"
+	"errors"
 	stdfs "io/fs"
 	"os"
 	"path/filepath"
@@ -42,6 +44,93 @@ func makePathTestTree(t *testing.T, mount string, capability eris.Capability) st
 		}
 	}
 	return root
+}
+
+type pathLookupStore struct {
+	eris.CapabilityStore
+	lookup func(context.Context, eris.Capability) (string, error)
+}
+
+func (s pathLookupStore) ResolvePath(ctx context.Context, capability eris.Capability) (string, error) {
+	return s.lookup(ctx, capability)
+}
+
+func TestFSResolvePathStoreLookup(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	hostPath := filepath.Join(t.TempDir(), "content")
+	blocks, _ := mountFixture(t)
+	store := pathLookupStore{
+		CapabilityStore: eris.NewBlockCapabilityStore(blocks),
+		lookup: func(got context.Context, capability eris.Capability) (string, error) {
+			if got != ctx {
+				t.Fatal("lookup did not receive the caller's context")
+			}
+			switch capability.String() {
+			case mountHello:
+				return hostPath, nil
+			case mountReadme:
+				return "", eris.ErrMissingBlock
+			default:
+				t.Fatalf("unexpected lookup for %v", capability)
+				return "", nil
+			}
+		},
+	}
+	image, err := NewStore(store, eris.BlockOptions{}).OpenFS(t.Context(), pathTestCapability(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := image.ResolvePath(ctx, "latest.txt"); got != hostPath || err != nil {
+		t.Fatalf("ResolvePath through link = (%q, %v), want %q", got, err, hostPath)
+	}
+	const missing = "docs/readme.txt"
+	got, err := image.ResolvePath(ctx, missing)
+	var pe *stdfs.PathError
+	if got != "" || !errors.As(err, &pe) || pe.Op != "resolvepath" || pe.Path != missing ||
+		!errors.Is(err, eris.ErrMissingBlock) || errors.Is(err, ErrNoHostPath) {
+		t.Fatalf("ResolvePath(%q) = (%q, %v), want missing content", missing, got, err)
+	}
+}
+
+func TestFSResolvePathErrors(t *testing.T) {
+	ctx := t.Context()
+	root, blocks := contextImage(t)
+	image, err := OpenFS(ctx, root, blocks, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	for _, tc := range []struct {
+		ctx        context.Context
+		name       string
+		want       error
+		noHostPath bool
+	}{
+		{ctx, ".", ErrNoHostPath, true},
+		{ctx, "nested", ErrNoHostPath, true},
+		{ctx, "nested/compressed", ErrNoHostPath, true},
+		{ctx, "nested/link", errors.ErrUnsupported, true},
+		{ctx, "nested/missing", stdfs.ErrNotExist, false},
+		{ctx, "../file", stdfs.ErrInvalid, false},
+		{canceled, "nested/file", context.Canceled, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := image.ResolvePath(tc.ctx, tc.name)
+			var pe *stdfs.PathError
+			if got != "" || !errors.As(err, &pe) || pe.Op != "resolvepath" || pe.Path != tc.name {
+				t.Fatalf("ResolvePath(%q) = (%q, %v)", tc.name, got, err)
+			}
+			if !errors.Is(err, tc.want) || errors.Is(err, ErrNoHostPath) != tc.noHostPath {
+				t.Fatalf("got %v, want %v (ErrNoHostPath = %t)", err, tc.want, tc.noHostPath)
+			}
+			if tc.want == ErrNoHostPath && errors.Is(err, errors.ErrUnsupported) {
+				t.Fatal("entry was passed to the block store")
+			}
+		})
+	}
 }
 
 func TestResolvePath(t *testing.T) {

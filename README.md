@@ -166,6 +166,12 @@ cache. Open directories keep a snapshot of their listing across later evictions.
 Capability URNs contain decryption keys. If you enable capability listings,
 restrict access to the mount when those keys must stay private.
 
+For an open image, `image.ResolvePath(ctx, "docs/readme.txt")` asks its
+capability store for the host path to the file's content. The host file can have
+a different name and mode. If `errors.Is(err, fs.ErrNoHostPath)` is true, a
+mounted ERIS-FS tree can still provide a path. This applies to directories,
+compressed files, and stores that do not support host paths.
+
 Use `fs.ResolveRoot(capability)` to find a mounted ERIS-FS root directory, or
 `fs.ResolvePath(capability, "docs/readme.txt")` to find a file or subdirectory
 inside it. Entry names use `io/fs` path rules; `"."` selects the root. Both

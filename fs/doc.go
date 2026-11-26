@@ -13,6 +13,8 @@
 // directory entries retain their operation context.
 //
 // [FS.OpenFile] supports seeking and random access for uncompressed files.
+// [FS.ResolvePath] asks the backing store for the host path to an uncompressed
+// file's content.
 // [Builder.AddCompressedFile] writes deterministic Lzip content. Use [FS.Open]
 // for sequential access to compressed files. [FS.Prefetch] reads the required
 // indexes and sends a hint for each distinct file capability.
