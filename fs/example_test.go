@@ -13,7 +13,8 @@ import (
 
 func ExampleBuilder() {
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+	builder := images.NewBuilder(eris.Secret{})
 	if err := builder.AddFile(context.Background(), "docs/readme", strings.NewReader("hello"), false); err != nil {
 		panic(err)
 	}
@@ -21,7 +22,7 @@ func ExampleBuilder() {
 	if err != nil {
 		panic(err)
 	}
-	image, err := erisfs.OpenFS(context.Background(), capability, blocks, eris.BlockOptions{}) // Also accepts v1 images.
+	image, err := images.OpenFS(context.Background(), capability) // Also accepts v1 images.
 	if err != nil {
 		panic(err)
 	}
@@ -44,7 +45,8 @@ func ExampleBuilder() {
 
 func ExampleFS_OpenFile() {
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+	builder := images.NewBuilder(eris.Secret{})
 	if err := builder.AddFile(context.Background(), "file", strings.NewReader("known length"), false); err != nil {
 		panic(err)
 	}
@@ -52,7 +54,7 @@ func ExampleFS_OpenFile() {
 	if err != nil {
 		panic(err)
 	}
-	image, err := erisfs.OpenFS(context.Background(), capability, blocks, eris.BlockOptions{})
+	image, err := images.OpenFS(context.Background(), capability)
 	if err != nil {
 		panic(err)
 	}
@@ -75,7 +77,8 @@ func ExampleFS_OpenFile() {
 
 func ExampleBuilder_AddAutoFile() {
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+	builder := images.NewBuilder(eris.Secret{})
 	content := strings.Repeat("hello\n", 1024)
 	if err := builder.AddAutoFile(context.Background(), "notes", strings.NewReader(content), false); err != nil {
 		panic(err)
@@ -88,7 +91,8 @@ func ExampleBuilder_AddAutoFile() {
 func ExampleNewIOFS() {
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+	builder := images.NewBuilder(eris.Secret{})
 	if err := builder.AddFile(ctx, "hello", strings.NewReader("hello"), false); err != nil {
 		panic(err)
 	}
@@ -96,7 +100,7 @@ func ExampleNewIOFS() {
 	if err != nil {
 		panic(err)
 	}
-	image, err := erisfs.OpenFS(ctx, capability, blocks, eris.BlockOptions{})
+	image, err := images.OpenFS(ctx, capability)
 	if err != nil {
 		panic(err)
 	}
@@ -109,10 +113,11 @@ func ExampleNewIOFS() {
 	// Output: hello
 }
 
-func ExampleNewMount() {
+func ExampleNewMountWithStore() {
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-	builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+	builder := images.NewBuilder(eris.Secret{})
 	if err := builder.AddFile(ctx, "hello.txt", strings.NewReader("Hello, ERIS!\n"), false); err != nil {
 		panic(err)
 	}
@@ -123,7 +128,7 @@ func ExampleNewMount() {
 
 	// Pass mount to an adapter that accepts io/fs.FS. Capability names resolve
 	// on demand; they do not appear in the mount's directory listings.
-	mount := erisfs.NewMount(ctx, blocks, eris.BlockOptions{})
+	mount := erisfs.NewMountWithStore(ctx, images, blocks, eris.BlockOptions{})
 	content, err := fs.ReadFile(mount, "fs/"+capability.String()+"/hello.txt")
 	if err != nil {
 		panic(err)
@@ -156,7 +161,8 @@ func ExampleMount_WithListingCache() {
 	if err != nil {
 		panic(err)
 	}
-	base := erisfs.NewMount(ctx, blocks, eris.BlockOptions{})
+	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+	base := erisfs.NewMountWithStore(ctx, images, blocks, eris.BlockOptions{})
 	// Enable independent LRU limits for 128 capabilities and 256 raw blocks.
 	// The original mount keeps its default listings.
 	mount, err := base.WithListingCache(128, 256)

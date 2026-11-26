@@ -3,7 +3,6 @@ package fs
 import (
 	"bytes"
 	"context"
-	"errors"
 	"slices"
 	"testing"
 
@@ -29,7 +28,9 @@ func TestFileSystemBatches(t *testing.T) {
 		store := &batchStore{BlockSet: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block), MaxBatchSize: limit}}
 		ctx := context.Background()
 		options := eris.BlockOptions{HighPriority: true}
-		builder := NewBuilder(store, eris.Secret{}, options)
+		// The compatibility builder must also preserve batching for write-only sinks.
+		sink := struct{ eris.BlockSink }{store}
+		builder := NewBuilder(sink, eris.Secret{}, options)
 		data := make([]byte, 70*int(eris.BlockSize32KiB)+10)
 		for i := range data {
 			data[i] = byte(i / int(eris.BlockSize32KiB))
@@ -71,33 +72,5 @@ func TestFileSystemBatches(t *testing.T) {
 				t.Fatal("priority lost")
 			}
 		}
-	}
-}
-
-func TestFileSinkBatchOptions(t *testing.T) {
-	ctx := context.Background()
-	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block), MaxBatchSize: 2}
-	sink := fileBlockSink{BlockSink: blocks, root: true}
-	requests := []eris.PutBlockRequest{{Data: make([]byte, 1024)}, {Data: bytes.Repeat([]byte{1}, 1024), Options: eris.BlockOptions{HighPriority: true}}}
-	refs, err := sink.PutBlock(ctx, requests)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if requests[0].Options.Root || requests[1].Options.Root {
-		t.Fatal("caller options changed")
-	}
-	if blocks.Blocks[refs[0]].Options != (eris.BlockOptions{Root: true}) || blocks.Blocks[refs[1]].Options != (eris.BlockOptions{Root: true, HighPriority: true}) {
-		t.Fatal("per-block options lost")
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	cancel()
-	if got, err := sink.PutBlock(ctx, nil); len(got) != 0 || err != nil {
-		t.Fatal(got, err)
-	}
-	if got, err := sink.PutBlock(ctx, requests); len(got) != 0 || !errors.Is(err, context.Canceled) {
-		t.Fatal(got, err)
-	}
-	if got, err := sink.PutBlock(ctx, append(requests, requests[0])); len(got) != 0 || !errors.Is(err, eris.ErrBatchTooLarge) {
-		t.Fatal(got, err)
 	}
 }

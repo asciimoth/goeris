@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/asciimoth/goeris"
@@ -24,15 +25,12 @@ var errLinkEscape = errors.New("eris-fs: symbolic link leaves image")
 // use the standard library file-system interfaces. Nested ERIS-FS indexes are
 // loaded when a caller enters them. Each block read receives a copy of the
 // options supplied at construction, including reads through Sub.
-// Its methods are safe for concurrent use when the block source supports
+// Its methods are safe for concurrent use when the capability store supports
 // concurrent calls. Each Open call returns a separate file position. Calls on
 // the same open directory must be serialized by the caller.
 type FS struct {
-	source     eris.BlockSource
-	options    eris.BlockOptions
-	root       *node
-	prefix     string
-	indexLimit int64
+	root   *node
+	prefix string
 }
 
 type node struct {
@@ -40,8 +38,7 @@ type node struct {
 	// Image nodes leave it nil and read through their capability instead.
 	block       []byte
 	mu          sync.Mutex
-	source      eris.BlockSource
-	options     eris.BlockOptions
+	store       *Store
 	name        string
 	kind        EntryType
 	capability  eris.Capability
@@ -58,26 +55,40 @@ type node struct {
 // OpenFS decodes the top-level index and returns a read-only virtual file
 // system. It uses ctx only for this initial read and does not retain it.
 // Later operations use their own contexts. It does not read regular files.
+//
+// This compatibility function wraps Store.OpenFS.
 func OpenFS(ctx context.Context, capability eris.Capability, source eris.BlockSource, options eris.BlockOptions) (*FS, error) {
-	return OpenFSWithLimit(ctx, capability, source, DefaultMaxIndexSize, options)
+	return storeFromSource(source, options).OpenFS(ctx, capability)
 }
 
 // OpenFSWithLimit opens an image whose top-level and nested decoded indexes
 // are each at most limit bytes. A non-positive limit is invalid.
 // It keeps a copy of options for all later block reads.
+//
+// This compatibility function wraps Store.OpenFSWithLimit.
 func OpenFSWithLimit(ctx context.Context, capability eris.Capability, source eris.BlockSource, limit int64, options eris.BlockOptions) (*FS, error) {
-	index, err := DecodeIndexWithLimit(ctx, capability, source, limit, options)
+	return storeFromSource(source, options).OpenFSWithLimit(ctx, capability, limit)
+}
+
+// OpenFS reads the root index. Later operations use their own contexts.
+func (s *Store) OpenFS(ctx context.Context, capability eris.Capability) (*FS, error) {
+	return s.OpenFSWithLimit(ctx, capability, DefaultMaxIndexSize)
+}
+
+// OpenFSWithLimit applies limit to the root index and each nested index.
+func (s *Store) OpenFSWithLimit(ctx context.Context, capability eris.Capability, limit int64) (*FS, error) {
+	index, err := s.DecodeIndexWithLimit(ctx, capability, limit)
 	if err != nil {
 		return nil, err
 	}
-	root := buildTree(index, source, ".", limit, options)
-	return &FS{source: source, options: options, root: root, prefix: ".", indexLimit: limit}, nil
+	root := buildTree(index, s, ".", limit)
+	return &FS{root: root, prefix: "."}, nil
 }
 
 // buildTree consumes an index that DecodeIndexWithLimit has already validated.
-func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit int64, options eris.BlockOptions) *node {
+func buildTree(index Index, s *Store, rootName string, indexLimit int64) *node {
 	root := &node{
-		name: rootName, kind: directoryType, source: source, options: options, children: make(map[string]*node),
+		name: rootName, kind: directoryType, store: s, children: make(map[string]*node),
 		loaded: true, indexLimit: indexLimit,
 	}
 	for _, entry := range index.Entries {
@@ -86,7 +97,7 @@ func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit
 			child := parent.children[component]
 			if child == nil {
 				child = &node{
-					name: component, kind: directoryType, source: source, options: options, children: make(map[string]*node),
+					name: component, kind: directoryType, store: s, children: make(map[string]*node),
 					loaded: true, indexLimit: indexLimit,
 				}
 				parent.children[component] = child
@@ -95,7 +106,7 @@ func buildTree(index Index, source eris.BlockSource, rootName string, indexLimit
 		}
 		name := entry.Path[len(entry.Path)-1]
 		child := &node{
-			name: name, kind: entry.Type, source: source, options: options, capability: entry.Capability,
+			name: name, kind: entry.Type, store: s, capability: entry.Capability,
 			target: entry.Target, loaded: entry.Type != Subdirectory, indexLimit: indexLimit,
 			size: entry.Size, sizeKnown: entry.Size >= 0, compression: entry.Compression,
 		}
@@ -141,11 +152,11 @@ func (item *node) load(ctx context.Context) error {
 		item.loading = nil
 		item.mu.Unlock()
 	}()
-	index, err := DecodeIndexWithLimit(ctx, item.capability, item.source, item.indexLimit, item.options)
+	index, err := item.store.DecodeIndexWithLimit(ctx, item.capability, item.indexLimit)
 	if err != nil {
 		return err
 	}
-	root := buildTree(index, item.source, item.name, item.indexLimit, item.options)
+	root := buildTree(index, item.store, item.name, item.indexLimit)
 	item.mu.Lock()
 	item.children = root.children
 	item.loaded = true
@@ -265,7 +276,7 @@ func (fileSystem *FS) Open(ctx context.Context, path string) (stdfs.File, error)
 		}
 		return file, nil
 	}
-	return fileSystem.openRegular(ctx, item, path)
+	return item.openRegular(ctx, path)
 }
 
 // ReadFile reads the complete file. It grows the buffer as content is read,
@@ -284,25 +295,25 @@ func (fileSystem *FS) ReadFile(ctx context.Context, name string) ([]byte, error)
 	return data, nil
 }
 
-func (fileSystem *FS) openRegular(ctx context.Context, item *node, path string) (ReadSeekCloser, error) {
+func (item *node) openRegular(ctx context.Context, path string) (ReadSeekCloser, error) {
 	if item.block != nil {
 		return newMountBlockFile(ctx, item), nil
 	}
-	var reader *eris.Reader
+	var reader eris.CapabilityReader
 	var err error
 	item.mu.Lock()
 	size, known := item.size, item.sizeKnown
 	item.mu.Unlock()
 	if known {
-		reader, err = eris.NewReaderWithSize(ctx, item.capability, fileSystem.source, size, item.options)
+		reader, err = item.store.content.NewReaderWithSize(ctx, item.capability, size, item.store.options)
 	} else {
-		reader, err = eris.NewReader(ctx, item.capability, fileSystem.source, item.options)
+		reader, err = item.store.content.NewReader(ctx, item.capability, item.store.options)
 	}
 	if err != nil {
 		return nil, pathError("open", path, err)
 	}
 	item.setSize(reader.Size())
-	return &regularFile{ctx: ctx, node: item, Reader: reader}, nil
+	return &regularFile{ctx: ctx, node: item, CapabilityReader: reader}, nil
 }
 
 // OpenFile opens a regular file and returns its random-access interface. It
@@ -320,7 +331,7 @@ func (fileSystem *FS) OpenFile(ctx context.Context, name string) (ReadSeekCloser
 	if item.compression == Lzip {
 		return nil, pathError("open", name, ErrNotSeekable)
 	}
-	return fileSystem.openRegular(ctx, item, name)
+	return item.openRegular(ctx, name)
 }
 
 // Stat returns file metadata. It follows links within this image.
@@ -412,10 +423,7 @@ func (fileSystem *FS) Sub(ctx context.Context, name string) (*FS, error) {
 	if fileSystem.prefix != "." {
 		prefix = path.Join(fileSystem.prefix, name)
 	}
-	return &FS{
-		source: fileSystem.source, options: fileSystem.options, root: fileSystem.root, prefix: prefix,
-		indexLimit: fileSystem.indexLimit,
-	}, nil
+	return &FS{root: fileSystem.root, prefix: prefix}, nil
 }
 
 func (node *node) dirEntries(ctx context.Context) []stdfs.DirEntry {
@@ -454,10 +462,11 @@ func (node *node) contentSize(ctx context.Context) (int64, error) {
 		return size, nil
 	}
 	node.mu.Unlock()
-	reader, err := eris.NewReader(ctx, node.capability, node.source, node.options)
+	reader, err := node.store.content.NewReader(ctx, node.capability, node.store.options)
 	if err != nil {
 		return 0, err
 	}
+	defer func() { _ = reader.Close() }()
 	size := reader.Size()
 	node.setSize(size)
 	return size, nil
@@ -508,7 +517,24 @@ func (node *node) isDir() bool                       { return node.kind == direc
 type regularFile struct {
 	ctx  context.Context
 	node *node
-	*eris.Reader
+	eris.CapabilityReader
+	closed atomic.Bool
+}
+
+func (file *regularFile) Close() error {
+	file.closed.Store(true)
+	return file.CapabilityReader.Close()
+}
+
+// IsClosed and CacheSize preserve diagnostics previously provided by the
+// embedded block reader. An opaque capability reader reports no cache count.
+func (file *regularFile) IsClosed() bool { return file.closed.Load() }
+
+func (file *regularFile) CacheSize() int {
+	if reader, ok := file.CapabilityReader.(interface{ CacheSize() int }); ok {
+		return reader.CacheSize()
+	}
+	return 0
 }
 
 func (file *regularFile) Stat() (stdfs.FileInfo, error) {

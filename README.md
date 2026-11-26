@@ -100,7 +100,7 @@ with version 1 read support:
 - low-level index codecs;
 - regular, executable, symbolic-link, and nested-image entries with file
   lengths;
-- host-independent builders that accept `io.Reader` values and abstract block
+- host-independent builders that accept `io.Reader` values and capability
   stores;
 - a high-level read-only `FileSystem` interface based on `io/fs`;
 - verified random-access reads of uncompressed files through `io.ReaderAt` and
@@ -108,22 +108,28 @@ with version 1 read support:
 - deterministic Lzip compression and sequential reads with checksum and length
   checks.
 
-To build a mount adapter, use `fs.NewMount(ctx, source, options)`. It wraps an
-`eris.BlockSource` and implements the standard `io/fs` interfaces with the
-[eris-go mount layout](specs/eris-go-fuse-layout.md): `<capability>` returns
+Use `fs.NewMountWithStore(ctx, images, source, options)` to build a mount
+adapter. Supply an ERIS-FS `*fs.Store` for decoded content and image trees, and
+an `eris.BlockSource` for raw blocks. Either component can be nil. Paths for an
+absent component return `io/fs.ErrNotExist`. With both nil, the mount exposes an
+empty root directory. The mount implements the standard `io/fs` interfaces with
+the [eris-go mount layout](specs/eris-go-fuse-layout.md): `<capability>` returns
 decoded content, and `fs/<capability>/...` exposes an ERIS-FS tree. Full URNs,
-unprefixed base32, and hexadecimal capabilities are accepted. By default, the
-root lists only `fs`; capability names resolve on demand and are not listed.
-`OpenFile` supports `ReadAt` and `Seek` for uncompressed files. `ReadLink` and
-`Lstat` provide link targets and metadata for FUSE or 9P adapters. `Sub` retains
-an image for repeated access. The caller supplies the mount mechanism.
+unprefixed base32, and hexadecimal capabilities are accepted. With an image
+store, the default root lists only `fs`; capability names resolve on demand and
+are not listed. `OpenFile` supports `ReadAt` and `Seek` for uncompressed files.
+`ReadLink` and `Lstat` provide link targets and metadata for FUSE or 9P
+adapters. `Sub` retains an image for repeated access. The caller supplies the
+mount mechanism.
 
-`NewMountWithLimit` sets the decoded size limit for each index, including nested
-indexes. The default is 64 MiB. This does not limit file content. All operations
-retain the supplied context and block options. Image links resolve only within
-their image; `ReadLink` returns the original target for safe links and rejects
-escaping targets. Missing blocks match both `io/fs.ErrNotExist` and
-`eris.ErrMissingBlock` in errors returned by `Mount` methods.
+`NewMountWithStoreAndLimit` sets the decoded size limit for each index,
+including nested indexes. The default is 64 MiB. This does not limit file
+content. Image reads use the image store’s options. Raw-block reads use the
+options supplied to the mount constructor. Both use the mount context. Image
+links resolve only within their image; `ReadLink` returns the original target
+for safe links and rejects escaping targets. Missing blocks match both
+`io/fs.ErrNotExist` and `eris.ErrMissingBlock` in errors returned by `Mount`
+methods.
 
 For a base32 block hash `H`, the mount also exposes the complete encrypted block
 at `H[:3]/H[3:6]/H[6:9]/H[9:]`, as specified by `volume.BlockPath`, and at the
@@ -137,7 +143,7 @@ rules in the `eris` or `volume` packages.
 To list recent accesses, enable the optional cache explicitly:
 
 ```go
-mount, err := fs.NewMount(ctx, source, options).WithListingCache(128, 256)
+mount, err := fs.NewMountWithStore(ctx, images, source, options).WithListingCache(128, 256)
 ```
 
 The two limits count capabilities and raw blocks separately. Zero disables a
@@ -316,6 +322,13 @@ implement `eris.BlockSink`. A source with only read methods returns
 `eris.NewMountCapabilityStore(root)`. This read-only store also implements
 `ResolvePath`. An empty root uses the same search paths as `eris.ResolvePath`.
 
+Use `CapabilityStore.EncodeContentWithOptions` to control block size and root
+marking for a stream. A zero `BlockSize` selects the recommended size. The
+encoder marks the capability's root block by default. Set `PreserveRoot: true`
+to pass `BlockOptions.Root` unchanged on each write. The store's rules for
+repeated writes still apply. Custom `CapabilityStore` implementations must
+provide `EncodeContentWithOptions`.
+
 Use `eris.NewCombinedCapabilityStore(mount, blocks)` to try the mount first and
 the block store second. Read and write operations return the first successful
 result, return the last error if all attempts fail, and stop on cancellation.
@@ -365,8 +378,8 @@ blocks. Sequential reads start with four leaves of read-ahead and grow to at
 most 32. A random jump resets this window. Demand hints and read-ahead cover at
 most 64 leaves per iteration. Speculation follows cached indexes only; it never
 adds block reads. `Seek` hints its target through the same cached paths. A
-bounded cache of 128 references suppresses repeated hints. ERIS-FS regular files
-and compressed streams use this reader policy too.
+bounded cache of 128 references suppresses repeated hints. Block-backed ERIS-FS
+files and compressed streams use this reader policy.
 
 To request all content in advance, use:
 
@@ -377,19 +390,19 @@ err = image.Prefetch(ctx, ".")      // All files and nested ERIS-FS indexes.
 err = image.Prefetch(ctx, "docs")   // Only this file or directory.
 ```
 
-These traversal calls can block: they read internal nodes and ERIS-FS indexes
-needed to discover references. They send hints for file leaves without reading
-or decompressing them, including the final padding leaf. Repeated internal
-subtrees and repeated filesystem capabilities are scanned once per traversal.
-Directory traversal skips symbolic links; the explicitly named path follows
-links as `Open` does. `sub.Prefetch(ctx, ".")` visits only the selected
-directory. As with `Sub.Open`, an explicitly named link can resolve outside that
-subtree but remains inside the image. `NewIOFS(ctx, image).Prefetch(name)` uses
-the bound context. Custom implementations of the ERIS-FS `FileSystem` interface
-must also supply `Prefetch`. Traversal errors report index-read or cancellation
-failures, not failures of background hints. Success does not guarantee that
-content exists or is cached. Use a goroutine managed by the caller if the
-traversal must run in the background.
+These calls can block. ERIS-FS reads nested indexes and passes file capabilities
+to the store. A block-backed store reads internal nodes to discover references.
+It sends hints for file leaves, including the final padding leaf, without
+reading or decompressing them. Repeated internal subtrees and repeated
+filesystem capabilities are scanned once per traversal. Directory traversal
+skips symbolic links; the explicitly named path follows links as `Open` does.
+`sub.Prefetch(ctx, ".")` visits only the selected directory. As with `Sub.Open`,
+an explicitly named link can resolve outside that subtree but remains inside the
+image. `NewIOFS(ctx, image).Prefetch(name)` uses the bound context. Custom
+implementations of the ERIS-FS `FileSystem` interface must also supply
+`Prefetch`. Traversal reports errors from index reads, store prefetch calls, and
+cancellation. Success does not guarantee that content exists or is cached. Use a
+goroutine managed by the caller if the traversal must run in the background.
 
 Use `github.com/asciimoth/goeris/cache` to keep encrypted blocks in a bounded
 memory cache and process prefetch hints with a fixed worker pool:
@@ -545,13 +558,11 @@ passes options unchanged by default and returns the options from a successful
 read.
 
 `Root` highlights key blocks for indexing and block exchange between nodes.
-Encoders always set it on the block named by the returned capability, including
-single-block content and ERIS-FS index roots. ERIS-FS file writes preserve the
-original `Root` option. Standalone blob writes still mark their roots. The
-effective flag is the original option OR the automatic root flag. An explicit
-`Root=true` is never cleared during encoding. The automatic flag identifies the
-object's entry point. Other blocks keep the supplied options. The flag does not
-change block bytes or capabilities.
+Encoders set it by default on the block named by the returned capability,
+including single-block content and ERIS-FS index roots. ERIS-FS file writes and
+streams that use `PreserveRoot: true` keep the supplied `Root` option on all
+writes. An explicit `Root: true` marks every block in the operation. The flag
+affects storage metadata only.
 
 `BlockSet` keeps each flag true across repeated puts and returns it on get.
 `UpdateBlockOptions` can set or clear either flag. Each result is `true` only if
@@ -700,7 +711,8 @@ Build and open an ERIS-FS image without host file-system access:
 
 ```go
 blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+builder := images.NewBuilder(eris.Secret{})
 if err := builder.AddFile(ctx, "docs/readme", strings.NewReader("hello"), false); err != nil {
 	return err
 }
@@ -709,7 +721,7 @@ capability, err := builder.Finish(ctx)
 if err != nil {
 	return err
 }
-image, err := erisfs.OpenFS(ctx, capability, blocks, eris.BlockOptions{})
+image, err := images.OpenFS(ctx, capability)
 if err != nil {
 	return err
 }
@@ -720,11 +732,9 @@ if err != nil {
 defer file.Close()
 ```
 
-`eris.BlockSet` is an example store. You can pass any `eris.BlockSink` to
-`NewBuilder` and any `eris.BlockSource` to `OpenFS`. Native filesystem methods
-take context as their first argument. They do not open host file-system paths.
-An application can supply a file-backed or remote block store outside this
-package.
+`erisfs.NewStore` accepts any `eris.CapabilityStore`. Reading requires a
+readable store. Building an image requires a writable store. Image operations
+take a context as their first argument.
 
 For standard Go filesystem interfaces, bind a context to the image:
 
@@ -739,31 +749,34 @@ entries retain the operation context for later reads and metadata access.
 Subdirectory wrappers retain the same context. Create a new wrapper to use a
 different context; the image can be shared by multiple wrappers.
 
-Use `Index`, `EncodeIndex`, and `DecodeIndex` for the low-level ERIS-FS API. Use
-`Builder`, `OpenFS`, and `FileSystem` for the file-system API. All writers
-create version 2 indexes. `Builder.AddFile` counts the content bytes while it
-encodes them and selects the recommended ERIS block size.
+Use `Index`, `Store.EncodeIndex`, and `Store.DecodeIndex` for the low-level
+ERIS-FS API. Use `Builder`, `Store.OpenFS`, and `FileSystem` for the file-system
+API. All writers create version 2 indexes. `Builder.AddFile` counts the content
+bytes while it encodes them and selects the recommended ERIS block size.
 
 When constructing an `Entry` directly, set `Size` to the file length in bytes.
-Zero means an empty file. `DecodeIndex` sets v1 file sizes to `-1` because v1
-does not store lengths. To encode such an index as v2, open the original image
-with `OpenFS` and use `Stat` to obtain each missing length, then set
+Zero means an empty file. `Store.DecodeIndex` sets v1 file sizes to `-1` because
+v1 does not store lengths. To encode such an index as v2, open the original
+image with `Store.OpenFS` and use `Stat` to obtain each missing length, then set
 `Entry.Size`. Encoding fails with `ErrUnknownSize` until all file lengths are
 known. Nested indexes can use either version. Existing v1 images with text
 symlink targets or length-first CBOR map order remain readable; new indexes use
 arrays of target components and RFC 8949 section 4.2.1 bytewise key order.
 
-For uncompressed v2 files, `Stat`, directory entry metadata, and `OpenFile` need
-no content reads. Random reads fetch only the required tree paths and leaf
-blocks. Each reader caches at most 64 internal nodes and one leaf. A reader
-checks the shape of each visited path and checks padding when it reads the file
-end. Unvisited blocks are not checked. V1 files first scan internal nodes and
-the final leaf to obtain the content length. This scan uses temporary summaries
-that grow with the number of distinct internal nodes. The reader releases these
-summaries after the scan and applies the same 64-node cache limit during reads.
+For uncompressed v2 files, `Stat` and directory entry metadata use the length in
+the index. `OpenFile` passes that length to `CapabilityStore.NewReaderWithSize`.
+A block-backed reader opens without fetching file content. Random reads fetch
+the required tree paths and leaf blocks. Each reader caches at most 64 internal
+nodes and one leaf. A reader checks the shape of each visited path and checks
+padding when it reads the file end. Unvisited blocks are not checked.
+Block-backed v1 files first scan internal nodes and the final leaf to obtain the
+content length. This scan uses temporary summaries that grow with the number of
+distinct internal nodes. The reader releases these summaries after the scan and
+applies the same 64-node cache limit during reads.
 
-The generic ERIS reader is a shared internal helper used by `fs`, `http`, and
-`link`. Applications use `OpenFile` for random access to files in an image.
+Other capability stores supply their own readers. For example, a mount-backed
+store opens the decoded file and checks its length against a v2 index.
+Applications use `OpenFile` for random access to files in an image.
 
 `Builder.AddCompressedFile` reads a file once and writes a deterministic Lzip
 stream with the recommended 8 MiB dictionary. It stores the uncompressed size in
@@ -813,12 +826,12 @@ bytes, file capabilities, and complete image capabilities. Other Lzip encoders
 can produce different valid streams; ERIS-FS does not prescribe a unique Lzip
 bitstream. The streaming encoder also passes all 25 official base ERIS vectors.
 
-`OpenFS` and `DecodeIndex` limit each decoded index to 64 MiB. Use
-`OpenFSWithLimit` or `DecodeIndexWithLimit` to select another application limit.
-File sizes in v2 indexes are untrusted metadata until the content is read.
-`ReadFile` grows its buffer from the bytes read, rather than the declared size.
-It still reads the whole file into memory. Use `Open` with `io.LimitReader` when
-file content also needs an application size limit.
+`Store.OpenFS` and `Store.DecodeIndex` limit each decoded index to 64 MiB. Use
+`Store.OpenFSWithLimit` or `Store.DecodeIndexWithLimit` to select another
+application limit. File sizes in v2 indexes are untrusted metadata until the
+content is read. `ReadFile` grows its buffer from the bytes read, rather than
+the declared size. It still reads the whole file into memory. Use `Open` with
+`io.LimitReader` when file content also needs an application size limit.
 
 Callers that need stronger resistance to confirmation attacks must generate a
 cryptographically secure, unique `eris.Secret` outside this package. ERIS does

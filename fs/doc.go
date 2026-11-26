@@ -3,43 +3,40 @@
 // and the text symlink targets and length-first map order used by earlier
 // releases of this library.
 //
-// The low-level API contains Index, Entry, and the index codecs. It uses
-// the block source and sink interfaces in the eris package so applications can
-// control storage and transport. Raw content encoding and ERIS tree reading
-// are provided by eris.EncodeContent, eris.EncodeContentRecommended, and
-// eris.NewReader.
+// [NewStore] binds ERIS-FS to a [github.com/asciimoth/goeris.CapabilityStore].
+// [Store.EncodeIndex] and [Store.DecodeIndex] write and read indexes.
+// [Store.NewBuilder] builds an image from readers.
+// [Store.OpenFS] opens an image by its root capability.
+// It uses the supplied context to read the root index. Later image operations
+// use the context supplied to each call. [NewIOFS] binds a context to an
+// image for use through the standard io/fs interfaces. Open files and
+// directory entries retain their operation context.
 //
-// The high-level API contains Builder, FileSystem, and OpenFS. It exposes an
-// encoded image without extraction. All storage operations accept context.
-// NewIOFS(ctx, image) binds a context and implements the standard io/fs
-// interfaces. Open files and directory entries retain that context. OpenFS
-// uses its context only to read the initial index; the returned FS does not
-// retain it. Later FS calls accept their own contexts.
-// OpenFile also gives typed access to seeking and random-access reads for
-// uncompressed files. AddCompressedFile creates deterministic Lzip content;
-// compressed files are read sequentially with Open. Both use ERIS reader
-// read-ahead hints. FS.Prefetch explicitly requests a file or directory tree;
-// it reads required indexes and sends best-effort hints for file leaves.
-// AddAutoFile selects compression with the fixed ERIS-FS-AUTO-1 sample policy.
-// ChooseCompression exposes the same decision without encoding a file.
+// [FS.OpenFile] supports seeking and random access for uncompressed files.
+// [Builder.AddCompressedFile] writes deterministic Lzip content. Use [FS.Open]
+// for sequential access to compressed files. [FS.Prefetch] reads the required
+// indexes and sends a hint for each distinct file capability.
+// [Builder.AddAutoFile] selects compression with the ERIS-FS-AUTO-1 policy.
+// [ChooseCompression] exposes the same decision before encoding.
 //
-// NewMount(ctx, source, options) exposes the [eris-go mount layout] through
-// io/fs. Paths at C return decoded content; paths at fs/C expose an ERIS-FS
-// image, where C is a full capability URN, unprefixed base32, or hexadecimal.
-// By default, the root lists only fs, and fs lists no entries. Capabilities
-// resolve on demand. NewMountWithLimit limits each decoded index. Mount keeps
-// no image cache; Sub retains a selected image for repeated access. The caller
-// can use Mount in a FUSE or 9P adapter. It does not mount a host filesystem.
-// For a base32 block hash H, Mount also exposes encrypted block bytes at
-// H[:3]/H[3:6]/H[6:9]/H[9:], matching volume.BlockPath, and at the flat path H.
-// Prefix directories resolve on demand and have empty listings by default.
-// Hashes, capabilities, and fs accept ASCII case variants; image entry paths keep
-// their original case-sensitive lookup rules.
-// Mount.WithListingCache enables bounded LRU listings for recently opened
-// capabilities and verified raw blocks. Limits are separate for each category;
-// zero disables a category. Only known image capabilities appear under fs.
-// The cache holds identifiers and metadata, not content. Virtual Sub views
-// share it, and open directories retain snapshots through later evictions.
+// [NewMountWithStore] exposes the [eris-go mount layout] through io/fs.
+// Supply an image store to expose decoded content at C and an image tree at
+// fs/C. C can be a full capability URN, unprefixed base32, or hexadecimal.
+// The root lists fs when an image store is available. Capabilities resolve
+// on demand. [NewMountWithStoreAndLimit] limits each decoded index.
+// [Mount.Sub] retains a selected image for repeated access.
+//
+// Supply a block source to expose the encrypted block with base32 hash H at
+// H and H[:3]/H[3:6]/H[6:9]/H[9:]. Prefix directories resolve on demand.
+// Supply nil for either component to omit its paths. With both nil, the root
+// directory is empty. Hashes, capabilities, and fs accept ASCII case variants.
+// Paths within an image are case-sensitive.
+//
+// [Mount.WithListingCache] enables bounded listings of recently accessed
+// capabilities and verified raw blocks. The two limits are independent.
+// Zero disables a category. Only known image capabilities appear under fs.
+// The cache holds identifiers and metadata. Virtual Sub views share this
+// cache. An open directory retains its snapshot through later evictions.
 //
 // ResolveRoot and ResolvePath find absolute host paths on compatible ERIS-FS
 // mounts. Supply the directory that contains capability trees, such as /eris/fs.
@@ -69,14 +66,14 @@
 //
 // # Input and decoding limits
 //
-// The image APIs operate on io.Reader values and abstract ERIS block stores.
-// They do not access the host file system, network, clock, or random source.
+// The image APIs operate on io.Reader values and an ERIS capability store.
+// The store controls content I/O.
 // ResolveRoot and ResolvePath read environment variables and host file metadata.
 // Encoding returns io.ErrNoProgress after 100 consecutive empty reads from
 // an input. Temporary empty reads below this limit do not change the output.
 // Encoding stops at the first io.EOF, including EOF returned with data.
 //
-// For untrusted images, DecodeIndex and OpenFS limit the encoded CBOR bytes
+// For untrusted images, [Store.DecodeIndex] and [Store.OpenFS] limit the CBOR bytes
 // of each index. This limit does not bound the memory used by the parsed tree
 // or the total size of nested indexes. ParseIndex and UnmarshalBinary do not
 // apply a size limit to their input slices. Applications must bound those
@@ -90,11 +87,10 @@
 // as required by eris.BlockSource.
 //
 // An output limit does not limit all input work. Opening a compressed file or
-// finding a version 1 file's size scans its ERIS tree. A Lzip stream can also
-// contain many empty members. Applications that need a total I/O budget or a
-// deadline must enforce it in their block source and return an error when it
-// is reached. MaxLzipDictionarySize limits each decoder, not total process
-// memory or the number of open files.
+// finding a version 1 file's size can scan its ERIS tree on a block store.
+// A Lzip stream can contain many empty members. Applications that need a total
+// I/O budget or a deadline must enforce it in their store and return an error
+// when it is reached. MaxLzipDictionarySize limits each decoder's dictionary.
 //
 // Image paths use io/fs rules. Backslashes and names that are special on a host
 // operating system are not converted or filtered by the image APIs. ResolvePath

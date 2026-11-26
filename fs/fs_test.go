@@ -777,7 +777,7 @@ func TestFileSystemErrorsAndMetadata(t *testing.T) {
 	if unknownNode.Mode() != 0o444 {
 		t.Fatal("unknown node mode is invalid")
 	}
-	missingFileNode := &node{kind: Regular, capability: capability, source: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}}
+	missingFileNode := &node{kind: Regular, capability: capability, store: storeFromSource(eris.BlockSet{}, eris.BlockOptions{})}
 	if missingFileNode.Size() != -1 {
 		t.Fatal("unreadable file size must be unknown")
 	}

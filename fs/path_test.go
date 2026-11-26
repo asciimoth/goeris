@@ -324,3 +324,18 @@ func TestResolvePathConfiguredMountHasNoFallback(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveRootMissingWorkingDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.Remove(dir); err != nil {
+		t.Skipf("cannot remove current directory: %v", err)
+	}
+	stat := func(path string) (stdfs.FileInfo, error) {
+		t.Fatalf("attempted lookup at %q after removal of the working directory", path)
+		return nil, stdfs.ErrNotExist
+	}
+	if got := resolvePath(pathTestCapability(t), ".", []string{"."}, stat); got != "" {
+		t.Fatalf("resolved root to %q", got)
+	}
+}

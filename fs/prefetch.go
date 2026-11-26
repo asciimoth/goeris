@@ -11,11 +11,11 @@ import (
 // does. Links found inside a directory are skipped, so they cannot cause loops
 // or pull content from outside that directory.
 //
-// The call reads nested ERIS-FS indexes and file internal nodes to discover
-// references. It does not read file leaves or decompress file content. Repeated
+// The call reads nested indexes and sends one hint per file capability. A
+// block-backed store reads internal nodes to discover leaves. Repeated
 // capabilities are visited at most once as a file and once as a directory.
-// The call can block on index reads and returns their errors. Success gives no cache or availability
-// guarantee. All hints use NoTTL and the options supplied to OpenFS.
+// Index reads and prefetch calls can return errors. All hints use NoTTL and
+// the image store's options.
 func (fileSystem *FS) Prefetch(ctx context.Context, name string) error {
 	item, err := fileSystem.find(ctx, name, true)
 	if err != nil {
@@ -52,9 +52,22 @@ func (fileSystem *FS) Prefetch(ctx context.Context, name string) error {
 				pending = append(pending, child)
 			}
 			item.mu.Unlock()
-		} else if err := eris.Prefetch(ctx, item.capability, fileSystem.source, eris.NoTTL, item.options); err != nil {
+		} else if err := item.prefetchFile(ctx); err != nil {
 			return pathError("prefetch", name, err)
 		}
 	}
 	return nil
+}
+
+// Prefetch hints this open file's capability using the supplied traversal
+// context. The hint is independent of the reader and its current position.
+func (file *regularFile) Prefetch(ctx context.Context) error {
+	if file.IsClosed() {
+		return ErrClosed
+	}
+	return file.node.prefetchFile(ctx)
+}
+
+func (item *node) prefetchFile(ctx context.Context) error {
+	return item.store.content.Prefetch(ctx, item.capability, eris.NoTTL, item.store.options)
 }

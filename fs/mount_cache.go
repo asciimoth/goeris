@@ -44,7 +44,7 @@ import (
 // view. WithListingCache(0, 0) returns a view with listing caches disabled. It
 // does not disable the cache in other views. Concurrent operations are safe.
 func (m *Mount) WithListingCache(capabilityLimit, blockLimit int) (*Mount, error) {
-	if m == nil || m.ctx == nil || m.source == nil || capabilityLimit < 0 || blockLimit < 0 {
+	if m == nil || m.ctx == nil || capabilityLimit < 0 || blockLimit < 0 {
 		return nil, stdfs.ErrInvalid
 	}
 	result := *m
@@ -152,7 +152,7 @@ func (m *Mount) addListings(dir *node, full string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	directory := func(name string) *node {
-		return buildTree(Index{}, m.source, name, m.indexLimit, m.options)
+		return buildTree(Index{}, m.images, name, m.indexLimit)
 	}
 	switch {
 	case full == ".":
@@ -160,7 +160,7 @@ func (m *Mount) addListings(dir *node, full string) {
 			info := element.Value.(mountRecentEntry[eris.Capability, mountCapabilityInfo]).value
 			name := cap.String()
 			dir.children[name] = &node{name: name, kind: Regular, capability: cap,
-				source: m.source, options: m.options, size: info.size, sizeKnown: info.size >= 0}
+				store: m.images, size: info.size, sizeKnown: info.size >= 0}
 		}
 		for ref, element := range c.blocks.entries {
 			name := ref.String()

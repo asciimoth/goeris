@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	stdfs "io/fs"
 	"sync"
 	"testing"
@@ -12,6 +13,59 @@ import (
 	"github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/internal/prefetchtest"
 )
+
+func TestOpenFilePrefetch(t *testing.T) {
+	blocks, _ := mountFixture(t)
+	options := eris.BlockOptions{HighPriority: true}
+	source := prefetchtest.New(blocks, 0, 1)
+	image, err := OpenFS(t.Context(), pathTestCapability(t), source, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	openCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	file, err := image.OpenFile(openCtx, "hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	prefetcher, ok := file.(interface{ Prefetch(context.Context) error })
+	if !ok {
+		t.Fatal("open regular file lost Prefetch")
+	}
+	if _, err := file.Seek(3, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	before := len(source.Snapshot().Hints)
+	if err := prefetcher.Prefetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := eris.ParseURN(mountHello)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hints := source.Snapshot().Hints[before:]
+	want := eris.BlockRequest{Reference: capability.Root.Reference, TTL: eris.NoTTL, Options: options}
+	if len(hints) != 1 || hints[0] != want {
+		t.Fatalf("hints = %v, want [%v]", hints, want)
+	}
+	if pos, err := file.Seek(0, io.SeekCurrent); pos != 3 || err != nil {
+		t.Fatal(pos, err)
+	}
+	cancel()
+	if err := prefetcher.Prefetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := prefetcher.Prefetch(openCtx); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := prefetcher.Prefetch(t.Context()); !errors.Is(err, ErrClosed) {
+		t.Fatal(err)
+	}
+}
 
 func TestPrefetchImage(t *testing.T) {
 	ctx := context.Background()

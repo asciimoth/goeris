@@ -6,8 +6,6 @@ import (
 	stdfs "io/fs"
 	"strings"
 	"testing"
-
-	"github.com/asciimoth/goeris"
 )
 
 func expandingLinkImage() *FS {
@@ -15,7 +13,7 @@ func expandingLinkImage() *FS {
 		Path: []string{"loop"}, Type: Symlink,
 		Target: strings.Repeat("loop/", 4096) + "loop",
 	}}}
-	return &FS{root: buildTree(index, nil, ".", DefaultMaxIndexSize, eris.BlockOptions{}), prefix: "."}
+	return &FS{root: buildTree(index, nil, ".", DefaultMaxIndexSize), prefix: "."}
 }
 
 func TestExpandingSymlink(t *testing.T) {

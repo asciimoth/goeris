@@ -13,33 +13,29 @@ import (
 	"github.com/asciimoth/goeris"
 )
 
-// Mount exposes a BlockSource with the eris-go mount layout. A path C opens
-// decoded ERIS content. A path fs/C opens that content as an ERIS-FS tree.
-// C can be a full urn:eris: capability, unprefixed base32, or the
-// 66 capability bytes in hexadecimal. All paths follow io/fs.ValidPath rules.
+// Mount serves the eris-go path layout as a read-only io/fs filesystem.
+// An image store supplies decoded content at C and image trees at fs/C.
+// C can be a full capability URN, unprefixed base32, or hexadecimal. A block
+// source supplies encrypted blocks at their flat hash and volume.BlockPath.
+// Each component is optional. Paths for an absent component match fs.ErrNotExist.
 //
-// By default, the root lists only "fs", and fs lists no entries. Capabilities
-// resolve on demand. WithListingCache can enable bounded recent listings.
-// For a base32 block hash H, H[:3]/H[3:6]/H[6:9]/H[9:] and H return the encrypted
-// block. The split form matches volume.BlockPath. Its three prefix directories
-// resolve on demand and do not require a stored block. Their default listings
-// are empty.
-// Hashes, capabilities, and the reserved fs component accept ASCII case
-// variants. Paths inside an ERIS-FS image remain case-sensitive.
-// Files and directories are read-only, with zero modification times.
-// Links follow the same rules as FS: ReadLink refuses a target that can
-// leave its ERIS-FS image. Safe targets are returned without alteration.
+// Names resolve on demand. By default the root lists fs when an image store
+// is available. [Mount.WithListingCache] enables bounded listings of recently
+// accessed capabilities and blocks. Hashes, capabilities, and the reserved fs
+// component accept ASCII case variants. Image paths are case-sensitive.
+// Links follow the same rules as [FS]. Modification times are zero.
 //
-// Mount retains its context for all operations and open files. It copies the
-// block options and passes them to all reads. The optional listing cache holds
-// only identifiers and metadata. Each operation that enters fs/C reads its index.
-// Use Sub to retain an image for repeated access without reading its index again.
-// Mount is safe for concurrent use if the source supports concurrent calls.
-// Each open file has its own position. Calls on one open directory must be
-// serialized. Mount does not mount a host filesystem or own the block source.
-// A FUSE or 9P adapter can use its io/fs interfaces and OpenFile for random access.
+// Each operation that enters fs/C reads its index. Use [Mount.Sub] to retain
+// the image for repeated access. Mount retains its context for all operations
+// and open files. Image operations use the image store's options. Raw-block
+// reads use the options supplied to the mount constructor.
+//
+// Mount supports concurrent calls when its components do. Each open file has
+// its own position. The caller must serialize calls on one open directory.
+// A FUSE or 9P adapter can serve the mount through its io/fs interfaces.
 type Mount struct {
 	ctx        context.Context
+	images     *Store
 	source     eris.BlockSource
 	options    eris.BlockOptions
 	indexLimit int64
@@ -50,18 +46,45 @@ type Mount struct {
 // NewMount binds ctx and source without I/O. Both must be non-nil.
 // It limits each decoded ERIS-FS index to DefaultMaxIndexSize bytes.
 // The zero value of Mount is not ready for use.
+//
+// This compatibility function wraps NewMountWithStore.
 func NewMount(ctx context.Context, source eris.BlockSource, options eris.BlockOptions) *Mount {
-	return &Mount{ctx: ctx, source: source, options: options, indexLimit: DefaultMaxIndexSize}
+	if source == nil {
+		return &Mount{}
+	}
+	return NewMountWithStore(ctx, storeFromSource(source, options), source, options)
+}
+
+// NewMountWithStore exposes decoded content and fs/C trees from images and
+// raw hash paths from source. Either component can be nil. Missing components
+// omit their paths from listings and lookups. With both nil, only "." exists.
+// Options apply to raw blocks. Image operations use the Store's own options.
+func NewMountWithStore(ctx context.Context, images *Store, source eris.BlockSource, options eris.BlockOptions) *Mount {
+	if images != nil && images.content == nil {
+		images = nil
+	}
+	return &Mount{ctx: ctx, images: images, source: source, options: options, indexLimit: DefaultMaxIndexSize}
 }
 
 // NewMountWithLimit is NewMount with a limit for each decoded index, including
 // nested indexes. A non-positive limit returns ErrInvalidLimit. The limit does
 // not apply to decoded content at C, encrypted blocks, or image file content.
+//
+// This compatibility function accepts a single block source for all paths.
 func NewMountWithLimit(ctx context.Context, source eris.BlockSource, limit int64, options eris.BlockOptions) (*Mount, error) {
+	return NewMount(ctx, source, options).withIndexLimit(limit)
+}
+
+// NewMountWithStoreAndLimit sets a positive limit for each decoded index.
+func NewMountWithStoreAndLimit(ctx context.Context, images *Store, source eris.BlockSource, limit int64, options eris.BlockOptions) (*Mount, error) {
+	return NewMountWithStore(ctx, images, source, options).withIndexLimit(limit)
+}
+
+// withIndexLimit configures a newly constructed mount before it is shared.
+func (mount *Mount) withIndexLimit(limit int64) (*Mount, error) {
 	if limit <= 0 {
 		return nil, ErrInvalidLimit
 	}
-	mount := NewMount(ctx, source, options)
 	mount.indexLimit = limit
 	return mount, nil
 }
@@ -69,36 +92,38 @@ func NewMountWithLimit(ctx context.Context, source eris.BlockSource, limit int64
 // resolve selects an image and a path within it. Virtual directories and
 // content files use the same tree lookup and metadata as FS.
 func (m *Mount) resolve(name string) (*FS, string, error) {
-	if m == nil || m.ctx == nil || m.source == nil || !stdfs.ValidPath(name) {
+	if m == nil || m.ctx == nil || !stdfs.ValidPath(name) {
 		return nil, "", stdfs.ErrInvalid
 	}
 	if err := m.ctx.Err(); err != nil {
 		return nil, "", err
 	}
 	full := m.fullPath(name)
-	root := buildTree(Index{}, m.source, ".", m.indexLimit, m.options)
-	image := &FS{source: m.source, options: m.options, root: root, prefix: ".", indexLimit: m.indexLimit}
-	if full == "." || mountUpper(full) == "FS" {
-		dirName := "fs"
-		if full != "." {
-			dirName = full
+	root := buildTree(Index{}, m.images, ".", m.indexLimit)
+	image := &FS{root: root, prefix: "."}
+	if full == "." {
+		if m.images != nil {
+			root.children["fs"] = buildTree(Index{}, m.images, "fs", m.indexLimit)
 		}
-		dir := buildTree(Index{}, m.source, dirName, m.indexLimit, m.options)
-		root.children[dirName] = dir
-		m.addListings(dir, "fs")
-		if full == "." {
-			m.addListings(root, ".")
-		}
-		return image, full, nil
+		m.addListings(root, full)
+		return image, ".", nil
 	}
 	first, rest, tree := strings.Cut(full, "/")
 	if mountUpper(first) == "FS" {
+		if m.images == nil {
+			return nil, "", stdfs.ErrNotExist
+		}
+		if !tree {
+			root.name = first
+			m.addListings(root, full)
+			return image, ".", nil
+		}
 		capName, inner, more := strings.Cut(rest, "/")
 		capability, err := mountCapability(capName)
 		if err != nil {
 			return nil, "", err
 		}
-		image, err := OpenFSWithLimit(m.ctx, capability, m.source, m.indexLimit, m.options)
+		image, err := m.images.OpenFSWithLimit(m.ctx, capability, m.indexLimit)
 		if err != nil {
 			return nil, "", err
 		}
@@ -110,7 +135,7 @@ func (m *Mount) resolve(name string) (*FS, string, error) {
 		}
 		return image, inner, nil
 	}
-	if ref, directory, ok := mountBlockPath(full); ok {
+	if ref, directory, ok := mountBlockPath(full); ok && m.source != nil {
 		base := path.Base(full)
 		if directory {
 			root.name = base
@@ -131,7 +156,7 @@ func (m *Mount) resolve(name string) (*FS, string, error) {
 		}
 		return image, base, nil
 	}
-	if tree { // Decoded content is always a file, even when it is an index.
+	if tree || m.images == nil { // Decoded content is always a file, even when it is an index.
 		return nil, "", stdfs.ErrNotExist
 	}
 	capability, err := mountCapability(first)
@@ -139,7 +164,7 @@ func (m *Mount) resolve(name string) (*FS, string, error) {
 		return nil, "", err
 	}
 	root.children[first] = &node{
-		name: first, kind: Regular, source: m.source, options: m.options,
+		name: first, kind: Regular, store: m.images,
 		capability: capability,
 	}
 	return image, first, nil

@@ -30,7 +30,7 @@ type lzipFile struct {
 	ctx        context.Context
 	mu         sync.Mutex
 	node       *node
-	raw        *eris.Reader
+	raw        eris.CapabilityReader
 	input      countReader
 	decoder    *lzma.Reader
 	start      int64
@@ -42,7 +42,7 @@ type lzipFile struct {
 }
 
 func openLzipFile(ctx context.Context, item *node) (*lzipFile, error) {
-	raw, err := eris.NewReader(ctx, item.capability, item.source, item.options)
+	raw, err := item.store.content.NewReader(ctx, item.capability, item.store.options)
 	if err != nil {
 		return nil, err
 	}

@@ -197,6 +197,10 @@ func TestVersionAndMapOrder(t *testing.T) {
 		if err != nil || parsed.Entries[0].Target != "" {
 			t.Fatalf("empty target: %v", err)
 		}
+		image := &FS{root: buildTree(parsed, nil, ".", DefaultMaxIndexSize), prefix: "."}
+		if _, err := image.Stat(t.Context(), "a"); !errors.Is(err, stdfs.ErrNotExist) {
+			t.Fatalf("Stat of link with empty target: %v", err)
+		}
 	}
 }
 

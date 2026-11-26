@@ -135,10 +135,12 @@ three uppercase Base32 characters, `fs` is lowercase, and a complete capability
 has a different length from the 52-character flat block name. The paths under
 `M/fs/C/` belong to the decoded ERIS-FS tree and do not affect raw-block lookup.
 
-The `goeris/fs.Mount` implementation exposes both the canonical volume path and
-the flat path `M/H`. Both names select the same encrypted block from its
-`BlockSource`. The three prefix directories resolve on demand and have empty
-listings by default. Reads verify the block size and hash.
+In `goeris/fs.Mount`, the image store supplies `M/C` and `M/fs/C`. A separate
+`BlockSource` supplies both the canonical volume path and the flat path `M/H`.
+Either component can be nil. Lookups for its paths then return
+`io/fs.ErrNotExist`. With a block source, the three prefix directories resolve
+on demand and have empty listings by default. Reads verify the block size and
+hash.
 
 Mount also accepts ASCII case variants of block hashes, capability names, and
 the reserved `fs` component. These aliases do not conflict: a prefix has three
