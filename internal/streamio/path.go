@@ -17,6 +17,10 @@ func AbsolutePath(dir, name string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		// On macOS, Getwd can return the path of a removed directory.
+		if _, err := os.Stat(cwd); err != nil {
+			return "", err
+		}
 		dir = strings.TrimSuffix(cwd, "/") + "/" + dir
 	}
 	path := strings.TrimSuffix(dir, "/") + "/" + name
