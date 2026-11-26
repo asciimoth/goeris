@@ -20,9 +20,15 @@ import (
 //
 // Encoding stops at the first io.EOF, including EOF returned with data. Other
 // read errors are preserved. After 100 consecutive empty reads it returns
-// io.ErrNoProgress. A nil reader or sink returns ErrInvalidInput. A failed call
-// can leave blocks in the sink and returns no usable capability.
+// io.ErrNoProgress. A size other than BlockSize1KiB or BlockSize32KiB returns
+// ErrInvalidBlockSize. A nil reader or sink returns ErrInvalidInput. A failed
+// call can leave blocks in the sink and returns no usable capability.
 func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockSize BlockSize, sink BlockSink, options BlockOptions) (Capability, error) {
+	return encodeContent(ctx, content, secret, sink, EncodeOptions{BlockSize: blockSize, BlockOptions: options})
+}
+
+func encodeContent(ctx context.Context, content io.Reader, secret Secret, sink BlockSink, options EncodeOptions) (Capability, error) {
+	blockSize := options.BlockSize
 	if !blockSize.Valid() {
 		return Capability{}, ErrInvalidBlockSize
 	}
@@ -32,7 +38,11 @@ func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockS
 	if err := ctx.Err(); err != nil {
 		return Capability{}, err
 	}
-	encoder := treeEncoder{ctx: ctx, secret: secret, blockSize: blockSize, sink: sink, options: options, batchSize: batch.Limit(sink.BatchSize())}
+	encoder := treeEncoder{
+		ctx: ctx, secret: secret, blockSize: blockSize, sink: sink,
+		options: options.BlockOptions, preserveRoot: options.PreserveRoot,
+		batchSize: batch.Limit(sink.BatchSize()),
+	}
 	ended := false
 	for {
 		if err := ctx.Err(); err != nil {
@@ -52,8 +62,8 @@ func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockS
 			node[n] = 0x80
 		}
 		encoder.ended = ended && n < len(node)
-		writeOptions := options
-		if encoder.ended && len(encoder.levels) == 0 {
+		writeOptions := encoder.options
+		if !encoder.preserveRoot && encoder.ended && len(encoder.levels) == 0 {
 			writeOptions.Root = true
 		}
 		pair, err := encoder.putNode(node, 0, writeOptions)
@@ -77,6 +87,10 @@ func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockS
 // not support seeking. The result matches EncodeRecommended for the same bytes
 // and secret. Writes and errors follow EncodeContent.
 func EncodeContentRecommended(ctx context.Context, content io.Reader, secret Secret, sink BlockSink, options BlockOptions) (Capability, error) {
+	return encodeContentRecommended(ctx, content, secret, sink, EncodeOptions{BlockOptions: options})
+}
+
+func encodeContentRecommended(ctx context.Context, content io.Reader, secret Secret, sink BlockSink, options EncodeOptions) (Capability, error) {
 	if content == nil || sink == nil {
 		return Capability{}, ErrInvalidInput
 	}
@@ -93,7 +107,8 @@ func EncodeContentRecommended(ctx context.Context, content io.Reader, secret Sec
 	default:
 		return Capability{}, err
 	}
-	return EncodeContent(ctx, input, secret, ChooseBlockSize(n), sink, options)
+	options.BlockSize = ChooseBlockSize(n)
+	return encodeContent(ctx, input, secret, sink, options)
 }
 
 // putNode computes references locally so parent nodes can be built before the
@@ -142,15 +157,16 @@ func (encoder *treeEncoder) flush() error {
 }
 
 type treeEncoder struct {
-	ctx       context.Context
-	secret    Secret
-	blockSize BlockSize
-	sink      BlockSink
-	options   BlockOptions
-	levels    [][]Pair
-	ended     bool
-	batchSize int
-	writes    []PutBlockRequest
+	ctx          context.Context
+	secret       Secret
+	blockSize    BlockSize
+	sink         BlockSink
+	options      BlockOptions
+	preserveRoot bool
+	levels       [][]Pair
+	ended        bool
+	batchSize    int
+	writes       []PutBlockRequest
 }
 
 func (encoder *treeEncoder) add(level int, pair Pair) error {
@@ -183,7 +199,7 @@ func (encoder *treeEncoder) parent(level int) (Pair, error) {
 		copy(node[offset+32:offset+PairSize], pair.Key[:])
 	}
 	options := encoder.options
-	if encoder.ended {
+	if !encoder.preserveRoot && encoder.ended {
 		if count, _, _ := encoder.pending(); count == len(encoder.levels[level]) {
 			// This parent contains all remaining pairs, so it is the root.
 			options.Root = true

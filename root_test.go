@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
+	"testing/iotest"
 
 	"github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/internal/batch"
@@ -75,6 +76,96 @@ func TestEncodedRootOptions(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCapabilityStoreEncodeRootOptions(t *testing.T) {
+	smallBlock := int(eris.BlockSize1KiB)
+	smallArity, _ := eris.BlockSize1KiB.Arity()
+	for _, tc := range []struct {
+		name     string
+		length   int
+		size     eris.BlockSize
+		wantSize eris.BlockSize
+	}{
+		{"empty", 0, 0, eris.BlockSize1KiB},
+		{"single block", smallBlock - 1, eris.BlockSize1KiB, eris.BlockSize1KiB},
+		{"padding block", smallBlock, eris.BlockSize1KiB, eris.BlockSize1KiB},
+		{"full parent root", smallArity*smallBlock - 1, eris.BlockSize1KiB, eris.BlockSize1KiB},
+		{"below recommendation threshold", (16 << 10) - 1, 0, eris.BlockSize1KiB},
+		{"at recommendation threshold", 16 << 10, 0, eris.BlockSize32KiB},
+		{"recommended large blocks", 64 << 10, 0, eris.BlockSize32KiB},
+		{"multiple levels", 64 << 10, eris.BlockSize1KiB, eris.BlockSize1KiB},
+		{"full root at level two", smallArity*smallArity*smallBlock - 1, eris.BlockSize1KiB, eris.BlockSize1KiB},
+		{"explicit large block below threshold", 1024, eris.BlockSize32KiB, eris.BlockSize32KiB},
+		{"explicit large blocks", 64 << 10, eris.BlockSize32KiB, eris.BlockSize32KiB},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := make([]byte, tc.length)
+			_, _ = rand.New(rand.NewSource(1)).Read(content)
+			secret := eris.Secret{1}
+			want, wantBlocks, err := eris.Encode(content, secret, tc.wantSize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, mode := range []struct {
+				name    string
+				options eris.EncodeOptions
+			}{
+				{"automatic root", eris.EncodeOptions{}},
+				{"automatic root with high priority", eris.EncodeOptions{BlockOptions: eris.BlockOptions{HighPriority: true}}},
+				{"automatic root with Root true", eris.EncodeOptions{BlockOptions: eris.BlockOptions{Root: true}}},
+				{"preserve false", eris.EncodeOptions{PreserveRoot: true, BlockOptions: eris.BlockOptions{HighPriority: true}}},
+				{"preserve true", eris.EncodeOptions{PreserveRoot: true, BlockOptions: eris.BlockOptions{HighPriority: true, Root: true}}},
+			} {
+				t.Run(mode.name, func(t *testing.T) {
+					blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block), MaxBatchSize: 4}
+					sink := &rootSink{t: t, BlockSet: blocks}
+					store := eris.NewBlockCapabilityStore(sink)
+					options := mode.options
+					options.BlockSize = tc.size
+					input := iotest.DataErrReader(bytes.NewReader(content))
+					got, err := store.EncodeContentWithOptions(t.Context(), input, secret, options)
+					if err != nil || got != want {
+						t.Fatalf("encode = %v, %v; want %v", got, err, want)
+					}
+					if len(sink.refs) != len(wantBlocks.Blocks) || len(sink.Blocks) != len(wantBlocks.Blocks) {
+						t.Fatalf("wrote %d blocks with %d distinct references; want %d", len(sink.refs), len(sink.Blocks), len(wantBlocks.Blocks))
+					}
+					for i, ref := range sink.refs {
+						wantOptions := options.BlockOptions
+						if !options.PreserveRoot && ref == want.Root.Reference {
+							wantOptions.Root = true
+						}
+						if sink.options[i] != wantOptions {
+							t.Errorf("write %d: options = %+v; want %+v", i, sink.options[i], wantOptions)
+						}
+						if wantBlock, ok := wantBlocks.Blocks[ref]; !ok || !bytes.Equal(sink.Blocks[ref].Data, wantBlock.Data) {
+							t.Errorf("write %d: unexpected encrypted block %v", i, ref)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestCapabilityStoreEncodePreservesStoredRoot(t *testing.T) {
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
+	data := []byte("shared content")
+	options := eris.EncodeOptions{PreserveRoot: true}
+	first, err := store.EncodeContentWithOptions(t.Context(), bytes.NewReader(data), eris.Secret{}, options)
+	if block, ok := blocks.Blocks[first.Root.Reference]; err != nil || !ok || block.Options.Root {
+		t.Fatalf("first encode = %v, %v; want an unmarked root", first, err)
+	}
+	marked, err := store.EncodeRecommended(t.Context(), data, eris.Secret{}, eris.BlockOptions{})
+	if err != nil || marked != first || !blocks.Blocks[marked.Root.Reference].Options.Root {
+		t.Fatalf("standalone encode = %v, %v; want the same capability with a marked root", marked, err)
+	}
+	last, err := store.EncodeContentWithOptions(t.Context(), bytes.NewReader(data), eris.Secret{}, options)
+	if err != nil || last != marked || !blocks.Blocks[last.Root.Reference].Options.Root {
+		t.Fatalf("repeat encode = %v, %v; want the root to remain marked", last, err)
 	}
 }
 

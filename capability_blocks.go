@@ -36,10 +36,17 @@ func (s *blockCapabilityStore) EncodeContent(ctx context.Context, content io.Rea
 }
 
 func (s *blockCapabilityStore) EncodeContentRecommended(ctx context.Context, content io.Reader, secret Secret, options BlockOptions) (Capability, error) {
+	return s.EncodeContentWithOptions(ctx, content, secret, EncodeOptions{BlockOptions: options})
+}
+
+func (s *blockCapabilityStore) EncodeContentWithOptions(ctx context.Context, content io.Reader, secret Secret, options EncodeOptions) (Capability, error) {
 	if s.sink == nil {
 		return Capability{}, ErrReadOnly
 	}
-	return EncodeContentRecommended(ctx, content, secret, s.sink, options)
+	if options.BlockSize == 0 {
+		return encodeContentRecommended(ctx, content, secret, s.sink, options)
+	}
+	return encodeContent(ctx, content, secret, s.sink, options)
 }
 
 func (s *blockCapabilityStore) Decode(ctx context.Context, capability Capability, options BlockOptions) ([]byte, error) {

@@ -113,6 +113,10 @@ func (s *mountCapabilityStore) EncodeContentRecommended(ctx context.Context, con
 	return Capability{}, ErrReadOnly
 }
 
+func (s *mountCapabilityStore) EncodeContentWithOptions(ctx context.Context, content io.Reader, secret Secret, options EncodeOptions) (Capability, error) {
+	return Capability{}, ErrReadOnly
+}
+
 func (s *mountCapabilityStore) Decode(ctx context.Context, capability Capability, options BlockOptions) ([]byte, error) {
 	return s.DecodeWithLimit(ctx, capability, math.MaxInt, options)
 }

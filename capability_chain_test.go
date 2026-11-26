@@ -50,8 +50,12 @@ func (s *failingStreamStore) EncodeContentRecommended(_ context.Context, r io.Re
 	return s.fail(r)
 }
 
+func (s *failingStreamStore) EncodeContentWithOptions(_ context.Context, r io.Reader, _ Secret, _ EncodeOptions) (Capability, error) {
+	return s.fail(r)
+}
+
 func TestCombinedCapabilityStoreStreamWrite(t *testing.T) {
-	for _, method := range []string{"EncodeContent", "EncodeContentRecommended"} {
+	for _, method := range []string{"EncodeContent", "EncodeContentRecommended", "EncodeContentWithOptions"} {
 		for _, tc := range []struct {
 			name, content string
 			read          bool
@@ -67,10 +71,13 @@ func TestCombinedCapabilityStoreStreamWrite(t *testing.T) {
 				last := &failingStreamStore{err: errors.New("last")}
 				store := NewCombinedCapabilityStore(nil, first, last)
 				var err error
-				if method == "EncodeContent" {
+				switch method {
+				case "EncodeContent":
 					_, err = store.EncodeContent(t.Context(), src, Secret{}, BlockSize1KiB, BlockOptions{})
-				} else {
+				case "EncodeContentRecommended":
 					_, err = store.EncodeContentRecommended(t.Context(), src, Secret{}, BlockOptions{})
+				case "EncodeContentWithOptions":
+					_, err = store.EncodeContentWithOptions(t.Context(), src, Secret{}, EncodeOptions{PreserveRoot: true})
 				}
 				want, lastCalls := last.err, 1
 				if tc.read {
@@ -130,5 +137,75 @@ func TestCombinedCapabilityStoreStreamAfterReadOnlyStore(t *testing.T) {
 	data, err := dst.Decode(t.Context(), c, BlockOptions{})
 	if err != nil || string(data) != "hello" || last.calls != 0 {
 		t.Fatalf("decoded = %q, error = %v, later calls = %d", data, err, last.calls)
+	}
+}
+
+func TestCombinedCapabilityStoreEncodeContentWithOptions(t *testing.T) {
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	dst := NewBlockCapabilityStore(blocks)
+	last := &failingStreamStore{err: errors.New("unexpected fallback")}
+	store := NewCombinedCapabilityStore(NewMountCapabilityStore(""), dst, last)
+	content := strings.Repeat("abc", 6<<10)
+	input := struct{ io.Reader }{strings.NewReader(content)}
+	secret := Secret{1}
+	blockOptions := BlockOptions{HighPriority: true}
+	options := EncodeOptions{BlockOptions: blockOptions, BlockSize: BlockSize1KiB, PreserveRoot: true}
+	got, err := store.EncodeContentWithOptions(t.Context(), input, secret, options)
+	if err != nil || last.calls != 0 {
+		t.Fatalf("encode: %v, later calls = %d", err, last.calls)
+	}
+	want, _, err := Encode([]byte(content), secret, options.BlockSize)
+	if err != nil || got != want {
+		t.Fatalf("capability = %v; want %v, %v", got, want, err)
+	}
+	for ref, block := range blocks.Blocks {
+		if block.Options != blockOptions {
+			t.Errorf("block %v: options = %+v; want %+v", ref, block.Options, blockOptions)
+		}
+	}
+	data, err := dst.Decode(t.Context(), got, BlockOptions{})
+	if err != nil || string(data) != content {
+		t.Fatalf("decode returned %d bytes, %v; want %d bytes", len(data), err, len(content))
+	}
+}
+
+type partialBlockSink struct {
+	BlockSet
+	err error
+}
+
+func (s partialBlockSink) PutBlock(ctx context.Context, requests []PutBlockRequest) ([]Reference, error) {
+	refs, err := s.BlockSet.PutBlock(ctx, requests[:len(requests)/2])
+	if err != nil {
+		return refs, err
+	}
+	return refs, s.err
+}
+
+func TestCombinedCapabilityStoreEncodeContentWithOptionsPartialWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		size BlockSize
+	}{
+		{"recommended", 0},
+		{"explicit", BlockSize1KiB},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := partialBlockSink{
+				BlockSet: BlockSet{Blocks: make(map[Reference]Block), MaxBatchSize: 2},
+				err:      errors.New("block write failed"),
+			}
+			last := &failingStreamStore{err: errors.New("unexpected fallback")}
+			store := NewCombinedCapabilityStore(NewBlockCapabilityStore(first), last)
+			input := &terminalEOFReader{data: deterministicBytes(128 << 10)}
+			options := EncodeOptions{BlockSize: tc.size, PreserveRoot: true}
+			got, err := store.EncodeContentWithOptions(t.Context(), input, Secret{}, options)
+			if got != (Capability{}) || err != first.err {
+				t.Errorf("encode = %v, %v; want a zero capability and %v", got, err, first.err)
+			}
+			if last.calls != 0 || len(first.Blocks) != 1 || input.done {
+				t.Errorf("later calls = %d, stored blocks = %d, reached EOF = %t; want 0, 1, false", last.calls, len(first.Blocks), input.done)
+			}
+		})
 	}
 }

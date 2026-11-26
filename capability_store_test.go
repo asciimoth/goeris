@@ -91,6 +91,63 @@ func TestCapabilityStores(t *testing.T) {
 	}
 }
 
+func TestCapabilityStoreEncodeContentWithOptionsReadOnly(t *testing.T) {
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	for _, store := range []CapabilityStore{
+		NewBlockCapabilityStore(struct{ BlockSource }{blocks}),
+		NewMountCapabilityStore(t.TempDir()),
+	} {
+		for _, size := range []BlockSize{0, BlockSize1KiB} {
+			// Any read, even a zero-byte read, sets done on an empty input.
+			input := &terminalEOFReader{}
+			options := EncodeOptions{BlockSize: size, PreserveRoot: true}
+			got, err := store.EncodeContentWithOptions(t.Context(), input, Secret{}, options)
+			if got != (Capability{}) || !errors.Is(err, ErrReadOnly) || input.done {
+				t.Errorf("%T, size %d: encode = %v, %v; input read = %t", store, size, got, err, input.done)
+			}
+		}
+	}
+}
+
+func TestCapabilityStoreEncodeContentWithOptionsErrors(t *testing.T) {
+	ctx := t.Context()
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	readErr := errors.New("read failed")
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	dst := NewBlockCapabilityStore(blocks)
+	for _, tc := range []struct {
+		name  string
+		ctx   context.Context
+		store CapabilityStore
+		input io.Reader
+		size  BlockSize
+		err   error
+	}{
+		{"nil reader with recommended size", ctx, dst, nil, 0, ErrInvalidInput},
+		{"nil reader with explicit size", ctx, dst, nil, BlockSize1KiB, ErrInvalidInput},
+		{"invalid size", ctx, dst, errorReader{readErr}, 1, ErrInvalidBlockSize},
+		{"reader error with recommended size", ctx, dst, errorReader{readErr}, 0, readErr},
+		{"reader error with explicit size", ctx, dst, errorReader{readErr}, BlockSize1KiB, readErr},
+		{"canceled with recommended size", canceled, dst, errorReader{readErr}, 0, context.Canceled},
+		{"canceled with explicit size", canceled, dst, errorReader{readErr}, BlockSize1KiB, context.Canceled},
+		{"empty chain", ctx, NewCombinedCapabilityStore(), errorReader{readErr}, 0, ErrNoCapabilityStorage},
+		{"canceled chain", canceled, NewCombinedCapabilityStore(NewMountCapabilityStore(""), dst), errorReader{readErr}, 0, context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			options := EncodeOptions{BlockSize: tc.size, PreserveRoot: true}
+			got, err := tc.store.EncodeContentWithOptions(tc.ctx, tc.input, Secret{}, options)
+			if got != (Capability{}) || !errors.Is(err, tc.err) || len(blocks.Blocks) != 0 {
+				t.Fatalf("encode = %v, %v; want %v and no writes, got %d blocks", got, err, tc.err, len(blocks.Blocks))
+			}
+		})
+	}
+	got, err := dst.EncodeContent(ctx, errorReader{readErr}, Secret{}, 0, BlockOptions{})
+	if got != (Capability{}) || !errors.Is(err, ErrInvalidBlockSize) || len(blocks.Blocks) != 0 {
+		t.Fatalf("fixed-size encode with zero size = %v, %v; stored blocks = %d", got, err, len(blocks.Blocks))
+	}
+}
+
 func TestCapabilityChainErrors(t *testing.T) {
 	ctx := t.Context()
 	c := pathTestCapability(t)

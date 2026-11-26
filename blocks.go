@@ -20,8 +20,8 @@ type BlockOptions struct {
 
 	// Root marks an entry block for an object. It is an advisory hint for
 	// indexing and block exchange between nodes. It does not prove that a
-	// block is a root. Encoders always set it on the capability's root block,
-	// including single-block content and ERIS-FS indexes.
+	// block is a root. Encoders set it on the capability's root block by
+	// default, including for single-block content and ERIS-FS indexes.
 	// Repeated puts should keep true if either value is true. Use
 	// UpdateBlockOptions to explicitly set or clear the stored flag.
 	Root bool

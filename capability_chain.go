@@ -109,6 +109,14 @@ func (s *CombinedCapabilityStore) EncodeContentRecommended(ctx context.Context, 
 	})
 }
 
+// EncodeContentWithOptions tries stores in order with the same options. A
+// failed attempt that reads from content stops the search.
+func (s *CombinedCapabilityStore) EncodeContentWithOptions(ctx context.Context, content io.Reader, secret Secret, options EncodeOptions) (Capability, error) {
+	return s.encodeStream(ctx, content, func(store CapabilityStore, content io.Reader) (Capability, error) {
+		return store.EncodeContentWithOptions(ctx, content, secret, options)
+	})
+}
+
 func (s *CombinedCapabilityStore) Decode(ctx context.Context, capability Capability, options BlockOptions) ([]byte, error) {
 	return tryCapabilityStores(ctx, s.stores, nil, func(store CapabilityStore) ([]byte, error) {
 		return store.Decode(ctx, capability, options)

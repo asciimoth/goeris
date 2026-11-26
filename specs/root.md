@@ -9,10 +9,13 @@ this is the top node, not the first leaf written by the encoder.
 
 `Encode`, `EncodeRecommended`, `EncodeContent`, and `EncodeContentRecommended`
 always set `Root` to `true` on the capability's root block. This includes empty
-content and content that fits in one block. Streaming encoders set the flag in
-the root's `PutBlock` call; they do not depend on a later metadata update. Other
-blocks receive the caller's options unchanged. Thus, an explicit `Root: true`
-also marks all other blocks in that operation.
+content and content that fits in one block. Streaming encoders set the flag on
+the first write of the root block. Other blocks receive the caller's options
+unchanged. An explicit `Root: true` marks every block in the operation.
+
+`CapabilityStore.EncodeContentWithOptions` marks the root by default. With
+`PreserveRoot: true`, it passes the caller's `BlockOptions.Root` unchanged on
+every block write. The store's rules for repeated puts still apply.
 
 ERIS-FS marks the index root, which is the entry point for the whole file
 system. `EncodeIndex` and `Builder.Finish` set that flag. Builder file writes
