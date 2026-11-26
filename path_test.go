@@ -2,6 +2,7 @@ package eris
 
 import (
 	"bytes"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -179,6 +180,43 @@ func TestResolvePathFileTypes(t *testing.T) {
 	}
 }
 
+func TestMountPathThroughSymlinkParent(t *testing.T) {
+	c := pathTestCapability(t)
+	mount := t.TempDir()
+	want := writePathTestContent(t, mount, c)
+	child := filepath.Join(mount, "child")
+	if err := os.Mkdir(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	t.Chdir(work)
+	if err := os.Symlink(child, "link"); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	wantInfo, err := os.Stat(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{"link/..", filepath.Join(work, "link") + "/.."} {
+		path, err := NewMountCapabilityStore(root).ResolvePath(t.Context(), c)
+		if err != nil || !filepath.IsAbs(path) {
+			t.Fatalf("resolve %q = %q, %v", root, path, err)
+		}
+		info, err := os.Stat(path)
+		if err != nil || !os.SameFile(info, wantInfo) {
+			t.Fatalf("resolved %q to a different file: %v", root, err)
+		}
+	}
+	// A shell can retain this spelling of the current directory in PWD.
+	t.Chdir(mount)
+	t.Setenv("PWD", filepath.Join(work, "link")+"/..")
+	path := ResolvePath(c, ".")
+	info, err := os.Stat(path)
+	if err != nil || !os.SameFile(info, wantInfo) {
+		t.Fatalf("relative mount resolved to %q: %v", path, err)
+	}
+}
+
 func TestResolvePathMountSearch(t *testing.T) {
 	capability := pathTestCapability(t)
 	fixture := t.TempDir()
@@ -258,6 +296,48 @@ func TestResolvePathMountSearch(t *testing.T) {
 			}
 			if !slices.Equal(calls, test.calls) {
 				t.Errorf("lookup paths = %q, want %q", calls, test.calls)
+			}
+		})
+	}
+}
+
+func TestResolvePathMissingWorkingDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.Remove(dir); err != nil {
+		t.Skipf("cannot remove the current directory: %v", err)
+	}
+	path, err := NewMountCapabilityStore(".").ResolvePath(t.Context(), pathTestCapability(t))
+	if path != "" || !errors.Is(err, fs.ErrNotExist) || errors.Is(err, ErrMissingBlock) {
+		t.Fatalf("relative mount lookup = %q, %v", path, err)
+	}
+}
+
+func TestMountSearchReportsMissingOnlyWhenAllPathsAreAbsent(t *testing.T) {
+	t.Setenv("ERIS_MNT", "")
+	c := pathTestCapability(t)
+	for _, tc := range []struct {
+		name          string
+		first, second error
+		wantMissing   bool
+	}{
+		{"both absent", fs.ErrNotExist, fs.ErrNotExist, true},
+		{"first inaccessible", fs.ErrPermission, fs.ErrNotExist, false},
+		{"second inaccessible", fs.ErrNotExist, fs.ErrPermission, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failures := []error{tc.first, tc.second}
+			path, err := resolveMountPath(c, "", func(string) (fs.FileInfo, error) {
+				if len(failures) == 0 {
+					t.Fatal("unexpected third mount lookup")
+				}
+				err := failures[0]
+				failures = failures[1:]
+				return nil, err
+			})
+			if len(failures) != 0 || path != "" || !errors.Is(err, tc.first) || !errors.Is(err, tc.second) ||
+				errors.Is(err, ErrMissingBlock) != tc.wantMissing {
+				t.Fatalf("resolve = %q, %v, want missing = %t", path, err, tc.wantMissing)
 			}
 		})
 	}

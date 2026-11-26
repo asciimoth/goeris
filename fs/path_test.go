@@ -179,6 +179,31 @@ func TestResolvePathSymlinks(t *testing.T) {
 	}
 }
 
+func TestResolvePathThroughSymlinkParent(t *testing.T) {
+	capability := pathTestCapability(t)
+	base := t.TempDir()
+	makePathTestTree(t, filepath.Join(base, "fs"), capability)
+	child := filepath.Join(base, "child")
+	if err := os.Mkdir(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	if err := os.Symlink(child, "link"); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	for _, tc := range []struct{ fsMount, erisMount string }{
+		{"link/../fs", ""}, {"", "link/.."},
+	} {
+		t.Setenv("ERIS_FS_MNT", tc.fsMount)
+		t.Setenv("ERIS_MNT", tc.erisMount)
+		path := ResolvePath(capability, "hello.txt")
+		data, err := os.ReadFile(path)
+		if err != nil || !filepath.IsAbs(path) || string(data) != "Hello, ERIS!\n" {
+			t.Errorf("mounts %q, %q resolved to %q: read %q, %v", tc.fsMount, tc.erisMount, path, data, err)
+		}
+	}
+}
+
 func TestResolvePathDefaultSearch(t *testing.T) {
 	capability := pathTestCapability(t)
 	// Metadata fixtures include a special file to check that only regular

@@ -18,6 +18,7 @@ import (
 
 	"github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/internal/batch"
+	"github.com/asciimoth/goeris/internal/streamio"
 )
 
 // ErrNotDirectory means that a write was requested for a regular file root.
@@ -53,7 +54,7 @@ func Open(name string) (*Volume, error) {
 	if !info.Mode().IsRegular() {
 		return nil, &os.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
 	}
-	file, err := os.OpenFile(name, os.O_RDONLY|readOpenFlags, 0)
+	file, err := os.OpenFile(name, streamio.ReadFileFlags, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +157,7 @@ func (v *Volume) read(ctx context.Context, name string, ref eris.Reference) ([]b
 	if !info.Mode().IsRegular() {
 		return nil, eris.ErrInvalidBlock
 	}
-	file, err := v.root.OpenFile(name, os.O_RDONLY|readOpenFlags, 0)
+	file, err := v.root.OpenFile(name, streamio.ReadFileFlags, 0)
 	if err != nil {
 		return nil, err
 	}

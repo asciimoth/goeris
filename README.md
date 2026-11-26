@@ -309,6 +309,23 @@ The `volume` package supplies local persistent storage. Applications supply
 other storage backends, input readers, output writers, networking, and
 random-secret generation. ERIS extensions use separate packages.
 
+Use `eris.CapabilityStore` to access decoded content by capability. Wrap a block
+source with `eris.NewBlockCapabilityStore(source)`. Writes require the source to
+implement `eris.BlockSink`. A source with only read methods returns
+`eris.ErrReadOnly` on writes. For files on an ERIS mount, use
+`eris.NewMountCapabilityStore(root)`. This read-only store also implements
+`ResolvePath`. An empty root uses the same search paths as `eris.ResolvePath`.
+
+Use `eris.NewCombinedCapabilityStore(mount, blocks)` to try the mount first and
+the block store second. Read and write operations return the first successful
+result, return the last error if all attempts fail, and stop on cancellation.
+`Prefetch` calls every store in order. It returns `nil` if any call succeeds and
+returns the last error if all calls fail. Once a reader opens, it uses that
+store for all reads. The reader reports any later read error to the caller. A
+failed write stops the chain if the store changed the input bytes or called
+`Read` on the input stream. A store that cannot handle a stream should reject it
+before reading. A failed write can leave encoded blocks in the destination.
+
 To store a blob from any `io.Reader`, use `EncodeContentRecommended`. It reads
 the source once, selects the recommended block size with at most 16 KiB of
 lookahead, writes the complete encrypted tree to an `eris.BlockSink`, and

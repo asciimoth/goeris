@@ -4,7 +4,6 @@ package volume_test
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,7 +23,7 @@ func TestDriveRelativeRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := openVolume(t, drive)
-	got, err, _ := v.GetBlock(context.Background(), ref, eris.NoTTL, eris.BlockOptions{})
+	got, err, _ := eris.GetBlock(t.Context(), v, ref, eris.NoTTL, eris.BlockOptions{})
 	if err != nil || !bytes.Equal(got, block) {
 		t.Fatalf("drive-relative root did not select the current directory: %v", err)
 	}

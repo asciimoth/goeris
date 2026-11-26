@@ -11,6 +11,13 @@
 // send best-effort PrefetchBlock hints for likely reads. Prefetch requests all
 // content blocks by reading internal nodes and sending hints for leaves.
 // ResolvePath finds decoded content on a compatible local ERIS mount.
+//
+// [CapabilityStore] reads and writes content by capability. Wrap a block
+// source with [NewBlockCapabilityStore], or read decoded files through
+// [NewMountCapabilityStore]. [NewCombinedCapabilityStore] tries the supplied
+// stores in order. Reads and writes return the first successful result.
+// Prefetch calls every store.
+//
 // Applications supply persistent storage, network transports, content I/O,
 // and secret generation.
 //

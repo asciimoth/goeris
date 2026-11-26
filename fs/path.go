@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/streamio"
 )
 
 // ResolveRoot returns the absolute path to an ERIS-FS root directory on a
@@ -65,9 +66,11 @@ func resolvePath(capability eris.Capability, name string, mountPath []string, st
 	if mount == "" {
 		mount = os.Getenv("ERIS_FS_MNT")
 	}
+	entry := filepath.Join(capName, localName)
 	if mount == "" {
 		if base := os.Getenv("ERIS_MNT"); base != "" {
-			mount = filepath.Join(base, "fs")
+			mount = base
+			entry = filepath.Join("fs", entry)
 		}
 	}
 	mounts := []string{mount}
@@ -75,7 +78,7 @@ func resolvePath(capability eris.Capability, name string, mountPath []string, st
 		mounts = []string{"/n/eris/fs", "/eris/fs"}
 	}
 	for _, root := range mounts {
-		path, err := filepath.Abs(filepath.Join(root, capName, localName))
+		path, err := streamio.AbsolutePath(root, entry)
 		if err != nil {
 			continue
 		}

@@ -1,9 +1,11 @@
 package eris
 
 import (
+	"errors"
 	"io/fs"
 	"os"
-	"path/filepath"
+
+	"github.com/asciimoth/goeris/internal/streamio"
 )
 
 // ResolvePath returns the absolute path to decoded content on an ERIS mount.
@@ -28,33 +30,73 @@ func ResolvePath(capability Capability, mountPath ...string) string {
 // resolvePath accepts a metadata lookup so tests can check the default mount
 // paths without creating or changing system directories.
 func resolvePath(capability Capability, mountPath []string, stat func(string) (fs.FileInfo, error)) string {
-	name := capability.String()
-	if name == "" || len(mountPath) > 1 {
+	if len(mountPath) > 1 {
 		return ""
 	}
-
 	var mount string
 	if len(mountPath) == 1 {
 		mount = mountPath[0]
 	}
+	path, _ := resolveMountPath(capability, mount, stat)
+	return path
+}
+
+func resolveMountPath(capability Capability, mount string, stat func(string) (fs.FileInfo, error)) (string, error) {
+	return findMountEntry(capability, mountRoots(mount), func(path string) (string, error) {
+		return path, checkMountFile(path, stat)
+	})
+}
+
+func checkMountFile(path string, stat func(string) (fs.FileInfo, error)) error {
+	info, err := stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return &fs.PathError{Op: "stat", Path: path, Err: fs.ErrInvalid}
+	}
+	return nil
+}
+
+func mountRoots(mount string) []string {
 	if mount == "" {
 		mount = os.Getenv("ERIS_MNT")
 	}
-	mounts := []string{mount}
-	if mount == "" {
-		mounts = []string{"/n/eris", "/eris"}
+	if mount != "" {
+		return []string{mount}
 	}
+	return []string{"/n/eris", "/eris"}
+}
+
+// Check each candidate through the requested operation. A file can disappear
+// or become inaccessible between the metadata check and open.
+func findMountEntry[T any](capability Capability, mounts []string, lookup func(string) (T, error)) (T, error) {
+	var zero T
+	if err := capability.Validate(); err != nil {
+		return zero, err
+	}
+	name := capability.String()
+	var failures []error
+	missing := 0
 	for _, root := range mounts {
-		path, err := filepath.Abs(filepath.Join(root, name))
+		path, err := streamio.AbsolutePath(root, name)
 		if err != nil {
+			failures = append(failures, err)
 			continue
 		}
 		// Look up the capability directly. Compatible mounts can resolve names
 		// on demand without including them in a directory listing.
-		info, err := stat(path)
-		if err == nil && info.Mode().IsRegular() {
-			return path
+		entry, err := lookup(path)
+		if err == nil {
+			return entry, nil
 		}
+		if errors.Is(err, fs.ErrNotExist) {
+			missing++
+		}
+		failures = append(failures, err)
 	}
-	return ""
+	if missing == len(mounts) {
+		failures = append(failures, ErrMissingBlock)
+	}
+	return zero, errors.Join(failures...)
 }

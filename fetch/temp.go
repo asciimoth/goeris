@@ -6,7 +6,8 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
+
+	"github.com/asciimoth/goeris/internal/streamio"
 )
 
 // TempStorage creates empty, independent temporary buffers. Create can be
@@ -56,22 +57,7 @@ func (dir TempDir) Create(ctx context.Context) (TempData, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	path := string(dir)
-	if path == "" {
-		path = os.TempDir()
-	}
-	if !filepath.IsAbs(path) {
-		// Abs cleans "..". Resolve links first so this keeps the selected directory.
-		resolved, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return nil, err
-		}
-		path, err = filepath.Abs(resolved)
-		if err != nil {
-			return nil, err
-		}
-	}
-	file, err := os.CreateTemp(path, "eris-fetch-*")
+	file, err := streamio.CreateTemp(string(dir), "eris-fetch-*")
 	if err != nil {
 		return nil, err
 	}
@@ -83,10 +69,11 @@ type fileTempData struct{ file *os.File }
 func (data *fileTempData) Write(p []byte) (int, error) { return data.file.Write(p) }
 
 func (data *fileTempData) Reader() (io.Reader, error) {
-	if _, err := data.file.Seek(0, io.SeekStart); err != nil {
+	info, err := data.file.Stat()
+	if err != nil {
 		return nil, err
 	}
-	return data.file, nil
+	return io.NewSectionReader(data.file, 0, info.Size()), nil
 }
 
 func (data *fileTempData) Close() error {
