@@ -82,14 +82,18 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	mount := NewMount(ctx, blocks, eris.BlockOptions{})
 	view := NewIOFS(ctx, image)
 	root := "fs/" + capability.String() + "/"
-	for _, name := range []string{"dir/safe", "dir/up", "missing", "missing-safe", "root-alias", "deep-alias", "dir/child/top"} {
-		for label, read := range map[string]func(string) (string, error){
-			"image": imageReadLink(ctx, image),
-			"mount": func(path string) (string, error) { return mount.ReadLink(root + path) },
-			"iofs":  func(path string) (string, error) { return stdfs.ReadLink(view, path) },
-		} {
-			if got, err := read(name); err != nil || got == "" {
-				t.Errorf("%s ReadLink(%q) = %q, %v", label, name, got, err)
+	readers := map[string]func(string) (string, error){
+		"image": func(name string) (string, error) { return image.ReadLink(ctx, name) },
+		"mount": func(name string) (string, error) { return mount.ReadLink(root + name) },
+		"iofs":  func(name string) (string, error) { return stdfs.ReadLink(view, name) },
+	}
+	for name, want := range map[string]string{
+		"dir/safe": "file", "dir/up": "..", "missing": "absent", "missing-safe": "dir/../absent",
+		"root-alias": ".", "deep-alias": "dir/child", "dir/child/top": "../..",
+	} {
+		for label, read := range readers {
+			if got, err := read(name); err != nil || got != want {
+				t.Errorf("%s ReadLink(%q) = %q, %v, want %q", label, name, got, err, want)
 			}
 		}
 	}
@@ -97,11 +101,7 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 		if info, err := mount.Lstat(root + name); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
 			t.Fatalf("Lstat(%q) = %v, %v", name, info, err)
 		}
-		for label, read := range map[string]func(string) (string, error){
-			"image": imageReadLink(ctx, image),
-			"mount": func(path string) (string, error) { return mount.ReadLink(root + path) },
-			"iofs":  func(path string) (string, error) { return stdfs.ReadLink(view, path) },
-		} {
+		for label, read := range readers {
 			if got, err := read(name); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
 				t.Errorf("%s ReadLink(%q) = %q, %v", label, name, got, err)
 			}
@@ -141,10 +141,6 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	if got, err := stdfs.ReadLink(sub, "escape"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
 		t.Errorf("sub escaping link = %q, %v", got, err)
 	}
-}
-
-func imageReadLink(ctx context.Context, image *FS) func(string) (string, error) {
-	return func(path string) (string, error) { return image.ReadLink(ctx, path) }
 }
 
 func TestLegacyLinkConfinedToItsNestedImage(t *testing.T) {

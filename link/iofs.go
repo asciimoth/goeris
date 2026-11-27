@@ -27,15 +27,27 @@ func (f *IOFS) ReadLink(name string) (string, error)       { return f.fs.ReadLin
 
 // Sub keeps the base file system's link policy for the selected directory.
 func (f *IOFS) Sub(dir string) (fs.FS, error) {
-	if err := f.fs.checkPath(dir); err != nil {
-		return nil, linkPathError("sub", dir, err)
-	}
-	base, err := fs.Sub(f.fs.base, dir)
+	baseDir, err := f.fs.basePath(dir)
 	if err != nil {
 		return nil, linkPathError("sub", dir, err)
 	}
+	if dir == "." {
+		return f, nil
+	}
 	sub := *f.fs
-	sub.base = base
+	if base, ok := sub.base.(fs.SubFS); ok {
+		tree, err := base.Sub(baseDir)
+		if err != nil {
+			return nil, linkPathError("sub", dir, err)
+		}
+		if tree == nil {
+			return nil, linkPathError("sub", dir, fs.ErrInvalid)
+		}
+		sub.base = tree
+	} else {
+		// Keep the base's optional methods and use the same checks as the root view.
+		sub.prefix = baseDir
+	}
 	return NewIOFS(f.ctx, &sub), nil
 }
 

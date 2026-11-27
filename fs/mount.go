@@ -335,8 +335,9 @@ func (m *Mount) ReadLink(name string) (string, error) {
 }
 
 // Sub selects a directory and retains the context and block options. A view
-// of a virtual directory still resolves names on demand. A view within an
-// image retains that image; links can leave the directory but not the image.
+// of a virtual directory still resolves names on demand. Within an image,
+// the selected backend controls link lookup. ReadLink also checks that the
+// target stays within the selected directory.
 func (m *Mount) Sub(name string) (stdfs.FS, error) {
 	image, inner, err := m.resolve(name)
 	if err != nil {

@@ -95,6 +95,33 @@ func TestFS(t *testing.T) {
 	}
 }
 
+func TestNestedSubWithoutBaseSubFS(t *testing.T) {
+	encoded, blocks := encodeFSLink(t, []byte("resolved content"))
+	files := fstest.MapFS{
+		"a/b/content": {Data: encoded},
+		"a/b/alias":   {Mode: fs.ModeSymlink, Data: []byte("content")},
+	}
+	base := struct{ fs.ReadLinkFS }{files}
+	view := link.NewIOFS(t.Context(), newLinkFS(t, base, blocks))
+	sub, err := fs.Sub(view, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err = fs.Sub(sub, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fstest.TestFS(sub, "content", "alias"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := fs.ReadFile(sub, "alias"); err != nil || string(got) != "resolved content" {
+		t.Fatalf("ReadFile(alias) = %q, %v", got, err)
+	}
+	if got, err := fs.ReadLink(sub, "alias"); err != nil || got != "content" {
+		t.Fatalf("ReadLink(alias) = %q, %v", got, err)
+	}
+}
+
 func TestFSMetadataAndLazyReads(t *testing.T) {
 	payload := patternedPayload(70*1024 + 29)
 	encoded, blocks := encodeFSLink(t, payload)

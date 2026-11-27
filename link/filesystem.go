@@ -52,6 +52,7 @@ var (
 // Symbolic links follow the base FS policy; this wrapper adds no confinement.
 type FS struct {
 	base        fs.FS
+	prefix      string // Subdirectory path for a base without fs.SubFS.
 	store       eris.CapabilityStore
 	options     eris.BlockOptions
 	maxLinkSize int64
@@ -80,10 +81,11 @@ func NewFSWithLimit(base fs.FS, store eris.CapabilityStore, limit int64, options
 // is guaranteed. A complete magic prefix followed by an invalid link is an
 // error. Short prefixes are ordinary data. Link sizes above MaxInt64 are invalid.
 func (fileSystem *FS) Open(ctx context.Context, name string) (fs.File, error) {
-	if err := fileSystem.checkPath(name); err != nil {
+	baseName, err := fileSystem.basePath(name)
+	if err != nil {
 		return nil, linkPathError("open", name, err)
 	}
-	file, err := fileSystem.base.Open(name)
+	file, err := fileSystem.base.Open(baseName)
 	if err != nil {
 		return nil, linkPathError("open", name, err)
 	}
@@ -195,11 +197,12 @@ func (fileSystem *FS) open(ctx context.Context, file fs.File, name string) (fs.F
 // Detection requires read access to regular files, even for ordinary files.
 // If base implements fs.StatFS, non-regular files are not opened.
 func (fileSystem *FS) Stat(ctx context.Context, name string) (fs.FileInfo, error) {
-	if err := fileSystem.checkPath(name); err != nil {
+	baseName, err := fileSystem.basePath(name)
+	if err != nil {
 		return nil, linkPathError("stat", name, err)
 	}
 	if base, ok := fileSystem.base.(fs.StatFS); ok {
-		info, err := base.Stat(name)
+		info, err := base.Stat(baseName)
 		if err != nil {
 			return nil, linkPathError("stat", name, err)
 		}
@@ -232,11 +235,12 @@ func (fileSystem *FS) Stat(ctx context.Context, name string) (fs.FileInfo, error
 // If base does not implement fs.ReadLinkFS, Lstat falls back to Stat.
 // As with Open, this does not protect against concurrent path changes.
 func (fileSystem *FS) Lstat(ctx context.Context, name string) (fs.FileInfo, error) {
-	if err := fileSystem.checkPath(name); err != nil {
+	baseName, err := fileSystem.basePath(name)
+	if err != nil {
 		return nil, linkPathError("lstat", name, err)
 	}
 	if base, ok := fileSystem.base.(fs.ReadLinkFS); ok {
-		info, err := base.Lstat(name)
+		info, err := base.Lstat(baseName)
 		if err != nil {
 			return nil, linkPathError("lstat", name, err)
 		}
@@ -255,10 +259,11 @@ func (fileSystem *FS) Lstat(ctx context.Context, name string) (fs.FileInfo, erro
 // The target is unchanged and can be absolute or contain parent components.
 // It returns fs.ErrInvalid if base does not implement fs.ReadLinkFS.
 func (fileSystem *FS) ReadLink(ctx context.Context, name string) (string, error) {
-	if err := fileSystem.checkPath(name); err != nil {
+	baseName, err := fileSystem.basePath(name)
+	if err != nil {
 		return "", linkPathError("readlink", name, err)
 	}
-	target, err := fs.ReadLink(fileSystem.base, name)
+	target, err := fs.ReadLink(fileSystem.base, baseName)
 	if err != nil {
 		return "", linkPathError("readlink", name, err)
 	}
@@ -287,10 +292,11 @@ func (fileSystem *FS) ReadFile(ctx context.Context, name string) ([]byte, error)
 // and no entries. Returned entry names and types are fixed at the time of the
 // read, even if the base later changes its entries.
 func (fileSystem *FS) ReadDir(ctx context.Context, name string) ([]fs.DirEntry, error) {
-	if err := fileSystem.checkPath(name); err != nil {
+	baseName, err := fileSystem.basePath(name)
+	if err != nil {
 		return nil, linkPathError("readdir", name, err)
 	}
-	entries, err := fileSystem.readDir(name)
+	entries, err := fileSystem.readDir(baseName)
 	entries, wrapErr := fileSystem.wrapEntries(ctx, name, entries)
 	if wrapErr != nil {
 		err = errors.Join(err, wrapErr)
@@ -322,11 +328,15 @@ func (fileSystem *FS) readDir(name string) ([]fs.DirEntry, error) {
 	return dir.ReadDir(-1)
 }
 
-func (fileSystem *FS) checkPath(name string) error {
+// Validate the view-relative name before joining it to the base path.
+func (fileSystem *FS) basePath(name string) (string, error) {
 	if fileSystem == nil || fileSystem.base == nil || !fs.ValidPath(name) {
-		return fs.ErrInvalid
+		return "", fs.ErrInvalid
 	}
-	return nil
+	if fileSystem.prefix == "" {
+		return name, nil
+	}
+	return path.Join(fileSystem.prefix, name), nil
 }
 
 func (fileSystem *FS) wrapEntries(ctx context.Context, name string, entries []fs.DirEntry) ([]fs.DirEntry, error) {

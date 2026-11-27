@@ -151,28 +151,31 @@ volume names remain uppercase. Names and link targets inside `M/fs/C/` keep
 their original case-sensitive meaning, so entries named `File` and `file` stay
 distinct.
 
-`ReadLink` checks each target with link expansion before returning it. A link
-that can leave its ERIS-FS image returns an error, including a link that crosses
-the boundary through another link. Each decoded nested index confines its own
-links. A `Sub` view also checks targets against the directory it exposes.
-Dangling targets must resolve through their last `..` component. A view with
-multiple backends for the same capability rejects `..` after a named component
-because that component can resolve differently during fallback. For a target
-with leading parent steps, the view also checks the directories that contain the
-link. A directory alias in any backend can change where a parent step leads.
+`ReadLink` returns the original target text for a link that a native client can
+follow within the image. It checks every link in the chain. Each nested index
+confines its own links. A `Sub` view also checks the boundary of the directory
+it exposes. For a dangling target, lookup must resolve every `..` step before it
+reaches the missing entry.
+
+A client can remove dot segments before it follows links. The target must stay
+within the view under both lookup rules. A `..` step in the target must not
+remove a directory link. If the lookup path contains a directory alias, the
+target can climb past the alias only when the alias and its destination have the
+same parent. In both the lookup path and the target, a native device name, a
+backslash, a colon, a NUL byte, or a name ending in a dot or space prevents
+export. The components `.` and `..` retain their usual meaning.
+
+When backends serve the same capability, a client can read a link from one
+backend and look up its target in another. In this case, `ReadLink` rejects `..`
+after a named component. For leading `..` steps, it checks the link's parent
+directories in each backend. A directory alias in that path prevents export.
 Each directory that a parent step leaves must be an ordinary directory in every
-backend where it exists. A nested index or a directory with unknown image
-boundaries prevents export. Host mounts have no nested index markers. When a
-view combines independently opened images, `ReadLink` rejects link export
-because the client could resolve the target in a different image. Safe targets
-keep their original spelling. Each target must also stay in the image if a
-client removes dot segments before it follows links. A parent step that would
-remove a directory link from the target is rejected. If the lookup path contains
-a directory alias, the target can climb past that alias only when the alias and
-its destination have the same parent. Both the lookup path and the target must
-be safe for native clients. A native device name, a backslash, a colon, a NUL
-byte, or a name ending in a dot or space prevents export. The dot segments `.`
-and `..` retain their usual meaning.
+backend that supplies it. A nested image root or a directory with an unknown
+boundary fails this check. A host mount treats each directory as a possible
+image root because it has no nested index markers.
+
+A view that combines independently opened images rejects link export. Use `Sub`
+to select a directory from one backend and apply its link policy.
 
 Callers can explicitly enable recent listings with
 `Mount.WithListingCache(capabilityLimit, blockLimit)`. Both categories are

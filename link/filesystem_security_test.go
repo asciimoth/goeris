@@ -284,12 +284,17 @@ func TestFSStatDoesNotOpenSpecialFiles(t *testing.T) {
 		}
 		base := &metadataFS{info: info}
 		wrapped := newLinkFS(t, base, eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
-		for _, stat := range []func(context.Context, string) (fs.FileInfo, error){wrapped.Stat, wrapped.Lstat} {
-			got, err := stat(context.Background(),
-
-				"special")
-			if err != nil || got != info || base.opens != 0 {
-				t.Fatalf("mode %v: info %v, error %v, opens %d", mode, got, err, base.opens)
+		view := link.NewIOFS(t.Context(), wrapped)
+		sub, err := fs.Sub(view, "dir")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tree := range []fs.FS{view, sub} {
+			for _, stat := range []func(fs.FS, string) (fs.FileInfo, error){fs.Stat, fs.Lstat} {
+				got, err := stat(tree, "special")
+				if err != nil || got != info || base.opens != 0 {
+					t.Fatalf("mode %v: info %v, error %v, opens %d", mode, got, err, base.opens)
+				}
 			}
 		}
 	}
