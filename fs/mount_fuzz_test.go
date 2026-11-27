@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	stdfs "io/fs"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -200,7 +201,7 @@ func FuzzMountIndex(f *testing.F) {
 // FuzzMountLinks compares mount link handling with the image interface. Targets
 // include cycles, absolute paths, parent segments, and directory aliases.
 func FuzzMountLinks(f *testing.F) {
-	for _, target := range []string{"file", "dir/../file", "alias/../file", "alias/../../file", "../file", "/file", "link", "missing/../file", "dir/", ""} {
+	for _, target := range []string{"file", "dir/../file", "alias/../file", "alias/../../file", "../file", "../sibling/file", "/file", "link", "missing/../file", "dir/", ""} {
 		f.Add(target, "link")
 		f.Add(target, "link/file")
 	}
@@ -232,29 +233,54 @@ func FuzzMountLinks(f *testing.F) {
 			t.Fatal(err)
 		}
 		m := NewMount(ctx, blocks, eris.BlockOptions{})
-		prefix := "fs/" + cap.String() + "/"
-		got, err := m.ReadFile(prefix + name)
-		want, wantErr := image.ReadFile(ctx, name)
-		if !bytes.Equal(got, want) || (err == nil) != (wantErr == nil) {
-			t.Fatalf("link content mismatch: %v, %v", err, wantErr)
+		// A nested image must give the same results as the same image
+		// opened alone, even when the parent and sibling contain the file.
+		sibling := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
+		if err := sibling.AddFile(ctx, "file", strings.NewReader("sibling content"), false); err != nil {
+			t.Fatal(err)
 		}
-		for _, sentinel := range []error{stdfs.ErrNotExist, stdfs.ErrInvalid} {
-			if errors.Is(err, sentinel) != errors.Is(wantErr, sentinel) {
-				t.Fatalf("link error mismatch: %v, %v", err, wantErr)
+		siblingCap, err := sibling.Finish(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
+		if err := parent.AddFile(ctx, "file", strings.NewReader("parent content"), false); err != nil {
+			t.Fatal(err)
+		}
+		if err := parent.AddSubdirectory("child", cap); err != nil {
+			t.Fatal(err)
+		}
+		if err := parent.AddSubdirectory("sibling", siblingCap); err != nil {
+			t.Fatal(err)
+		}
+		parentCap, err := parent.Finish(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, wantErr := image.ReadFile(ctx, name)
+		wantLink, wantLinkErr := image.ReadLink(ctx, "link")
+		for _, root := range []string{"fs/" + cap.String(), "fs/" + parentCap.String() + "/child"} {
+			got, err := m.ReadFile(path.Join(root, name))
+			if !bytes.Equal(got, want) || (err == nil) != (wantErr == nil) {
+				t.Fatalf("%s content mismatch: got %q, %v; want %q, %v", root, got, err, want, wantErr)
+			}
+			for _, sentinel := range []error{stdfs.ErrNotExist, stdfs.ErrInvalid} {
+				if errors.Is(err, sentinel) != errors.Is(wantErr, sentinel) {
+					t.Fatalf("%s link error mismatch: %v, %v", root, err, wantErr)
+				}
+			}
+			link, err := m.ReadLink(root + "/link")
+			if link != wantLink || (err == nil) != (wantLinkErr == nil) ||
+				errors.Is(err, stdfs.ErrNotExist) != errors.Is(wantLinkErr, stdfs.ErrNotExist) ||
+				errors.Is(err, stdfs.ErrInvalid) != errors.Is(wantLinkErr, stdfs.ErrInvalid) {
+				t.Fatalf("%s link mismatch: %q, %v; image: %q, %v", root, link, err, wantLink, wantLinkErr)
 			}
 		}
-		link, err := m.ReadLink(prefix + "link")
-		wantLink, wantLinkErr := image.ReadLink(ctx, "link")
-		if link != wantLink || (err == nil) != (wantLinkErr == nil) ||
-			errors.Is(err, stdfs.ErrNotExist) != errors.Is(wantLinkErr, stdfs.ErrNotExist) ||
-			errors.Is(err, stdfs.ErrInvalid) != errors.Is(wantLinkErr, stdfs.ErrInvalid) {
-			t.Fatalf("link mismatch: %q, %v; image: %q, %v", link, err, wantLink, wantLinkErr)
-		}
-		// A root link cannot take a first parent step, use an absolute
-		// target, or pass native path control bytes to an adapter.
-		unsafe := target == ".." || strings.HasPrefix(target, "../") ||
-			strings.HasPrefix(target, "/") || strings.ContainsAny(target, "\\:\x00")
-		if unsafe && err == nil {
+		// A client can clean the target before it follows the link.
+		clean := path.Clean(target)
+		unsafe := clean == ".." || strings.HasPrefix(clean, "../") ||
+			path.IsAbs(target) || strings.ContainsAny(target, "\\:\x00")
+		if unsafe && wantLinkErr == nil {
 			t.Fatalf("unsafe root link was exposed: %q", target)
 		}
 	})
