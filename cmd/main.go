@@ -8,18 +8,28 @@ import (
 	"io"
 	"os"
 
+	"github.com/asciimoth/goeris"
 	"github.com/asciimoth/zpgo"
 )
 
 const usage = `Usage: goeris [storage flags] command [options] [arguments]
 
-  block put           Store one 1 KiB or 32 KiB block from stdin. Print its hash.
-  block get [HASH...]  Write raw blocks to stdout in the order given.
-  dump                Show environment settings and the current storage setup.
-  help, -h, --help    Show help.
+  block put                      Store a block from stdin. Print its hash.
+  block get [HASH...]            Write raw blocks to stdout in the given order.
+  block prefetch HASH [HASH...]  Send best-effort prefetch hints.
+  block check HASH [HASH...]     Print each hash and its stored flags.
+  block update HASH [HASH...]    Replace the flags and report each result.
+  dump                           Show environment settings and storage setup.
+  help, -h, --help               Show help.
 
 Block get accepts --batch-size N before the hashes. Use 0 for automatic
 batching (the default) or 1 for one request at a time.
+
+Block put takes exactly 1 KiB or 32 KiB. Put, prefetch, and update accept
+--high-priority and --root after the subcommand and before any hashes.
+Each flag defaults to false. Use --root=false or --high-priority=false to
+pass false explicitly. Updates replace both flags. Local volumes ignore
+prefetch hints and block options.
 
 Storage flags take semicolon-separated paths.
   --prepend-blocks PATHS        Add block volumes before the default volumes.
@@ -45,9 +55,12 @@ func run(args []string) (code int) {
 	command, paths, parseErr := parseCommand(args)
 	var progress *zpgo.Progress
 	var err error
-	if command.name == "block put" || command.name == "block get" {
+	switch command.name {
+	case "block get":
 		progress, err = blockProgress(len(command.hashes))
-	} else {
+	case "block put", "block prefetch", "block check", "block update":
+		progress = &zpgo.Progress{}
+	default:
 		progress, err = zpgo.NewAuto()
 	}
 	if err != nil {
@@ -94,13 +107,10 @@ func run(args []string) (code int) {
 		}
 	}()
 
-	switch command.name {
-	case "dump":
+	if command.name == "dump" {
 		err = dump(progress, stores.DefaultSetup(), paths)
-	case "block put":
-		err = blockPut(progress, stores.Blocks, os.Stdin)
-	case "block get":
-		err = blockGet(progress, stores.Blocks, command.hashes, command.batchSize)
+	} else {
+		err = command.runBlock(progress, stores.Blocks, os.Stdin)
 	}
 	if err != nil {
 		_, _ = progress.PrintfStderr("goeris: %s: %v\n", command.name, err)
@@ -110,9 +120,10 @@ func run(args []string) (code int) {
 }
 
 type commandOptions struct {
-	name      string
-	hashes    []string
-	batchSize int
+	name         string
+	hashes       []string
+	batchSize    int
+	blockOptions eris.BlockOptions
 }
 
 // parseCommand reads common flags before and after each command name, up to

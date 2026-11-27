@@ -97,12 +97,23 @@ func TestBlockArguments(t *testing.T) {
 		{"group help", []string{"block"}, 0, usage, ""},
 		{"put help", []string{"block", "put", "--help"}, 0, usage, ""},
 		{"get help", []string{"block", "get", "--help"}, 0, usage, ""},
+		{"prefetch help", []string{"block", "prefetch", "--help"}, 0, usage, ""},
+		{"check help", []string{"block", "check", "--help"}, 0, usage, ""},
+		{"update help", []string{"block", "update", "--help"}, 0, usage, ""},
 		{"no hashes", []string{"block", "get"}, 0, "", ""},
+		{"prefetch without hashes", []string{"block", "prefetch"}, 2, "", "expected at least one block hash"},
+		{"check without hashes", []string{"block", "check"}, 2, "", "block check: expected at least one block hash"},
+		{"update without hashes", []string{"block", "update"}, 2, "", "block update: expected at least one block hash"},
 		{"unknown subcommand", []string{"block", "wrong"}, 2, "", `unknown subcommand "wrong"`},
+		{"old options group", []string{"block", "options", "check"}, 2, "", `block: unknown subcommand "options"`},
 		{"put argument", []string{"block", "put", "extra"}, 2, "", "unexpected arguments"},
 		{"batch size on put", []string{"block", "put", "--batch-size=4"}, 2, "", "flag provided but not defined"},
+		{"root flag on check", []string{"block", "check", "--root"}, 2, "", "flag provided but not defined"},
+		{"invalid bool on put", []string{"block", "put", "--root=maybe"}, 2, "", `invalid boolean value "maybe"`},
 		{"negative batch size", []string{"block", "get", "--batch-size=-1"}, 2, "", "--batch-size must be at least 0"},
 		{"invalid hash", []string{"block", "get", "--replace-blocks=", "invalid"}, 1, "", `invalid block hash "invalid"`},
+		{"invalid prefetch hash", []string{"block", "prefetch", "--replace-blocks=", "invalid"}, 1, "", `invalid block hash "invalid"`},
+		{"invalid update hash", []string{"block", "update", "--replace-blocks=", "invalid"}, 1, "", `block update: invalid block hash "invalid"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ERIS_BLOCK_PATH", ";")

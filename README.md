@@ -110,6 +110,45 @@ hash=$(goeris block put --replace-blocks /var/eris < block.bin)
 goeris block get --replace-blocks /var/eris "$hash" > restored.bin
 ```
 
+### Prefetch blocks and manage block options
+
+Use `goeris block prefetch HASH [HASH...]` to send best-effort hints to the
+block sources. The command returns without waiting for reads and produces no
+output on success. A source can discard hints, so a successful exit gives no
+information about block availability.
+
+Use `goeris block check HASH [HASH...]` to read and verify each block and print
+its stored options. Each stdout line has the form
+`HASH high-priority=BOOL root=BOOL`, where each value is `true` or `false`. A
+missing or corrupt block is an error.
+
+Use `goeris block update HASH [HASH...]` to replace both flags for each block.
+The command validates every hash before it writes any flags. Each stdout line
+has the form `HASH changed=true` when the store changes the options. A line with
+`HASH changed=false` means the block already has the requested flags, the block
+is absent, or the store ignores the update. Check and update print results in
+argument order and stop at the first error. If an update fails during storage,
+earlier updates stay in effect.
+
+Put, prefetch, and update accept `--high-priority` and `--root` after the
+subcommand and before any hashes. Use `--high-priority` to request priority
+handling and `--root` to mark an entry block. On prefetch, the flags apply to
+each hint. A bare flag means `true`. Use `--high-priority=false` or
+`--root=false` to pass `false` explicitly. Omitted flags default to `false`, so
+an update with no flags clears both flags on a store that supports updates. A
+repeated put keeps true flags on stores that retain options.
+
+Directory and CBOR volumes ignore prefetch hints and block options. With these
+volumes, a check reports both flags as `false` for an existing block, and an
+update reports `changed=false`.
+
+```sh
+hash=$(goeris block put --root --high-priority < block.bin)
+goeris block prefetch --high-priority "$hash"
+goeris block check "$hash"
+goeris block update --root --high-priority=false "$hash"
+```
+
 ## Packages
 
 The `eris` package implements:
