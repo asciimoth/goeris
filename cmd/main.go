@@ -11,10 +11,15 @@ import (
 	"github.com/asciimoth/zpgo"
 )
 
-const usage = `Usage: goeris [storage flags] command [storage flags]
+const usage = `Usage: goeris [storage flags] command [options] [arguments]
 
-  dump              Show environment settings and the current storage setup.
-  help, -h, --help  Show help.
+  block put           Store one 1 KiB or 32 KiB block from stdin. Print its hash.
+  block get [HASH...]  Write raw blocks to stdout in the order given.
+  dump                Show environment settings and the current storage setup.
+  help, -h, --help    Show help.
+
+Block get accepts --batch-size N before the hashes. Use 0 for automatic
+batching (the default) or 1 for one request at a time.
 
 Storage flags take semicolon-separated paths.
   --prepend-blocks PATHS        Add block volumes before the default volumes.
@@ -37,7 +42,14 @@ func main() {
 }
 
 func run(args []string) (code int) {
-	progress, err := zpgo.NewAuto()
+	command, paths, parseErr := parseCommand(args)
+	var progress *zpgo.Progress
+	var err error
+	if command.name == "block put" || command.name == "block get" {
+		progress, err = blockProgress(len(command.hashes))
+	} else {
+		progress, err = zpgo.NewAuto()
+	}
 	if err != nil {
 		var disabled zpgo.Progress
 		_, _ = disabled.PrintfStderr("goeris: set up progress: %v\n", err)
@@ -50,18 +62,22 @@ func run(args []string) (code int) {
 	// for related human-readable messages and errors. Write both through the reporter.
 	// Long-running commands, such as those that copy data, can use its root
 	// node to report progress.
-	command, paths, err := parseCommand(args)
-	if errors.Is(err, flag.ErrHelp) {
+	if errors.Is(parseErr, flag.ErrHelp) {
 		if _, err := progress.PrintStdout(usage); err != nil {
 			_, _ = progress.PrintfStderr("goeris: write help: %v\n", err)
 			return 1
 		}
 		return 0
 	}
-	if err != nil {
-		_, _ = progress.PrintfStderr("goeris: %v\n", err)
-		_, _ = progress.PrintStdout(usage)
+	if parseErr != nil {
+		_, _ = progress.PrintfStderr("goeris: %v\n", parseErr)
+		if command.name == "" || command.name == "dump" {
+			_, _ = progress.PrintStdout(usage)
+		}
 		return 2
+	}
+	if command.name == "block get" && len(command.hashes) == 0 {
+		return 0
 	}
 
 	stores, err := paths.open()
@@ -78,40 +94,57 @@ func run(args []string) (code int) {
 		}
 	}()
 
-	switch command {
+	switch command.name {
 	case "dump":
-		if err := dump(progress, stores.DefaultSetup(), paths); err != nil {
-			_, _ = progress.PrintfStderr("goeris: dump: %v\n", err)
-			return 1
-		}
+		err = dump(progress, stores.DefaultSetup(), paths)
+	case "block put":
+		err = blockPut(progress, stores.Blocks, os.Stdin)
+	case "block get":
+		err = blockGet(progress, stores.Blocks, command.hashes, command.batchSize)
+	}
+	if err != nil {
+		_, _ = progress.PrintfStderr("goeris: %s: %v\n", command.name, err)
+		return 1
 	}
 	return 0
 }
 
-// parseCommand reads common flags on both sides of the command name. Both
-// passes use the same flag values so repeated options keep their input order.
+type commandOptions struct {
+	name      string
+	hashes    []string
+	batchSize int
+}
+
+// parseCommand reads common flags before and after each command name, up to
+// the first positional argument. Reusing the flag set preserves flag order.
 // flag.ErrHelp requests help without opening any stores.
-func parseCommand(args []string) (string, storageFlags, error) {
+func parseCommand(args []string) (commandOptions, storageFlags, error) {
+	var command commandOptions
 	var paths storageFlags
 	flags := flag.NewFlagSet("goeris", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	paths.register(flags)
 	if err := flags.Parse(args); err != nil {
-		return "", paths, err
+		return command, paths, err
 	}
 	args = flags.Args()
 	if len(args) == 0 || args[0] == "help" {
-		return "", paths, flag.ErrHelp
+		return command, paths, flag.ErrHelp
 	}
-	command := args[0]
-	if command != "dump" {
-		return "", paths, fmt.Errorf("unknown command %q", command)
+	switch args[0] {
+	case "block":
+		command, err := parseBlockCommand(flags, args[1:])
+		return command, paths, err
+	case "dump":
+		command.name = "dump"
+	default:
+		return command, paths, fmt.Errorf("unknown command %q", args[0])
 	}
 	if err := flags.Parse(args[1:]); err != nil {
-		return "", paths, fmt.Errorf("%s: %w", command, err)
+		return command, paths, fmt.Errorf("dump: %w", err)
 	}
 	if flags.NArg() > 0 {
-		return "", paths, fmt.Errorf("%s: unexpected arguments: %q", command, flags.Args())
+		return command, paths, fmt.Errorf("dump: unexpected arguments: %q", flags.Args())
 	}
 	return command, paths, nil
 }

@@ -61,7 +61,9 @@ to give a custom builder priority.
 ### Command-line storage flags
 
 Run `goeris dump` to show the environment and the storage lookup order. Set
-storage flags before or after `dump`.
+storage flags before or after the command name. For `goeris block`, you can also
+set them between `block` and the subcommand name. Set all flags before any block
+hashes.
 
 | Chain             | Prepend                  | Append                  | Replace                  |
 | ----------------- | ------------------------ | ----------------------- | ------------------------ |
@@ -84,6 +86,28 @@ chain.
 ```sh
 goeris dump --prepend-blocks '/var/eris;backup.cbor' --append-fs /backup/fs
 goeris dump --replace-blocks= --replace-capabilities= --replace-fs=
+```
+
+### Read and write raw blocks
+
+Use `goeris block put` to store exactly 1024 or 32768 bytes from stdin. The
+command prints the unpadded Base32 block hash followed by a newline. Use
+`goeris block get` with one or more hashes to write the raw blocks to stdout in
+the specified order, with no separators. If a hash is invalid or a fetch fails,
+stdout contains the blocks before that failure. The error goes to stderr and the
+command exits with a nonzero status. With zero hashes, the command exits without
+output.
+
+For multiple hashes, progress shows how many blocks stdout has received out of
+the requested total. It uses a dedicated Zig progress pipe or a stderr terminal.
+Use `--batch-size N` on `block get` to set the maximum number of blocks per
+request, up to the storage limit. Use `0` (the default) for automatic batching
+of up to 64 blocks or `1` to request blocks one at a time. Directory and CBOR
+volumes currently accept one block per request.
+
+```sh
+hash=$(goeris block put --replace-blocks /var/eris < block.bin)
+goeris block get --replace-blocks /var/eris "$hash" > restored.bin
 ```
 
 ## Packages

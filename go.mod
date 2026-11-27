@@ -8,9 +8,7 @@ require (
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/term v0.45.0
 )
 
-require (
-	github.com/rivo/uniseg v0.4.7 // indirect
-	golang.org/x/term v0.45.0 // indirect
-)
+require github.com/rivo/uniseg v0.4.7 // indirect
