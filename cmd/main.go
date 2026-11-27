@@ -12,26 +12,20 @@ import (
 	"github.com/asciimoth/zpgo"
 )
 
-const usage = `Usage: goeris [storage flags] command [options] [arguments]
+const globalUsage = `Usage: goeris [storage flags] COMMAND [options] [arguments]
 
-  block put                      Store a block from stdin. Print its hash.
-  block get [HASH...]            Write raw blocks to stdout in the given order.
-  block prefetch HASH [HASH...]  Send best-effort prefetch hints.
-  block check HASH [HASH...]     Print each hash and its stored flags.
-  block update HASH [HASH...]    Replace the flags and report each result.
-  dump                           Show environment settings and storage setup.
-  help, -h, --help               Show help.
+Commands:
+  block  Read, write, and manage blocks.
+  dump   Show environment settings and storage setup.
+  help   Show this help. You can also use -h or --help.
 
-Block get accepts --batch-size N before the hashes. Use 0 for automatic
-batching (the default) or 1 for one request at a time.
+Run 'goeris COMMAND --help' for command help.
+` + storageHelp
 
-Block put takes exactly 1 KiB or 32 KiB. Put, prefetch, and update accept
---high-priority and --root after the subcommand and before any hashes.
-Each flag defaults to false. Use --root=false or --high-priority=false to
-pass false explicitly. Updates replace both flags. Local volumes ignore
-prefetch hints and block options.
+const storageHelp = `
+Storage flags
 
-Storage flags take semicolon-separated paths.
+Use a semicolon-separated list of paths for each flag.
   --prepend-blocks PATHS        Add block volumes before the default volumes.
   --append-blocks PATHS         Add block volumes after the default volumes.
   --replace-blocks PATHS        Replace the default block volumes.
@@ -76,7 +70,7 @@ func run(args []string) (code int) {
 	// Long-running commands, such as those that copy data, can use its root
 	// node to report progress.
 	if errors.Is(parseErr, flag.ErrHelp) {
-		if _, err := progress.PrintStdout(usage); err != nil {
+		if _, err := progress.PrintStdout(command.usage); err != nil {
 			_, _ = progress.PrintfStderr("goeris: write help: %v\n", err)
 			return 1
 		}
@@ -85,7 +79,7 @@ func run(args []string) (code int) {
 	if parseErr != nil {
 		_, _ = progress.PrintfStderr("goeris: %v\n", parseErr)
 		if command.name == "" || command.name == "dump" {
-			_, _ = progress.PrintStdout(usage)
+			_, _ = progress.PrintStdout(command.usage)
 		}
 		return 2
 	}
@@ -121,6 +115,7 @@ func run(args []string) (code int) {
 
 type commandOptions struct {
 	name         string
+	usage        string
 	hashes       []string
 	batchSize    int
 	blockOptions eris.BlockOptions
@@ -130,7 +125,7 @@ type commandOptions struct {
 // the first positional argument. Reusing the flag set preserves flag order.
 // flag.ErrHelp requests help without opening any stores.
 func parseCommand(args []string) (commandOptions, storageFlags, error) {
-	var command commandOptions
+	command := commandOptions{usage: globalUsage}
 	var paths storageFlags
 	flags := flag.NewFlagSet("goeris", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -147,7 +142,7 @@ func parseCommand(args []string) (commandOptions, storageFlags, error) {
 		command, err := parseBlockCommand(flags, args[1:])
 		return command, paths, err
 	case "dump":
-		command.name = "dump"
+		command = commandOptions{name: "dump", usage: dumpUsage}
 	default:
 		return command, paths, fmt.Errorf("unknown command %q", args[0])
 	}

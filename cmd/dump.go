@@ -9,6 +9,12 @@ import (
 	"github.com/asciimoth/zpgo"
 )
 
+const dumpUsage = `Usage: goeris dump [storage flags]
+
+Show the environment settings and the lookup order for block volumes,
+capability mounts, and ERIS-FS images.
+` + storageHelp
+
 // dump reports the environment and the lookup order of the configured stores.
 func dump(progress *zpgo.Progress, setup auto.DefaultSetup, paths storageFlags) error {
 	var out bytes.Buffer

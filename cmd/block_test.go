@@ -94,12 +94,15 @@ func TestBlockArguments(t *testing.T) {
 		stdout string
 		stderr string
 	}{
-		{"group help", []string{"block"}, 0, usage, ""},
-		{"put help", []string{"block", "put", "--help"}, 0, usage, ""},
-		{"get help", []string{"block", "get", "--help"}, 0, usage, ""},
-		{"prefetch help", []string{"block", "prefetch", "--help"}, 0, usage, ""},
-		{"check help", []string{"block", "check", "--help"}, 0, usage, ""},
-		{"update help", []string{"block", "update", "--help"}, 0, usage, ""},
+		{"group without arguments", []string{"block"}, 0, blockUsage, ""},
+		{"group help", []string{"block", "--help"}, 0, blockUsage, ""},
+		{"group help command", []string{"block", "help"}, 0, blockUsage, ""},
+		{"put help", []string{"block", "put", "--help"}, 0, blockPutUsage, ""},
+		{"get help", []string{"block", "get", "--help"}, 0, blockGetUsage, ""},
+		{"prefetch help", []string{"block", "prefetch", "--help"}, 0, blockPrefetchUsage, ""},
+		{"check help", []string{"block", "check", "--help"}, 0, blockCheckUsage, ""},
+		{"update help", []string{"block", "update", "--help"}, 0, blockUpdateUsage, ""},
+		{"help with flags", []string{"block", "--replace-blocks=missing", "get", "--batch-size=1", "-h"}, 0, blockGetUsage, ""},
 		{"no hashes", []string{"block", "get"}, 0, "", ""},
 		{"prefetch without hashes", []string{"block", "prefetch"}, 2, "", "expected at least one block hash"},
 		{"check without hashes", []string{"block", "check"}, 2, "", "block check: expected at least one block hash"},

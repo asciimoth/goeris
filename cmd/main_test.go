@@ -16,21 +16,21 @@ func TestRun(t *testing.T) {
 		stdout string
 		stderr string
 	}{
-		{"no arguments", nil, 0, usage, ""},
-		{"short help", []string{"-h"}, 0, usage, ""},
-		{"long help", []string{"--help"}, 0, usage, ""},
-		{"help command", []string{"help"}, 0, usage, ""},
-		{"help for dump", []string{"dump", "--help"}, 0, usage, ""},
-		{"help with storage flags", []string{"--prepend-blocks=missing", "dump", "--help"}, 0, usage, ""},
-		{"unknown option", []string{"--unknown"}, 2, usage, "goeris: flag provided but not defined: -unknown\n"},
-		{"unknown dump option", []string{"dump", "--unknown"}, 2, usage, "goeris: dump: flag provided but not defined: -unknown\n"},
-		{"unknown command", []string{"wrongcmd"}, 2, usage, "goeris: unknown command \"wrongcmd\"\n"},
-		{"extra dump argument", []string{"dump", "file name"}, 2, usage, "goeris: dump: unexpected arguments: [\"file name\"]\n"},
-		{"missing value", []string{"dump", "--replace-fs"}, 2, usage, "goeris: dump: flag needs an argument: -replace-fs\n"},
-		{"empty prepend", []string{"dump", "--prepend-blocks="}, 2, usage, "goeris: dump: invalid value \"\" for flag -prepend-blocks: path list contains an empty entry\n"},
-		{"empty list entry", []string{"dump", "--append-capabilities=first;;last"}, 2, usage, "goeris: dump: invalid value \"first;;last\" for flag -append-capabilities: path list contains an empty entry\n"},
-		{"empty replacement entry", []string{"dump", "--replace-fs=first;"}, 2, usage, "goeris: dump: invalid value \"first;\" for flag -replace-fs: path list contains an empty entry\n"},
-		{"end of flags", []string{"dump", "--", "--replace-blocks="}, 2, usage, "goeris: dump: unexpected arguments: [\"--replace-blocks=\"]\n"},
+		{"no arguments", nil, 0, globalUsage, ""},
+		{"short help", []string{"-h"}, 0, globalUsage, ""},
+		{"long help", []string{"--help"}, 0, globalUsage, ""},
+		{"help command", []string{"help"}, 0, globalUsage, ""},
+		{"help for dump", []string{"dump", "--help"}, 0, dumpUsage, ""},
+		{"help with storage flags", []string{"--prepend-blocks=missing", "dump", "--help"}, 0, dumpUsage, ""},
+		{"unknown option", []string{"--unknown"}, 2, globalUsage, "goeris: flag provided but not defined: -unknown\n"},
+		{"unknown dump option", []string{"dump", "--unknown"}, 2, dumpUsage, "goeris: dump: flag provided but not defined: -unknown\n"},
+		{"unknown command", []string{"wrongcmd"}, 2, globalUsage, "goeris: unknown command \"wrongcmd\"\n"},
+		{"extra dump argument", []string{"dump", "file name"}, 2, dumpUsage, "goeris: dump: unexpected arguments: [\"file name\"]\n"},
+		{"missing value", []string{"dump", "--replace-fs"}, 2, dumpUsage, "goeris: dump: flag needs an argument: -replace-fs\n"},
+		{"empty prepend", []string{"dump", "--prepend-blocks="}, 2, dumpUsage, "goeris: dump: invalid value \"\" for flag -prepend-blocks: path list contains an empty entry\n"},
+		{"empty list entry", []string{"dump", "--append-capabilities=first;;last"}, 2, dumpUsage, "goeris: dump: invalid value \"first;;last\" for flag -append-capabilities: path list contains an empty entry\n"},
+		{"empty replacement entry", []string{"dump", "--replace-fs=first;"}, 2, dumpUsage, "goeris: dump: invalid value \"first;\" for flag -replace-fs: path list contains an empty entry\n"},
+		{"end of flags", []string{"dump", "--", "--replace-blocks="}, 2, dumpUsage, "goeris: dump: unexpected arguments: [\"--replace-blocks=\"]\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ERIS_BLOCK_PATH", ";")

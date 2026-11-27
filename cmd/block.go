@@ -19,7 +19,7 @@ import (
 // parseBlockCommand accepts storage flags before and after the subcommand.
 // Operation flags follow the subcommand and precede the block hashes.
 func parseBlockCommand(flags *flag.FlagSet, args []string) (commandOptions, error) {
-	command := commandOptions{name: "block"}
+	command := commandOptions{name: "block", usage: blockUsage}
 	if err := flags.Parse(args); err != nil {
 		return command, fmt.Errorf("block: %w", err)
 	}
@@ -27,17 +27,19 @@ func parseBlockCommand(flags *flag.FlagSet, args []string) (commandOptions, erro
 	if len(args) == 0 || args[0] == "help" {
 		return command, flag.ErrHelp
 	}
+	usage, ok := blockOperationUsage[args[0]]
+	if !ok {
+		return command, fmt.Errorf("block: unknown subcommand %q", args[0])
+	}
+	command.name += " " + args[0]
+	command.usage = usage
 	switch args[0] {
 	case "get":
 		flags.IntVar(&command.batchSize, "batch-size", 0, "maximum blocks per request")
 	case "put", "prefetch", "update":
 		flags.BoolVar(&command.blockOptions.HighPriority, "high-priority", false, "set the high-priority flag")
 		flags.BoolVar(&command.blockOptions.Root, "root", false, "set the root flag")
-	case "check":
-	default:
-		return command, fmt.Errorf("block: unknown subcommand %q", args[0])
 	}
-	command.name += " " + args[0]
 	if err := flags.Parse(args[1:]); err != nil {
 		return command, fmt.Errorf("%s: %w", command.name, err)
 	}
