@@ -238,85 +238,109 @@ func (s *CombinedFileSystem) ReadLink(ctx context.Context, name string) (string,
 	if !s.sameCapability {
 		return "", pathError("readlink", name, stdfs.ErrNotExist)
 	}
-	// An adapter resolves each component in a separate lookup. After a
-	// named component, another backend could supply a link to the root.
-	// Leading parent steps also depend on how the client reached this link.
-	parentDepth := strings.Count(name, "/")
-	remainingDepth := parentDepth
-	seenName := false
 	for part := range strings.SplitSeq(target, "/") {
-		switch part {
-		case "", ".":
-		case "..":
-			if seenName || remainingDepth == 0 {
-				return "", pathError("readlink", name, stdfs.ErrNotExist)
+		if part == ".." {
+			if err := s.checkTargetParents(ctx, name, target); err != nil {
+				return "", pathError("readlink", name, err)
 			}
-			remainingDepth--
-		default:
-			seenName = true
-		}
-	}
-	if remainingDepth < parentDepth {
-		if err := s.checkLinkParents(ctx, name, remainingDepth); err != nil {
-			return "", pathError("readlink", name, err)
+			break
 		}
 	}
 	return target, nil
 }
 
-// A client can get a directory alias from one backend and its child's link
-// from another. The depth of the link in either backend alone is insufficient.
-// Check each prefix from the root so Lstat never follows an unchecked alias.
-// Each directory left by a parent step must also be inside the same index.
-func (s *CombinedFileSystem) checkLinkParents(ctx context.Context, name string, remainingDepth int) error {
+// A mount adapter can resolve each path component in a different backend.
+// Check each backend once, including the members of nested chains.
+func (s *CombinedFileSystem) checkTargetParents(ctx context.Context, name, target string) error {
 	for _, open := range s.images {
 		image, err := open(ctx)
 		if err != nil {
 			return err
 		}
 		if combined, ok := image.(*CombinedFileSystem); ok {
-			// Lstat on a chain only reports the first successful lookup.
-			if err := combined.checkLinkParents(ctx, name, remainingDepth); err != nil {
-				return err
-			}
-			continue
+			err = combined.checkTargetParents(ctx, name, target)
+		} else {
+			err = checkTargetParents(ctx, image, name, target)
 		}
-		depth := 0
-		for i := range name {
-			if name[i] != '/' {
-				continue
-			}
-			prefix := name[:i]
-			info, err := image.Lstat(ctx, prefix)
-			if errors.Is(err, stdfs.ErrNotExist) {
-				// A missing index can also report ErrNotExist. Only skip
-				// this backend if its parent directory confirms absence.
-				entries, listErr := image.ReadDir(ctx, path.Dir(prefix))
-				if listErr != nil {
-					return listErr
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Check directories removed by ".." before a client can clean or follow the
+// target across backends. A parent step can leave a directory entered by this
+// target, including a nested image. Steps above the link's own directory
+// also need proof that they stay in its index.
+func checkTargetParents(ctx context.Context, image FileSystem, name, target string) error {
+	parent := path.Dir(name)
+	dir, shallowest := parent, parent
+	run := target // Components since the last parent step.
+	for rest := target; rest != ""; {
+		part, tail, _ := strings.Cut(rest, "/")
+		if part == ".." {
+			descended := path.Join(dir, run[:len(run)-len(rest)])
+			if descended != dir {
+				if err := checkLinkDirectories(ctx, image, descended, descended); err != nil {
+					return err
 				}
-				base := path.Base(prefix)
-				if !slices.ContainsFunc(entries, func(e stdfs.DirEntry) bool { return e.Name() == base }) {
-					break
-				}
 			}
-			if err != nil {
-				return err
-			}
-			if info.Mode()&stdfs.ModeSymlink != 0 {
+			if descended == "." {
 				return stdfs.ErrNotExist
 			}
-			if !info.IsDir() {
+			dir = path.Dir(descended)
+			if descended == shallowest {
+				shallowest = dir
+			}
+			run = tail
+		}
+		rest = tail
+	}
+	if shallowest != parent {
+		return checkLinkDirectories(ctx, image, parent, shallowest)
+	}
+	return nil
+}
+
+// A client can get a directory alias from one backend and its child's link
+// from another. The depth of the link in either backend alone is insufficient.
+// Check each prefix from the root so Lstat never follows an unchecked alias.
+// Each prefix below ancestor must also be an ordinary directory.
+func checkLinkDirectories(ctx context.Context, image FileSystem, dir, ancestor string) error {
+	for i := 0; i <= len(dir); i++ {
+		if i < len(dir) && dir[i] != '/' {
+			continue
+		}
+		prefix := dir[:i]
+		info, err := image.Lstat(ctx, prefix)
+		if errors.Is(err, stdfs.ErrNotExist) {
+			// A missing index can also report ErrNotExist. Only skip
+			// this backend if its parent directory confirms absence.
+			entries, listErr := image.ReadDir(ctx, path.Dir(prefix))
+			if listErr != nil {
+				return listErr
+			}
+			base := path.Base(prefix)
+			if !slices.ContainsFunc(entries, func(e stdfs.DirEntry) bool { return e.Name() == base }) {
 				break
 			}
-			depth++
-			if depth > remainingDepth {
-				// Only a decoded index identifies an ordinary directory.
-				// A mounted tree can have an image root at any directory.
-				dir, ok := info.(*node)
-				if !ok || dir.kind != directoryType {
-					return stdfs.ErrNotExist
-				}
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&stdfs.ModeSymlink != 0 {
+			return stdfs.ErrNotExist
+		}
+		if !info.IsDir() {
+			break
+		}
+		if ancestor == "." || len(prefix) > len(ancestor) {
+			// Only a decoded index identifies an ordinary directory.
+			// A mounted tree can have an image root at any directory.
+			node, ok := info.(*node)
+			if !ok || node.kind != directoryType {
+				return stdfs.ErrNotExist
 			}
 		}
 	}

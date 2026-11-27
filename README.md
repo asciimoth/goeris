@@ -203,7 +203,9 @@ immutable mount that verifies content and preserves case-sensitive names. Each
 capability entry must be a directory. The expanded tree has no nested index
 markers, so `MountStore` confines each link to the directory that contains it.
 For links to siblings of that directory, use a capability-backed image, which
-knows the index boundaries. Mounted `ResolvePath` returns the resolved path.
+knows the index boundaries. On a standard ERIS mount, use
+`erisfs.NewStore(eris.NewMountCapabilityStore("/eris"), options)` to read the
+indexes from the mount. Mounted `ResolvePath` returns the resolved path.
 MountStore write operations return `eris.ErrReadOnly`. Mounted trees report
 `errors.ErrUnsupported` for raw-index reads and for positive explicit index
 limits. A mounted prefetch asks the host for file metadata throughout the

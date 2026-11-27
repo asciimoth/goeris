@@ -85,6 +85,9 @@ func Resolve[T comparable](root T, name string, mode Mode, child func(T, string)
 			// link only if both spellings lead to the same parent.
 			exportFloor = frame.via.floor
 			if len(ancestors) < 2 || ancestors[len(ancestors)-2].value != frame.via.parent {
+				if climbsAbove(frame.path, 0) {
+					return zero, "", stdfs.ErrNotExist
+				}
 				exportFloor = len(ancestors) - 1
 			}
 			pending[last].via = nil
@@ -137,9 +140,6 @@ func Resolve[T comparable](root T, name string, mode Mode, child func(T, string)
 			// Cleaning the rest of this target could erase this directory
 			// link and make the client continue in a different directory.
 			if more {
-				if climbsAbove(rest, 0) {
-					return zero, "", stdfs.ErrNotExist
-				}
 				pending[last].via = &directoryLink{current.value, exportFloor}
 			}
 			if climbsAbove(target, len(ancestors)-1-max(current.root, exportFloor)) {

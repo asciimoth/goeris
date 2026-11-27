@@ -90,6 +90,7 @@ func TestMountedOperations(t *testing.T) {
 		"docs/here":     ".",
 		"docs/via-here": "here/../hello.txt",
 		"round-trip":    "docs/../hello.txt",
+		"alias-trip":    "alias/../hello.txt",
 		"escape":        "../outside",
 		"broken":        "missing",
 		"broken-child":  "hello.txt/child",
@@ -136,7 +137,7 @@ func TestMountedOperations(t *testing.T) {
 	}
 	for name, resolved := range map[string]string{
 		".": ".", "alias": "docs", "docs/readme.txt": "docs/readme.txt",
-		"alias/local": "docs/readme.txt", "round-trip": "hello.txt",
+		"alias/local": "docs/readme.txt", "round-trip": "hello.txt", "alias-trip": "hello.txt",
 	} {
 		got, err := image.ResolvePath(ctx, name)
 		if err != nil || got != filepath.Join(root, resolved) {
@@ -164,7 +165,7 @@ func TestMountedOperations(t *testing.T) {
 			t.Errorf("ResolvePath(%q) = %q, %v", name, path, err)
 		}
 	}
-	for _, name := range []string{"broken", "broken-child", "broken-safe", "safe-chain"} {
+	for _, name := range []string{"broken", "broken-child", "broken-safe", "safe-chain", "alias-trip"} {
 		want := links[name]
 		if target, err := image.ReadLink(ctx, name); err != nil || target != want {
 			t.Errorf("ReadLink(%q) = %q, %v, want %q", name, target, err, want)

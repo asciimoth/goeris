@@ -143,6 +143,52 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	}
 }
 
+// A client that cleans alias/.. and a client that follows the alias must
+// both reach the directory that contains the link.
+func TestReadLinkThroughSiblingDirectoryAlias(t *testing.T) {
+	ctx := t.Context()
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	content := eris.NewBlockCapabilityStore(blocks)
+	payload := []byte("manual")
+	file, err := content.Encode(ctx, payload, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const target = "./alias//../file"
+	// Keep the keys in wire order for the legacy fixture.
+	index := Index{Entries: []Entry{
+		{Path: []string{"file"}, Type: Regular, Capability: file, Size: int64(len(payload))},
+		{Path: []string{"link"}, Type: Symlink, Target: target},
+		{Path: []string{"alias"}, Type: Symlink, Target: "docs"},
+		{Path: []string{"docs", "marker"}, Type: Regular, Capability: file, Size: int64(len(payload))},
+	}}
+	v2, err := EncodeIndex(ctx, index, eris.Secret{}, content, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mount := NewMount(ctx, blocks, eris.BlockOptions{})
+	for _, cap := range []eris.Capability{storeV1Index(t, index, blocks), v2} {
+		parent, err := EncodeIndex(ctx, Index{Entries: []Entry{
+			{Path: []string{"book"}, Type: Subdirectory, Capability: cap},
+		}}, eris.Secret{}, content, eris.BlockOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, root := range []string{"fs/" + cap.String(), "fs/" + parent.String() + "/book"} {
+			view, err := mount.Sub(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := stdfs.ReadLink(view, "link"); err != nil || got != target {
+				t.Errorf("ReadLink = %q, %v", got, err)
+			}
+			if got, err := stdfs.ReadFile(view, "link"); err != nil || string(got) != string(payload) {
+				t.Errorf("ReadFile = %q, %v", got, err)
+			}
+		}
+	}
+}
+
 func TestLegacyLinkConfinedToItsNestedImage(t *testing.T) {
 	ctx := t.Context()
 	sibling, blocks := contextImage(t)
@@ -263,9 +309,48 @@ func linkTestImage(entries ...Entry) *FS {
 	return &FS{root: buildTree(Index{Entries: entries}, nil, ".", DefaultMaxIndexSize), prefix: "."}
 }
 
+func TestCombinedReadLinkThroughOrdinaryDirectories(t *testing.T) {
+	ctx := t.Context()
+	store := NewStore(newTestStore(), eris.BlockOptions{})
+	builder, err := store.NewBuilder(eris.Secret{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.AddFile(ctx, "dir/sub/file", strings.NewReader("ok"), false); err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{
+		"link":         "dir/sub/../../dir/sub/file",
+		"dir/link":     "sub/../../dir/sub/file",
+		"dir/sub/link": "../sub/./../sub/file",
+	}
+	for name, target := range links {
+		if err := builder.AddSymlink(name, target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cap, err := builder.Finish(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := NewCombinedStore(store, store).OpenFS(ctx, cap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range links {
+		if got, err := view.ReadLink(ctx, name); err != nil || got != target {
+			t.Errorf("ReadLink(%q) = %q, %v, want %q", name, got, err, target)
+		}
+		if got, err := view.ReadFile(ctx, name); err != nil || string(got) != "ok" {
+			t.Errorf("ReadFile(%q) = %q, %v", name, got, err)
+		}
+	}
+}
+
 func TestCombinedReadLinkWithDifferentDirectoryTargets(t *testing.T) {
 	ctx := t.Context()
 	first := linkTestImage(
+		Entry{Path: []string{"dir", "marker"}, Type: Regular, Capability: pathTestCapability(t)},
 		Entry{Path: []string{"link"}, Type: Symlink, Target: "dir/../file"},
 		Entry{Path: []string{"sub", "link"}, Type: Symlink, Target: "../file"},
 	)
