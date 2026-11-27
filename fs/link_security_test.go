@@ -245,6 +245,50 @@ func TestCombinedReadLinkWithDifferentDirectoryTargets(t *testing.T) {
 	}
 }
 
+func TestCombinedReadLinkChecksDirectoryAliasesInOtherBackends(t *testing.T) {
+	ctx := t.Context()
+	dir := linkTestImage(Entry{Path: []string{"dir", "up"}, Type: Symlink, Target: ".."})
+	alias := linkTestImage(Entry{Path: []string{"dir"}, Type: Symlink, Target: "."})
+	combine := func(images ...FileSystem) FileSystem {
+		t.Helper()
+		view, err := openImages(ctx, images, func(_ context.Context, image FileSystem) (FileSystem, error) {
+			return image, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return view
+	}
+	for _, view := range []FileSystem{
+		combine(alias, dir),
+		combine(dir, alias),
+		combine(dir, combine(dir, alias)),
+	} {
+		if got, err := view.ReadLink(ctx, "dir/up"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+			t.Errorf("ReadLink through a directory alias in another backend = %q, %v", got, err)
+		}
+	}
+}
+
+func TestCombinedReadLinkChecksUnavailableParent(t *testing.T) {
+	ctx := t.Context()
+	first := linkTestImage(Entry{Path: []string{"nested", "dir", "up"}, Type: Symlink, Target: ".."})
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := NewStore(missingIndexStore{eris.NewBlockCapabilityStore(blocks)}, eris.BlockOptions{})
+	second := &FS{root: buildTree(Index{Entries: []Entry{
+		{Path: []string{"nested"}, Type: Subdirectory, Capability: pathTestCapability(t)},
+	}}, store, ".", DefaultMaxIndexSize), prefix: "."}
+	view, err := openImages(ctx, []*FS{first, second}, func(_ context.Context, image *FS) (FileSystem, error) {
+		return image, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := view.ReadLink(ctx, "nested/dir/up"); got != "" || !errors.Is(err, eris.ErrMissingBlock) {
+		t.Errorf("ReadLink with unavailable parent index = %q, %v", got, err)
+	}
+}
+
 func TestCombinedReadLinkConfinesTargetToSelectedImage(t *testing.T) {
 	ctx := t.Context()
 	first := linkTestImage(Entry{Path: []string{"dir", "link"}, Type: Symlink, Target: "file"})

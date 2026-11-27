@@ -157,13 +157,15 @@ the boundary through another link. Each decoded nested index confines its own
 links. A `Sub` view also checks targets against the directory it exposes.
 Dangling targets must resolve through their last `..` component. A view with
 multiple backends for the same capability rejects `..` after a named component
-because that component can resolve differently during fallback. When a view
-combines independently opened images, `ReadLink` rejects link export because the
-client could resolve the target in a different image. Safe targets keep their
-original spelling. Each target must also stay in the image if a client removes
-dot segments before it follows links. A parent step that would remove a
-directory link from the target is rejected. If the lookup path contains a
-directory alias, the target can climb past that alias only when the alias and
+because that component can resolve differently during fallback. For a target
+with leading parent steps, the view also checks the directories that contain the
+link. A directory alias in any backend can change where a parent step leads.
+When a view combines independently opened images, `ReadLink` rejects link export
+because the client could resolve the target in a different image. Safe targets
+keep their original spelling. Each target must also stay in the image if a
+client removes dot segments before it follows links. A parent step that would
+remove a directory link from the target is rejected. If the lookup path contains
+a directory alias, the target can climb past that alias only when the alias and
 its destination have the same parent. Targets with native device names, a
 backslash, a colon, a NUL byte, or a name ending in a dot or space are rejected
 because a native client can interpret them as a different path. The dot segments

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	stdfs "io/fs"
+	"path"
 	"reflect"
 	"slices"
 	"strings"
@@ -239,8 +240,9 @@ func (s *CombinedFileSystem) ReadLink(ctx context.Context, name string) (string,
 	}
 	// An adapter resolves each component in a separate lookup. After a
 	// named component, another backend could supply a link to the root.
-	// Only leading parent steps have a guaranteed depth in a combined view.
+	// Leading parent steps also depend on how the client reached this link.
 	depth := strings.Count(name, "/")
+	usesParent := false
 	for part := range strings.SplitSeq(target, "/") {
 		switch part {
 		case "", ".":
@@ -249,11 +251,65 @@ func (s *CombinedFileSystem) ReadLink(ctx context.Context, name string) (string,
 				return "", pathError("readlink", name, stdfs.ErrNotExist)
 			}
 			depth--
+			usesParent = true
 		default:
 			depth = 0
 		}
 	}
+	if usesParent {
+		if err := s.checkLinkParents(ctx, name); err != nil {
+			return "", pathError("readlink", name, err)
+		}
+	}
 	return target, nil
+}
+
+// A client can get a directory alias from one backend and its child's link
+// from another. The depth of the link in either backend alone is insufficient.
+// Check each prefix from the root so Lstat never follows an unchecked alias.
+func (s *CombinedFileSystem) checkLinkParents(ctx context.Context, name string) error {
+	for _, open := range s.images {
+		image, err := open(ctx)
+		if err != nil {
+			return err
+		}
+		if combined, ok := image.(*CombinedFileSystem); ok {
+			// Lstat on a chain only reports the first successful lookup.
+			if err := combined.checkLinkParents(ctx, name); err != nil {
+				return err
+			}
+			continue
+		}
+		for i := range name {
+			if name[i] != '/' {
+				continue
+			}
+			prefix := name[:i]
+			info, err := image.Lstat(ctx, prefix)
+			if errors.Is(err, stdfs.ErrNotExist) {
+				// A missing index can also report ErrNotExist. Only skip
+				// this backend if its parent directory confirms absence.
+				entries, listErr := image.ReadDir(ctx, path.Dir(prefix))
+				if listErr != nil {
+					return listErr
+				}
+				base := path.Base(prefix)
+				if !slices.ContainsFunc(entries, func(e stdfs.DirEntry) bool { return e.Name() == base }) {
+					break
+				}
+			}
+			if err != nil {
+				return err
+			}
+			if info.Mode()&stdfs.ModeSymlink != 0 {
+				return stdfs.ErrNotExist
+			}
+			if !info.IsDir() {
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func (s *CombinedFileSystem) ResolvePath(ctx context.Context, name string) (string, error) {
