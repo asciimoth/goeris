@@ -1,16 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
-	"io"
 	"os"
-	"strings"
 
 	"github.com/asciimoth/goeris/auto"
+	"github.com/asciimoth/zpgo"
 )
 
-func dump(w io.Writer, setup auto.DefaultSetup) error {
-	var out strings.Builder
+func dump(progress *zpgo.Progress, setup auto.DefaultSetup) error {
+	var out bytes.Buffer
 	out.WriteString("Environment\n")
 	for _, key := range []string{
 		"ERIS_BLOCK_PATH",
@@ -45,6 +45,6 @@ func dump(w io.Writer, setup auto.DefaultSetup) error {
 	}
 	_, _ = fmt.Fprintf(&out, "    Mount roots %q\n", setup.ImageMountRoots)
 
-	_, err := io.WriteString(w, out.String())
+	_, err := progress.WriteStdout(out.Bytes())
 	return err
 }

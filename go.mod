@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/asciimoth/coaperation v0.1.0
-	github.com/asciimoth/zpgo v0.2.0
+	github.com/asciimoth/zpgo v0.3.0
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0

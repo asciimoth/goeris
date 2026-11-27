@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func TestRun(t *testing.T) {
 		{"help command", []string{"help"}, 0, usage, ""},
 		{"help for dump", []string{"dump", "--help"}, 0, usage, ""},
 		{"unknown option", []string{"--unknown"}, 2, usage, "goeris: unknown command \"--unknown\"\n"},
-		{"unknown command", []string{"unknown"}, 2, usage, "goeris: unknown command \"unknown\"\n"},
+		{"unknown command", []string{"wrongcmd"}, 2, usage, "goeris: unknown command \"wrongcmd\"\n"},
 		{"extra dump argument", []string{"dump", "file name"}, 2, usage, "goeris: dump: unexpected arguments: [\"file name\"]\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -30,12 +31,12 @@ func TestRun(t *testing.T) {
 			} else {
 				t.Setenv("ERIS_BLOCK_PATH", filepath.Join(t.TempDir(), "missing"))
 			}
-			var stdout, stderr strings.Builder
-			if code := run(tc.args, &stdout, &stderr); code != tc.code {
+			stdout, stderr := captureOutput(t)
+			if code := run(tc.args); code != tc.code {
 				t.Fatalf("exit code = %d, want %d", code, tc.code)
 			}
-			if stdout.String() != tc.stdout || stderr.String() != tc.stderr {
-				t.Errorf("stdout = %q, stderr = %q", &stdout, &stderr)
+			if out, errout := readOutput(t, stdout), readOutput(t, stderr); out != tc.stdout || errout != tc.stderr {
+				t.Errorf("stdout = %q, stderr = %q", out, errout)
 			}
 		})
 	}
@@ -50,14 +51,16 @@ func TestDump(t *testing.T) {
 	t.Setenv("ERIS_MNT", "capability mount")
 	t.Setenv("ERIS_FS_MNT", "")
 
-	var stdout, stderr strings.Builder
-	if code := run([]string{"dump"}, &stdout, &stderr); code != 0 || stderr.Len() != 0 {
-		t.Fatalf("dump exit code = %d, stderr = %q", code, stderr.String())
+	stdout, stderr := captureOutput(t)
+	code := run([]string{"dump"})
+	if errout := readOutput(t, stderr); code != 0 || errout != "" {
+		t.Fatalf("dump exit code = %d, stderr = %q", code, errout)
 	}
 
-	env, setup, ok := strings.Cut(stdout.String(), "\nStorage lookup order\n")
+	out := readOutput(t, stdout)
+	env, setup, ok := strings.Cut(out, "\nStorage lookup order\n")
 	if !ok {
-		t.Fatalf("dump output missing storage setup: %q", stdout.String())
+		t.Fatalf("dump output missing storage setup: %q", out)
 	}
 	for _, line := range []string{
 		fmt.Sprintf("  ERIS_BLOCK_PATH=%q\n", pathList),
@@ -86,11 +89,66 @@ func TestRunSetupFailure(t *testing.T) {
 	t.Setenv("ERIS_BLOCK_PATH", ";")
 	for _, command := range []string{"dump", "unknown"} {
 		t.Run(command, func(t *testing.T) {
-			var stdout, stderr strings.Builder
-			code := run([]string{command}, &stdout, &stderr)
-			if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "open block volumes") {
-				t.Errorf("exit code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
+			stdout, stderr := captureOutput(t)
+			code := run([]string{command})
+			out, errout := readOutput(t, stdout), readOutput(t, stderr)
+			if code != 1 || out != "" || !strings.Contains(errout, "open block volumes") {
+				t.Errorf("exit code = %d, stdout = %q, stderr = %q", code, out, errout)
 			}
 		})
 	}
+}
+
+func TestRunOutputFailure(t *testing.T) {
+	t.Setenv("ERIS_BLOCK_PATH", t.TempDir())
+	for _, tc := range []struct {
+		command string
+		message string
+	}{
+		{"help", "goeris: write help: "},
+		{"dump", "goeris: dump: "},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			stdout, stderr := captureOutput(t)
+			if err := stdout.Close(); err != nil {
+				t.Fatal(err)
+			}
+			code := run([]string{tc.command})
+			if errout := readOutput(t, stderr); code != 1 || !strings.HasPrefix(errout, tc.message) {
+				t.Errorf("exit code = %d, stderr = %q", code, errout)
+			}
+		})
+	}
+}
+
+// captureOutput replaces the process streams for a serial test of run.
+func captureOutput(t *testing.T) (stdout, stderr *os.File) {
+	t.Helper()
+	t.Setenv("ZIG_PROGRESS", "")
+	dir := t.TempDir()
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	stdout = createOutputFile(t, filepath.Join(dir, "stdout"))
+	stderr = createOutputFile(t, filepath.Join(dir, "stderr"))
+	os.Stdout, os.Stderr = stdout, stderr
+	t.Cleanup(func() { os.Stdout, os.Stderr = oldStdout, oldStderr })
+	return stdout, stderr
+}
+
+func createOutputFile(t *testing.T, path string) *os.File {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	return f
+}
+
+func readOutput(t *testing.T, f *os.File) string {
+	t.Helper()
+	data, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
