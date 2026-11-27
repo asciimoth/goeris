@@ -67,6 +67,20 @@ func TestCombinedStore(t *testing.T) {
 	if err := limited.Prefetch(ctx, "."); err != nil {
 		t.Fatal(err)
 	}
+	wrapped := struct{ ImageStore }{content}
+	for _, stores := range []*CombinedStore{
+		chain,
+		NewCombinedStore(content, NewCombinedStore(host, content)),
+		NewCombinedStore(wrapped, NewCombinedStore(host, host), content),
+	} {
+		mount, err := NewMountWithStoreAndLimit(ctx, stores, nil, DefaultMaxIndexSize, eris.BlockOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := mount.ReadLink("fs/" + cap.String() + "/dir/parent"); err != nil || got != ".." {
+			t.Errorf("ReadLink within size-limited image = %q, %v", got, err)
+		}
+	}
 
 	root := makePathTestTree(t, mountDir, cap)
 	if err := os.Mkdir(filepath.Join(root, "dir"), 0700); err != nil {
@@ -496,7 +510,7 @@ func TestCombinedImageUsesOperationContext(t *testing.T) {
 	openCtx, expire := context.WithCancel(t.Context())
 	defer expire()
 	var calls []string
-	view, err := openImages(openCtx, []string{"first", "second"}, false, func(ctx context.Context, backend string) (FileSystem, error) {
+	view, err := openImages(openCtx, []string{"first", "second"}, nil, func(ctx context.Context, backend string) (FileSystem, error) {
 		calls = append(calls, "open "+backend)
 		if err := ctx.Err(); err != nil {
 			return nil, err

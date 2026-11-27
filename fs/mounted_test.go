@@ -236,6 +236,50 @@ func TestMountedOperations(t *testing.T) {
 
 // The mount supplies the same directory metadata for an implicit directory
 // and a nested image. Check all operations that could follow a nested link.
+func TestCombinedReadLinkInSameMountedDirectory(t *testing.T) {
+	ctx := t.Context()
+	cap := pathTestCapability(t)
+	mount := t.TempDir()
+	root := makePathTestTree(t, mount, cap)
+	for name, target := range map[string]string{
+		"alias": "docs", "docs/latest": "./readme.txt", "docs/parent": "..",
+	} {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Skipf("cannot create a symlink: %v", err)
+		}
+	}
+	open := func(mount, dir string) FileSystem {
+		t.Helper()
+		image, err := NewMountStore(mount).OpenFS(ctx, cap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sub, err := image.Sub(ctx, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sub
+	}
+	docs := open(mount, "docs")
+	view := NewCombinedFileSystem(docs, NewCombinedFileSystem(open(mount, "alias")))
+	if got, err := view.ReadLink(ctx, "latest"); err != nil || got != "./readme.txt" {
+		t.Fatalf("ReadLink in shared directory = %q, %v", got, err)
+	}
+	if got, err := view.ReadFile(ctx, "latest"); err != nil || string(got) != "ERIS-FS example\n" {
+		t.Fatalf("ReadFile in shared directory = %q, %v", got, err)
+	}
+	if got, err := view.ReadLink(ctx, "parent"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ReadLink above shared directory = %q, %v", got, err)
+	}
+	otherMount := t.TempDir()
+	makePathTestTree(t, otherMount, cap)
+	for _, other := range []FileSystem{open(mount, "."), open(otherMount, "docs")} {
+		if got, err := NewCombinedFileSystem(view, other).ReadLink(ctx, "latest"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+			t.Errorf("ReadLink across distinct mounted directories = %q, %v", got, err)
+		}
+	}
+}
+
 func TestMountedNestedImageBoundary(t *testing.T) {
 	ctx := t.Context()
 	cap := pathTestCapability(t)

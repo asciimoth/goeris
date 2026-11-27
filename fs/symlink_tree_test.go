@@ -11,7 +11,8 @@ import (
 )
 
 // Each level has a file f with distinct content, a link l with the supplied
-// target, a side branch b/l -> ../f, and a directory alias a -> d.
+// target, a side branch b/l -> ../f, and directory aliases a -> d and
+// stable -> ./d//d/. The latter changes the depth of the lookup path.
 // Bit i puts the next directory in a separate index. Without that bit, d
 // is an implicit directory in this index.
 func symlinkTree(t *testing.T, targets []string, boundaries, legacy uint8) (*FS, *Mount, string) {
@@ -29,7 +30,6 @@ func symlinkTree(t *testing.T, targets []string, boundaries, legacy uint8) (*FS,
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Emit paths in CBOR key order for the legacy writer.
 			index.Entries = append(index.Entries, Entry{Path: strings.Split(dir+"a", "/"), Type: Symlink, Target: "d"})
 			nested := level+1 < len(targets) && boundaries&(1<<level) != 0
 			if nested {
@@ -39,6 +39,7 @@ func symlinkTree(t *testing.T, targets []string, boundaries, legacy uint8) (*FS,
 				Entry{Path: strings.Split(dir+"f", "/"), Type: Regular, Capability: file, Size: int64(len(payload))},
 				Entry{Path: strings.Split(dir+"l", "/"), Type: Symlink, Target: targets[level]},
 				Entry{Path: strings.Split(dir+"b/l", "/"), Type: Symlink, Target: "../f"},
+				Entry{Path: strings.Split(dir+"stable", "/"), Type: Symlink, Target: "./d//d/"},
 			)
 			if nested {
 				break
@@ -100,6 +101,9 @@ func TestSymlinkTreeReads(t *testing.T) {
 		{"sibling beyond boundary", []string{"f", "../b/l"}, 1, "d/l", 0, missing, "", missing},
 		{"read through alias with different parent", []string{"d/d", "../l/../f", "f"}, 0, "d/l", 1, nil, "", missing},
 		{"directory alias in target", []string{"./a//../d/f", "f"}, 0, "l", 1, nil, "./a//../d/f", nil},
+		{"parent within deep alias", []string{"stable/b/l", "f", "f"}, 3, "l", 2, nil, "stable/b/l", nil},
+		{"parent at deep alias root", []string{"f", "f", "f"}, 3, "stable/b/l", 2, nil, "../f", nil},
+		{"return through two nested aliases", []string{"a/a//../../b/l", "f", "f"}, 3, "l", 0, nil, "a/a//../../b/l", nil},
 		{"repeated nested alias at limit", []string{atLimit, "f"}, 1, "l", 0, nil, atLimit, nil},
 		{"repeated nested alias over limit", []string{"a/../" + atLimit, "f"}, 1, "l", 0, invalid, "", invalid},
 		{"dangling chain", []string{"a/l", "missing"}, 1, "l", 0, missing, "a/l", nil},
@@ -126,7 +130,7 @@ func TestSymlinkTreeReads(t *testing.T) {
 	}
 }
 
-// The graph has at most eight levels. Each edge visits at most two extra
+// The graph has at most eight levels. Each edge visits at most three extra
 // links, so only a cycle can exhaust the resolver's 40-link limit.
 // The two errors describe the file read and the export of the target text.
 // A missing file can still have a safe, readable link.
@@ -156,15 +160,20 @@ func expectedTreeRead(targets []string, boundaries uint8, level int) (int, error
 			if target != "../l" {
 				return level, nil, nil
 			}
-		case "a//../f", "d/d/../../f":
+		case "a//../f", "d/d/../../f", "a/a//../../b/l":
 			required := 1
-			if target == "d/d/../../f" {
+			if target != "a//../f" {
 				required = 2
 			}
 			if level+required >= len(targets) {
 				return 0, stdfs.ErrNotExist, stdfs.ErrNotExist
 			}
 			return level, nil, nil
+		case "stable/b/l":
+			if level+2 >= len(targets) {
+				return 0, stdfs.ErrNotExist, nil
+			}
+			return level + 2, nil, nil
 		case "missing", "f/child":
 			return 0, stdfs.ErrNotExist, nil
 		case "/f":
@@ -181,7 +190,7 @@ func expectedTreeRead(targets []string, boundaries uint8, level int) (int, error
 // Each byte selects the outgoing edge of one link. The expected read follows
 // integer level numbers independently of the image resolver.
 func FuzzSymlinkTreeReads(f *testing.F) {
-	for _, edges := range [][]byte{{0}, {1, 1, 0}, {2, 3, 0}, {1, 4}, {5, 6}, {7, 8}, {9, 10}, {11, 0, 3}, {12, 13}} {
+	for _, edges := range [][]byte{{0}, {1, 1, 0}, {2, 3, 0}, {1, 4}, {5, 6}, {7, 8}, {9, 10}, {11, 0, 3}, {12, 13}, {14, 15, 0}, {15, 14, 0}} {
 		for _, boundaries := range []uint8{0, 1, 0x55, 0xff} {
 			f.Add(edges, boundaries, uint8(0x55))
 		}
@@ -190,7 +199,7 @@ func FuzzSymlinkTreeReads(f *testing.F) {
 		if len(edges) == 0 || len(edges) > 8 {
 			t.Skip()
 		}
-		spellings := [...]string{"./f", "d/l", "a/l", "../f", "../l", "a//../f", "missing", "/f", "f/child", "l", "../../f", "d/d/../../f", "b/l", "../b/l"}
+		spellings := [...]string{"./f", "d/l", "a/l", "../f", "../l", "a//../f", "missing", "/f", "f/child", "l", "../../f", "d/d/../../f", "b/l", "../b/l", "stable/b/l", "a/a//../../b/l"}
 		targets := make([]string, len(edges))
 		for i, edge := range edges {
 			targets[i] = spellings[int(edge)%len(spellings)]

@@ -135,12 +135,15 @@ safe links. In a `Sub` view it also checks the selected directory boundary. When
 all backends decode the same image capability at the same directory, they share
 its link targets and nested index boundaries. The selected decoder checks the
 link. A chain that also uses expanded mounts or other backends checks parent
-steps across those backends before it exports the target. A chain of
-independently opened views can export a link when all views are decoded from the
-same index capability and select the same directory within it. This includes
-views that reach the index at different paths in enclosing images. Missing
-blocks match both `io/fs.ErrNotExist` and `eris.ErrMissingBlock` in errors
-returned by `Mount` methods.
+steps across the backends that can serve the image. An explicit index-size limit
+excludes expanded mounts from this check. A chain of independently opened views
+can export a link when all views are decoded from the same index capability and
+select the same directory within it. This includes views that reach the index at
+different paths in enclosing images. Independently opened views of the same
+immutable host mount can also export links when they select the same capability
+directory and resolved subdirectory. Missing blocks match both
+`io/fs.ErrNotExist` and `eris.ErrMissingBlock` in errors returned by `Mount`
+methods.
 
 For a base32 block hash `H`, the mount also exposes the complete encrypted block
 at `H[:3]/H[3:6]/H[6:9]/H[9:]`, as specified by `volume.BlockPath`, and at the
