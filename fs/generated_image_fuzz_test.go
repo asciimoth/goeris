@@ -345,11 +345,35 @@ func FuzzImageSubtreeLinks(f *testing.F) {
 			t.Fatal(err)
 		}
 		d := tree[int(choice)%len(tree)]
+		// The same directory can also be selected inside an enclosing image.
+		// Combine the two Sub views so ReadLink checks their shared location.
+		wrapper, err := store.EncodeIndex(ctx, Index{Entries: []Entry{
+			{Path: []string{"copy"}, Type: Subdirectory, Capability: cap},
+		}}, eris.Secret{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent, err := store.OpenFS(ctx, wrapper)
+		if err != nil {
+			t.Fatal(err)
+		}
+		embedded, err := parent.Sub(ctx, path.Join("copy", d.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		direct, err := b.Sub(ctx, d.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		views := []stdfs.FS{NewIOFS(ctx, NewCombinedFileSystem(embedded, direct))}
 		for _, root := range []stdfs.FS{base, link.NewIOFS(ctx, overlay)} {
 			view, err := stdfs.Sub(root, d.name)
 			if err != nil {
 				t.Fatalf("Sub(%q): %v", d.name, err)
 			}
+			views = append(views, view)
+		}
+		for _, view := range views {
 			for _, l := range d.links {
 				target, err := stdfs.ReadLink(view, l.name)
 				if l.dest < 0 || !belowFixtureDir(d.name, tree[l.dest].name) {

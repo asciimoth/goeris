@@ -77,6 +77,9 @@ func checkTreeRead(t *testing.T, name string, data []byte, err error, level int,
 
 func TestSymlinkTreeReads(t *testing.T) {
 	missing, invalid := stdfs.ErrNotExist, stdfs.ErrInvalid
+	// Each visit follows a -> d, then returns to the index that owns l.
+	// Include l itself in the 40-link budget.
+	atLimit := strings.Repeat("a//./../", 39) + "f"
 	for _, tc := range []struct {
 		label      string
 		targets    []string
@@ -97,6 +100,8 @@ func TestSymlinkTreeReads(t *testing.T) {
 		{"sibling beyond boundary", []string{"f", "../b/l"}, 1, "d/l", 0, missing, "", missing},
 		{"read through alias with different parent", []string{"d/d", "../l/../f", "f"}, 0, "d/l", 1, nil, "", missing},
 		{"directory alias in target", []string{"./a//../d/f", "f"}, 0, "l", 1, nil, "./a//../d/f", nil},
+		{"repeated nested alias at limit", []string{atLimit, "f"}, 1, "l", 0, nil, atLimit, nil},
+		{"repeated nested alias over limit", []string{"a/../" + atLimit, "f"}, 1, "l", 0, invalid, "", invalid},
 		{"dangling chain", []string{"a/l", "missing"}, 1, "l", 0, missing, "a/l", nil},
 		{"file with trailing slash", []string{"f/"}, 0, "l", 0, missing, "f/", nil},
 		{"empty target", []string{""}, 0, "l", 0, missing, "", nil},

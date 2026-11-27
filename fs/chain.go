@@ -57,16 +57,33 @@ type CombinedFileSystem struct {
 
 // The zero location denotes a view whose index or directory is unknown.
 type decodedLocation struct {
-	root eris.Capability
-	dir  string
+	index eris.Capability
+	dir   string // Canonical path relative to this index.
 }
 
 func locationOf(view FileSystem) decodedLocation {
 	switch image := view.(type) {
 	case *FS:
-		if image != nil && image.root != nil && image.root.capability != (eris.Capability{}) {
-			return decodedLocation{image.root.capability, image.prefix}
+		if image == nil || image.root == nil || image.root.capability == (eris.Capability{}) {
+			return decodedLocation{}
 		}
+		dir := image.root
+		location := decodedLocation{dir.capability, image.prefix}
+		// Sub has already resolved each component to an immutable, loaded
+		// directory. Use the innermost index, which can also be opened
+		// directly or included at another path.
+		for rest := image.prefix; rest != "." && rest != ""; {
+			name, tail, _ := strings.Cut(rest, "/")
+			dir = dir.children[name]
+			if dir.kind == Subdirectory {
+				location = decodedLocation{dir.capability, tail}
+				if tail == "" {
+					location.dir = "."
+				}
+			}
+			rest = tail
+		}
+		return location
 	case *CombinedFileSystem:
 		if image != nil {
 			return image.location

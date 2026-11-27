@@ -529,3 +529,62 @@ func TestCombinedReadLinkConfinesTargetToSelectedImage(t *testing.T) {
 		t.Fatalf("sub target lookup = %v", err)
 	}
 }
+
+func TestCombinedReadLinkInReusedIndex(t *testing.T) {
+	ctx := t.Context()
+	blocks := fixtureBlocks()
+	content := eris.NewBlockCapabilityStore(blocks)
+	store := NewStore(content, eris.BlockOptions{})
+	file, err := content.Encode(ctx, []byte("manual"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childIndex := Index{Entries: []Entry{
+		{Path: []string{"docs", "file"}, Type: Regular, Capability: file, Size: 6},
+		{Path: []string{"docs", "current"}, Type: Symlink, Target: "./file"},
+		{Path: []string{"docs", "up"}, Type: Symlink, Target: ".."},
+	}}
+	child := storeV1Index(t, childIndex, blocks)
+	parent, err := store.EncodeIndex(ctx, Index{Entries: []Entry{
+		{Path: []string{"archive", "first"}, Type: Subdirectory, Capability: child},
+		{Path: []string{"latest"}, Type: Subdirectory, Capability: child},
+		{Path: []string{"alias"}, Type: Symlink, Target: "archive/first/docs"},
+	}}, eris.Secret{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer, err := store.OpenFS(ctx, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, err := store.OpenFS(ctx, child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := func(view FileSystem, name string) FileSystem {
+		t.Helper()
+		dir, err := view.Sub(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	roots := NewCombinedFileSystem(sub(outer, "archive/first"), sub(outer, "latest"), inner)
+	if got, err := roots.ReadLink(ctx, "docs/up"); err != nil || got != ".." {
+		t.Errorf("ReadLink from child index = %q, %v", got, err)
+	}
+	docs := NewCombinedFileSystem(sub(outer, "alias"), sub(sub(outer, "latest"), "docs"), sub(inner, "docs"))
+	if got, err := docs.ReadLink(ctx, "current"); err != nil || got != "./file" {
+		t.Errorf("ReadLink in docs = %q, %v", got, err)
+	}
+	if data, err := docs.ReadFile(ctx, "current"); err != nil || string(data) != "manual" {
+		t.Errorf("ReadFile in docs = %q, %v", data, err)
+	}
+	if got, err := docs.ReadLink(ctx, "up"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ReadLink above docs = %q, %v", got, err)
+	}
+	if got, err := NewCombinedFileSystem(docs, inner).ReadLink(ctx, "current"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ReadLink from different directories = %q, %v", got, err)
+	}
+}
