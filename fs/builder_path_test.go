@@ -44,3 +44,37 @@ func BenchmarkBuilderDeepPath(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkBuilderSharedPrefix(b *testing.B) {
+	names := make([]string, 64)
+	prefix := strings.Repeat("dir/", 64)
+	for i := range names {
+		names[i] = prefix + fmt.Sprint(i)
+	}
+	for b.Loop() {
+		builder := NewBuilder(newTestStore(), eris.Secret{}, eris.BlockOptions{})
+		for _, name := range names {
+			if err := builder.AddSymlink(name, "target"); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestBuilderCheckPathDoesNotReserve(t *testing.T) {
+	builder := NewBuilder(newTestStore(), eris.Secret{}, eris.BlockOptions{})
+	for _, name := range []string{"shared/a", "shared/b/c", "shared/b/d"} {
+		if err := builder.CheckPath(name + "/child"); err != nil {
+			t.Fatal(err)
+		}
+		if err := builder.CheckPath(name); err != nil {
+			t.Fatal(err)
+		}
+		if err := builder.AddSymlink(name, "target"); err != nil {
+			t.Fatal(err)
+		}
+		if err := builder.CheckPath(name); !errors.Is(err, ErrPathConflict) {
+			t.Fatalf("CheckPath(%q) after add = %v", name, err)
+		}
+	}
+}

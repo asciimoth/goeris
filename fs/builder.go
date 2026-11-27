@@ -58,7 +58,8 @@ func (builder *Builder) CheckPath(path string) error {
 	if err != nil {
 		return err
 	}
-	return builder.checkPath(components)
+	_, _, err = builder.insertionPoint(components)
+	return err
 }
 
 // AddFile reads and encodes one regular file with the recommended block size.
@@ -73,7 +74,7 @@ func (builder *Builder) AddFile(ctx context.Context, path string, content io.Rea
 	if err != nil {
 		return err
 	}
-	if err = builder.checkPath(components); err != nil {
+	if _, _, err = builder.insertionPoint(components); err != nil {
 		return err
 	}
 	counted := &countReader{reader: content}
@@ -204,40 +205,38 @@ func (builder *Builder) add(entry Entry) error {
 	if err := validateEntry(entry); err != nil {
 		return err
 	}
-	if err := builder.checkPath(entry.Path); err != nil {
+	parent, suffix, err := builder.insertionPoint(entry.Path)
+	if err != nil {
 		return err
 	}
 	builder.entries = append(builder.entries, entry)
-	builder.recordPath(entry.Path)
+	parent.addSuffix(suffix)
 	return nil
 }
 
-func (builder *Builder) checkPath(components []string) error {
+// insertionPoint returns the existing parent and the missing path components.
+func (builder *Builder) insertionPoint(components []string) (*builderPath, []string, error) {
 	current := &builder.paths
-	for _, component := range components {
+	for i, component := range components {
 		if current.entry {
-			return ErrPathConflict
+			return nil, nil, ErrPathConflict
 		}
-		current = current.children[component]
-		if current == nil {
-			return nil
+		next := current.children[component]
+		if next == nil {
+			return current, components[i:], nil
 		}
+		current = next
 	}
-	// This path is already an entry or a parent of an existing entry.
-	return ErrPathConflict
+	return nil, nil, ErrPathConflict
 }
 
-func (builder *Builder) recordPath(components []string) {
-	current := &builder.paths
+func (current *builderPath) addSuffix(components []string) {
 	for _, component := range components {
 		if current.children == nil {
 			current.children = make(map[string]*builderPath)
 		}
-		next := current.children[component]
-		if next == nil {
-			next = &builderPath{}
-			current.children[component] = next
-		}
+		next := &builderPath{}
+		current.children[component] = next
 		current = next
 	}
 	current.entry = true

@@ -401,8 +401,15 @@ func (dir *node) sortedChildren() []*node {
 
 func bindDirEntries(ctx context.Context, children []*node) []stdfs.DirEntry {
 	entries := make([]stdfs.DirEntry, len(children))
-	for i, child := range children {
-		entries[i] = dirEntry{node: child, ctx: ctx}
+	// Keep allocation count low for large listings. Bound each batch so
+	// retaining one DirEntry only keeps a small group of wrappers alive.
+	for start := 0; start < len(children); {
+		batch := make([]dirEntry, min(16, len(children)-start))
+		for i := range batch {
+			batch[i] = dirEntry{node: children[start+i], ctx: ctx}
+			entries[start+i] = &batch[i]
+		}
+		start += len(batch)
 	}
 	return entries
 }

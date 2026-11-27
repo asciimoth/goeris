@@ -3,7 +3,9 @@ package fs
 import (
 	"context"
 	"errors"
+	"io"
 	stdfs "io/fs"
+	"slices"
 	"testing"
 )
 
@@ -40,5 +42,44 @@ func TestDirectoryListingContextAndOwnership(t *testing.T) {
 	}
 	if _, err := page[0].Info(); err != nil {
 		t.Fatalf("page.Info() = %v", err)
+	}
+}
+
+func TestPagedListingRetainedEntries(t *testing.T) {
+	image := &FS{root: buildTree(wideIndex(), nil, ".", DefaultMaxIndexSize), prefix: "."}
+	file, err := image.Open(t.Context(), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []stdfs.DirEntry
+	for {
+		page, err := file.(stdfs.ReadDirFile).ReadDir(73)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) == 0 || len(page) > 73 {
+			t.Fatalf("invalid page size %d", len(page))
+		}
+		entries = append(entries, page...)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, entry := range wideIndex().Entries {
+		want = append(want, entry.Path[0])
+	}
+	slices.Sort(want)
+	if len(entries) != len(want) {
+		t.Fatalf("got %d entries, want %d", len(entries), len(want))
+	}
+	for i, entry := range entries {
+		info, err := entry.Info()
+		if err != nil || info.Name() != want[i] || entry.Name() != want[i] {
+			t.Fatalf("entry %d = %v, %v, want %q", i, entry, err, want[i])
+		}
 	}
 }
