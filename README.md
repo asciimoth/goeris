@@ -886,10 +886,15 @@ decoding rejects all 12 negative vectors.
 
 `Store.OpenFS` and `Store.DecodeIndex` limit each decoded index to 64 MiB. Use
 `Store.OpenFSWithLimit` or `Store.DecodeIndexWithLimit` to select another
-application limit. File sizes in v2 indexes are untrusted metadata until the
-content is read. `ReadFile` grows its buffer from the bytes read, rather than
-the declared size. It still reads the whole file into memory. Use `Open` with
-`io.LimitReader` when file content also needs an application size limit.
+application limit. This limit applies to index bytes. File contents are stored
+separately. The builder retains entry metadata in memory and streams the
+contents. A store such as `volume.Volume` can keep the encrypted blocks on disk.
+
+File sizes in v2 indexes are untrusted metadata until the content is read.
+`ReadFile` reads the whole file into memory and grows its buffer from the bytes
+read. For large files, use `Open` and `io.Copy` to stream the contents, or
+`OpenFile` for random access to uncompressed files. Use `io.LimitReader` when
+the output needs an application size limit.
 
 Callers that need stronger resistance to confirmation attacks must generate a
 cryptographically secure, unique `eris.Secret` outside this package. ERIS does
@@ -899,6 +904,14 @@ Run the complete checks with:
 
 ```sh
 just check
+```
+
+The optional multi-GiB ERIS-FS test checks the default uncompressed profile. It
+builds and reads 100,000 files plus one file larger than 2 GiB. Allow about 6
+GiB of free space in the temporary directory.
+
+```sh
+GOERIS_LARGE_IMAGE_TEST=1 go test ./fetch -run '^TestMultiGiBTreeDefaultEncoding$' -count=1 -v -timeout=60m
 ```
 
 Go 1.26.10 can report a false `context deadline exceeded` failure when a timed

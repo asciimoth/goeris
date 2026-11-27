@@ -236,9 +236,11 @@ func ParseReferenceURN(urn string) (Reference, error) {
 	return ParseReference(urn[len(ReferenceURNPrefix):])
 }
 
+const recommendedBlockSizeThreshold = 16 << 10
+
 // ChooseBlockSize returns the block size recommended by the specification.
 func ChooseBlockSize(contentLength int) BlockSize {
-	if contentLength < 1<<14 {
+	if contentLength < recommendedBlockSizeThreshold {
 		return BlockSize1KiB
 	}
 	return BlockSize32KiB

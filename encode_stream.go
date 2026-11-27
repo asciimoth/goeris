@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"sync"
 
 	"github.com/asciimoth/goeris/internal/batch"
 	"github.com/asciimoth/goeris/internal/streamio"
 )
+
+var recommendedPrefixPool = sync.Pool{
+	New: func() any { return new([recommendedBlockSizeThreshold]byte) },
+}
 
 // encodeContent reads content, encodes it with ERIS, and writes each encrypted
 // block to sink. It keeps at most 64 encrypted blocks (2 MiB) and a bounded
@@ -38,12 +43,13 @@ func encodeContent(ctx context.Context, content io.Reader, secret Secret, sink B
 		options: options.BlockOptions, preserveRoot: options.PreserveRoot,
 		batchSize: batch.Limit(sink.BatchSize()),
 	}
+	// putNode allocates separate encrypted blocks for pending writes.
+	node := make([]byte, int(blockSize))
 	ended := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return Capability{}, err
 		}
-		node := make([]byte, int(blockSize))
 		n := 0
 		if !ended {
 			var err error
@@ -55,6 +61,7 @@ func encodeContent(ctx context.Context, content io.Reader, secret Secret, sink B
 		}
 		if n < len(node) {
 			node[n] = 0x80
+			clear(node[n+1:])
 		}
 		encoder.ended = ended && n < len(node)
 		writeOptions := encoder.options
@@ -87,8 +94,13 @@ func encodeContentRecommended(ctx context.Context, content io.Reader, secret Sec
 	if err := ctx.Err(); err != nil {
 		return Capability{}, err
 	}
-	prefix := make([]byte, 1<<14)
-	n, err := streamio.ReadFull(ctx, content, prefix)
+	prefix := recommendedPrefixPool.Get().(*[recommendedBlockSizeThreshold]byte)
+	defer func() {
+		// The next stream's reader can inspect the entire buffer.
+		clear(prefix[:])
+		recommendedPrefixPool.Put(prefix)
+	}()
+	n, err := streamio.ReadFull(ctx, content, prefix[:])
 	var input io.Reader = bytes.NewReader(prefix[:n])
 	switch err {
 	case nil:
