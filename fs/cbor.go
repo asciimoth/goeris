@@ -23,24 +23,49 @@ func HasIndexHeader(data []byte) bool {
 // MarshalBinary returns the version 2 representation in RFC 8949 section
 // 4.2.1 bytewise map order. Files with an unknown size return ErrUnknownSize.
 func (index Index) MarshalBinary() ([]byte, error) {
-	if err := index.Validate(); err != nil {
-		return nil, err
-	}
 	entries := make([]*Entry, len(index.Entries))
-	// Reserve space for the fields present in every record and for each
-	// capability payload. Long paths and targets can grow the buffer.
-	capacity := len(MagicPrefix) + 3 + 6*len(entries)
+	uniformDepth := true
+	unknownSize := false
+	// Estimate with one-byte path and size headers. Larger CBOR headers
+	// can still grow the buffer.
+	capacity := len(MagicPrefix) + 2 + 9 // Outer array, version, and largest map header.
 	for i := range entries {
 		entry := &index.Entries[i]
-		if entry.Size < 0 {
-			return nil, ErrUnknownSize
+		if err := validateEntry(*entry); err != nil {
+			return nil, err
 		}
-		if entry.Type != Symlink {
-			capacity += eris.CapabilitySize
+		uniformDepth = uniformDepth && len(entry.Path) == len(index.Entries[0].Path)
+		unknownSize = unknownSize || entry.Size < 0
+		for _, component := range entry.Path {
+			capacity += 1 + len(component)
+		}
+		if entry.Type == Symlink {
+			capacity += 5 + len(entry.Target)
+		} else {
+			capacity += 9 + eris.CapabilitySize
 		}
 		entries[i] = entry
 	}
 	slices.SortFunc(entries, func(a, b *Entry) int { return compareWirePaths(a.Path, b.Path) })
+	if uniformDepth {
+		// At equal depth only identical paths conflict. Wire order puts them together.
+		for i := 1; i < len(entries); i++ {
+			if slices.Equal(entries[i-1].Path, entries[i].Path) {
+				return nil, ErrPathConflict
+			}
+		}
+	} else {
+		paths := make([][]string, len(entries))
+		for i := range index.Entries {
+			paths[i] = index.Entries[i].Path
+		}
+		if err := checkPathConflicts(paths); err != nil {
+			return nil, err
+		}
+	}
+	if unknownSize {
+		return nil, ErrUnknownSize
+	}
 	out := append(make([]byte, 0, capacity), MagicPrefix...)
 	out = cborwire.AppendHead(out, 4, 2)
 	out = cborwire.AppendHead(out, 0, SpecificationVersion)

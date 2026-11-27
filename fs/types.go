@@ -117,6 +117,10 @@ func (index Index) Validate() error {
 		}
 		paths[i] = entry.Path
 	}
+	return checkPathConflicts(paths)
+}
+
+func checkPathConflicts(paths [][]string) error {
 	slices.SortFunc(paths, slices.Compare[[]string])
 	for i := 1; i < len(paths); i++ {
 		previous, current := paths[i-1], paths[i]

@@ -116,3 +116,26 @@ func TestMarshalPathLengthBoundaries(t *testing.T) {
 		t.Fatal("unexpected path order or data")
 	}
 }
+
+func TestMarshalValidationOrder(t *testing.T) {
+	unknown := Entry{Path: []string{"dir", "a"}, Capability: eris.Capability{BlockSize: eris.BlockSize1KiB}, Size: -1}
+	sibling := Entry{Path: []string{"dir", "b"}, Type: Symlink}
+	parent := Entry{Path: []string{"dir"}, Type: Symlink}
+	for _, tc := range []struct {
+		name    string
+		entries []Entry
+		want    error
+	}{
+		{"unknown size", []Entry{sibling, unknown}, ErrUnknownSize},
+		{"equal depth duplicate", []Entry{unknown, sibling, unknown}, ErrPathConflict},
+		{"ancestor", []Entry{sibling, unknown, parent}, ErrPathConflict},
+		{"invalid entry before conflict", []Entry{unknown, unknown, {Path: []string{"bad"}, Type: 255}}, ErrInvalidEntry},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := (Index{Entries: tc.entries}).MarshalBinary()
+			if data != nil || err != tc.want {
+				t.Fatalf("MarshalBinary returned %x, %v; want nil, %v", data, err, tc.want)
+			}
+		})
+	}
+}
