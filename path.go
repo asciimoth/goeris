@@ -3,13 +3,12 @@ package eris
 import (
 	"errors"
 	"io/fs"
-	"os"
 
 	"github.com/asciimoth/goeris/internal/streamio"
 )
 
 func resolveMountPath(capability Capability, mount string, stat func(string) (fs.FileInfo, error)) (string, error) {
-	return findMountEntry(capability, mountRoots(mount), func(path string) (string, error) {
+	return findMountEntry(capability, streamio.MountRoots(mount), func(path string) (string, error) {
 		return path, checkMountFile(path, stat)
 	})
 }
@@ -23,16 +22,6 @@ func checkMountFile(path string, stat func(string) (fs.FileInfo, error)) error {
 		return &fs.PathError{Op: "stat", Path: path, Err: fs.ErrInvalid}
 	}
 	return nil
-}
-
-func mountRoots(mount string) []string {
-	if mount == "" {
-		mount = os.Getenv("ERIS_MNT")
-	}
-	if mount != "" {
-		return []string{mount}
-	}
-	return streamio.DefaultMountRoots()
 }
 
 // Check each candidate through the requested operation. A file can disappear

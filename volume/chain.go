@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/asciimoth/goeris"
@@ -30,6 +31,7 @@ var ErrInvalidChain = errors.New("eris-volume: invalid chain path list")
 type Chain struct {
 	eris.CombinedBlockStore
 	volumes []*Volume
+	paths   []string
 }
 
 // OpenChain opens a semicolon-separated list of existing volume paths, in order.
@@ -124,6 +126,7 @@ func openChain(paths []string, open func(string) (*Volume, error)) (*Chain, erro
 			continue
 		}
 		chain.volumes = append(chain.volumes, v)
+		chain.paths = append(chain.paths, name)
 		stores = append(stores, v)
 	}
 	chain.CombinedBlockStore = *eris.NewCombinedBlockStore(stores...)
@@ -132,6 +135,9 @@ func openChain(paths []string, open func(string) (*Volume, error)) (*Chain, erro
 
 // Len returns the number of volumes in the chain.
 func (chain *Chain) Len() int { return len(chain.volumes) }
+
+// Paths returns a copy of the paths that opened successfully, in chain order.
+func (chain *Chain) Paths() []string { return slices.Clone(chain.paths) }
 
 // Close closes every volume in the chain, even if an earlier close
 // fails. It joins any close errors. Closing an empty chain succeeds.

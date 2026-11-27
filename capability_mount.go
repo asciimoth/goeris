@@ -152,7 +152,7 @@ func (s *mountCapabilityStore) NewReaderWithSize(ctx context.Context, capability
 }
 
 func (s *mountCapabilityStore) NewReaderWithLimit(ctx context.Context, capability Capability, limit int64, ttl TTL, options BlockOptions) (CapabilityReader, error) {
-	r, err := openMountReader(ctx, capability, mountRoots(s.root), os.OpenFile)
+	r, err := openMountReader(ctx, capability, streamio.MountRoots(s.root), os.OpenFile)
 	if err != nil {
 		return nil, err
 	}

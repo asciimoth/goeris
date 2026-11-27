@@ -11,6 +11,7 @@ import (
 
 	"github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/fs"
+	"github.com/asciimoth/goeris/internal/streamio"
 	"github.com/asciimoth/goeris/volume"
 )
 
@@ -22,7 +23,42 @@ type Stores struct {
 	Capabilities eris.CapabilityStore
 	Images       fs.ImageStore
 
-	volumes *volume.Chain
+	volumes                *volume.Chain
+	capabilitiesFromBlocks bool
+	capabilityMount        bool
+	imagesFromCapabilities bool
+	imageMount             bool
+}
+
+// DefaultSetup describes the default backends in a set of open stores.
+// The mount roots are in lookup order. Each store tries its source chain
+// before its mount roots.
+type DefaultSetup struct {
+	BlockVolumes           []string
+	CapabilitiesFromBlocks bool
+	CapabilityMountRoots   []string
+	ImagesFromCapabilities bool
+	ImageMountRoots        []string
+}
+
+// DefaultSetup reports the backends selected by Open, before any calls to
+// Close. It excludes backends provided through options. Like the mount stores,
+// it checks the mount environment on each call.
+func (s *Stores) DefaultSetup() DefaultSetup {
+	setup := DefaultSetup{
+		CapabilitiesFromBlocks: s.capabilitiesFromBlocks,
+		ImagesFromCapabilities: s.imagesFromCapabilities,
+	}
+	if s.volumes != nil {
+		setup.BlockVolumes = s.volumes.Paths()
+	}
+	if s.capabilityMount {
+		setup.CapabilityMountRoots = streamio.MountRoots("")
+	}
+	if s.imageMount {
+		setup.ImageMountRoots = streamio.ImageMountRoots("")
+	}
+	return setup
 }
 
 // Open assembles the stores in dependency order:
@@ -64,16 +100,20 @@ func Open(options ...Option) (*Stores, error) {
 	var capabilityDefaults []eris.CapabilityStore
 	if source := capabilityBlocks(stores.Blocks, blocks); source != nil {
 		capabilityDefaults = append(capabilityDefaults, blockCapabilities{eris.NewBlockCapabilityStore(source)})
+		stores.capabilitiesFromBlocks = !cfg.capabilities.replaced
 	}
 	capabilityDefaults = append(capabilityDefaults, eris.NewMountCapabilityStore(""))
+	stores.capabilityMount = !cfg.capabilities.replaced
 	capabilities := cfg.capabilities.entries(capabilityDefaults...)
 	stores.Capabilities = eris.NewCombinedCapabilityStore(capabilities...)
 
 	var imageDefaults []fs.ImageStore
 	if slices.ContainsFunc(capabilities, func(store eris.CapabilityStore) bool { return store != nil }) {
 		imageDefaults = append(imageDefaults, fs.NewStore(stores.Capabilities, eris.BlockOptions{}))
+		stores.imagesFromCapabilities = !cfg.images.replaced
 	}
 	imageDefaults = append(imageDefaults, fs.NewMountStore(""))
+	stores.imageMount = !cfg.images.replaced
 	stores.Images = fs.NewCombinedStore(cfg.images.entries(imageDefaults...)...)
 	return stores, nil
 }

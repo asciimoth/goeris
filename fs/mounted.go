@@ -29,20 +29,7 @@ type MountStore struct{ mount string }
 func NewMountStore(path string) *MountStore { return &MountStore{mount: path} }
 
 func (s *MountStore) roots() []string {
-	if s.mount != "" {
-		return []string{s.mount}
-	}
-	if root := os.Getenv("ERIS_FS_MNT"); root != "" {
-		return []string{root}
-	}
-	if root := os.Getenv("ERIS_MNT"); root != "" {
-		return []string{root + string(filepath.Separator) + "fs"}
-	}
-	roots := streamio.DefaultMountRoots()
-	for i, root := range roots {
-		roots[i] = root + string(filepath.Separator) + "fs"
-	}
-	return roots
+	return streamio.ImageMountRoots(s.mount)
 }
 
 // OpenFS opens the tree for the canonical capability URN. With the default

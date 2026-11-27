@@ -6,6 +6,32 @@ import (
 	"strings"
 )
 
+// MountRoots returns the capability mount roots in lookup order.
+func MountRoots(mount string) []string {
+	if mount == "" {
+		mount = os.Getenv("ERIS_MNT")
+	}
+	if mount != "" {
+		return []string{mount}
+	}
+	return DefaultMountRoots()
+}
+
+// ImageMountRoots returns the ERIS-FS mount roots in lookup order.
+func ImageMountRoots(mount string) []string {
+	if mount == "" {
+		mount = os.Getenv("ERIS_FS_MNT")
+	}
+	if mount != "" {
+		return []string{mount}
+	}
+	roots := MountRoots("")
+	for i, root := range roots {
+		roots[i] = root + string(filepath.Separator) + "fs"
+	}
+	return roots
+}
+
 // DefaultMountRoots returns the platform's ERIS mount roots in lookup order.
 func DefaultMountRoots() []string {
 	if filepath.Separator != '\\' {
