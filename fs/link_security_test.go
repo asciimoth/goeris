@@ -219,21 +219,54 @@ func TestReadLinkChecksNestedTarget(t *testing.T) {
 	}
 }
 
+func linkTestImage(entries ...Entry) *FS {
+	return &FS{root: buildTree(Index{Entries: entries}, nil, ".", DefaultMaxIndexSize), prefix: "."}
+}
+
 func TestCombinedReadLinkWithDifferentDirectoryTargets(t *testing.T) {
 	ctx := t.Context()
-	image := func(entries ...Entry) *FS {
-		return &FS{root: buildTree(Index{Entries: entries}, nil, ".", DefaultMaxIndexSize), prefix: "."}
-	}
-	first := image(
+	first := linkTestImage(
 		Entry{Path: []string{"link"}, Type: Symlink, Target: "dir/../file"},
 		Entry{Path: []string{"sub", "link"}, Type: Symlink, Target: "../file"},
 	)
-	second := image(Entry{Path: []string{"dir"}, Type: Symlink, Target: "."})
-	view := NewCombinedFileSystem(first, second)
+	second := linkTestImage(Entry{Path: []string{"dir"}, Type: Symlink, Target: "."})
+	// Stores for the same capability can differ in which entries are available.
+	view, err := openImages(ctx, []*FS{first, second}, func(_ context.Context, image *FS) (FileSystem, error) {
+		return image, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got, err := view.ReadLink(ctx, "link"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
 		t.Errorf("ReadLink across backends = %q, %v", got, err)
 	}
 	if got, err := view.ReadLink(ctx, "sub/link"); got != "../file" || err != nil {
 		t.Errorf("ReadLink within image = %q, %v", got, err)
+	}
+}
+
+func TestCombinedReadLinkConfinesTargetToSelectedImage(t *testing.T) {
+	ctx := t.Context()
+	first := linkTestImage(Entry{Path: []string{"dir", "link"}, Type: Symlink, Target: "file"})
+	second := linkTestImage(Entry{Path: []string{"dir", "file"}, Type: Regular, Capability: pathTestCapability(t)})
+
+	view := NewIOFS(ctx, NewCombinedFileSystem(first, second))
+	if _, err := view.Stat("dir/file"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := view.ReadLink("dir/link"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Fatalf("combined ReadLink = %q, %v", got, err)
+	}
+	// Sub selects one backend for all later lookups, so it can export
+	// that image's dangling link without making the other file reachable.
+	sub, err := view.Sub("dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := stdfs.ReadLink(sub, "link"); err != nil || got != "file" {
+		t.Fatalf("sub ReadLink = %q, %v", got, err)
+	}
+	if _, err := stdfs.Stat(sub, "file"); !errors.Is(err, stdfs.ErrNotExist) {
+		t.Fatalf("sub target lookup = %v", err)
 	}
 }

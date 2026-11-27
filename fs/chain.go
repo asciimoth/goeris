@@ -35,7 +35,11 @@ func NewCombinedStore(stores ...ImageStore) *CombinedStore {
 // CombinedFileSystem tries each complete file operation in order. It returns
 // the first success or the last error. Cancellation stops fallback. Open
 // files and Sub views belong to the selected backend.
-type CombinedFileSystem struct{ images []imageOpener }
+type CombinedFileSystem struct {
+	images []imageOpener
+	// All openers created by openImages select the same capability.
+	sameCapability bool
+}
 
 type imageOpener func(context.Context) (FileSystem, error)
 
@@ -43,7 +47,9 @@ func fixedImage(image FileSystem) imageOpener {
 	return func(context.Context) (FileSystem, error) { return image, nil }
 }
 
-// NewCombinedFileSystem copies the view list and omits nil members.
+// NewCombinedFileSystem copies the view list and omits nil members. When the
+// list contains multiple views, ReadLink cannot export targets across the
+// combined namespace. Sub selects one backend and uses its link policy.
 func NewCombinedFileSystem(images ...FileSystem) *CombinedFileSystem {
 	var members []imageOpener
 	for _, s := range images {
@@ -51,7 +57,7 @@ func NewCombinedFileSystem(images ...FileSystem) *CombinedFileSystem {
 			members = append(members, fixedImage(s))
 		}
 	}
-	return &CombinedFileSystem{members}
+	return &CombinedFileSystem{images: members}
 }
 
 func checkContext(ctx context.Context) error {
@@ -158,7 +164,7 @@ func openImages[B any](ctx context.Context, backends []B, open func(context.Cont
 			views[i] = func(ctx context.Context) (FileSystem, error) { return open(ctx, store) }
 		}
 	}
-	return &CombinedFileSystem{views}, nil
+	return &CombinedFileSystem{images: views, sameCapability: true}, nil
 }
 
 func (s *CombinedStore) OpenFS(ctx context.Context, cap eris.Capability) (FileSystem, error) {
@@ -220,13 +226,16 @@ func (s *CombinedFileSystem) Sub(ctx context.Context, name string) (FileSystem, 
 	return firstImageResult(ctx, s, func(b FileSystem) (FileSystem, error) { return b.Sub(ctx, name) })
 }
 
-// ReadLink preserves the selected target. With multiple backends, it rejects
-// a parent step after a named component because fallback can change the
-// directory where an adapter would take that step.
+// ReadLink exports a target only if the view has one backend or all backends
+// were opened for the same capability. A native client resolves the returned
+// target in a separate lookup, which can select a different backend.
 func (s *CombinedFileSystem) ReadLink(ctx context.Context, name string) (string, error) {
 	target, err := firstImageResult(ctx, s, func(b FileSystem) (string, error) { return b.ReadLink(ctx, name) })
 	if err != nil || len(s.images) == 1 {
 		return target, err
+	}
+	if !s.sameCapability {
+		return "", pathError("readlink", name, stdfs.ErrNotExist)
 	}
 	// An adapter resolves each component in a separate lookup. After a
 	// named component, another backend could supply a link to the root.

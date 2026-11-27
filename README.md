@@ -132,10 +132,12 @@ options. Raw-block reads use the options supplied to the mount constructor. Both
 use the mount context. Each decoded index confines its own links, including when
 the index is nested in another image. `ReadLink` returns the original target for
 safe links. In a `Sub` view it also checks the selected directory boundary. With
-multiple backends, it rejects targets that contain `..` after a named component
-because fallback can change where that component leads. Missing blocks match
-both `io/fs.ErrNotExist` and `eris.ErrMissingBlock` in errors returned by
-`Mount` methods.
+multiple backends for the same capability, it rejects targets that contain `..`
+after a named component because fallback can change where that component leads.
+A view that combines independently opened images rejects link export because the
+client could resolve the target in a different image. Missing blocks match both
+`io/fs.ErrNotExist` and `eris.ErrMissingBlock` in errors returned by `Mount`
+methods.
 
 For a base32 block hash `H`, the mount also exposes the complete encrypted block
 at `H[:3]/H[3:6]/H[6:9]/H[9:]`, as specified by `volume.BlockPath`, and at the
