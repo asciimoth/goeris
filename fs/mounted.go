@@ -7,7 +7,6 @@ import (
 	stdfs "io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/asciimoth/goeris"
@@ -170,29 +169,28 @@ func (m *mountedImage) ReadLink(ctx context.Context, name string) (string, error
 			defer func() { _ = sub.Close() }()
 			r, p = sub, filepath.FromSlash(name)
 		}
-		target, err := r.Readlink(p)
-		if err != nil {
-			return "", err
-		}
-		if strings.HasPrefix(target, "/") || strings.ContainsAny(target, "\\:\x00") {
-			return "", stdfs.ErrInvalid
-		}
-		// Validate the text we read. Looking up p again could check a
-		// replacement link. Keep ".." so the host resolves it in order.
-		parent, _ := filepath.Split(p)
-		_, err = r.Stat(parent + target)
-		if errors.Is(err, stdfs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-			// A dangling suffix is safe only after all parent steps are known.
-			if prefix := linkParentPrefix(target); prefix != "" {
-				_, err = r.Stat(parent + prefix)
-			} else {
-				err = nil
+		_, target, err := resolveLinks(".", filepath.ToSlash(p), exportFinalLink, func(dir, component string) (string, EntryType, string, error) {
+			if err := ctx.Err(); err != nil {
+				return "", 0, "", err
 			}
-		}
-		if err != nil {
-			return "", err
-		}
-		return target, nil
+			next := filepath.Join(dir, component)
+			info, err := r.Lstat(next)
+			if errors.Is(err, stdfs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+				return "", 0, "", errDangling
+			}
+			if err != nil {
+				return "", 0, "", err
+			}
+			if info.Mode()&stdfs.ModeSymlink != 0 {
+				link, err := r.Readlink(next)
+				return next, Symlink, link, err
+			}
+			if info.IsDir() {
+				return next, directoryType, "", nil
+			}
+			return next, Regular, "", nil
+		})
+		return target, err
 	})
 }
 

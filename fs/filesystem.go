@@ -2,7 +2,6 @@ package fs
 
 import (
 	"context"
-	"errors"
 	"io"
 	stdfs "io/fs"
 	"path"
@@ -16,26 +15,6 @@ import (
 )
 
 const directoryType EntryType = 255
-
-// Keep a dangling path distinct from a store failure. A store can also
-// report fs.ErrNotExist when it cannot supply a nested index.
-var (
-	errDangling   = errors.New("eris-fs: missing path component")
-	errLinkEscape = errors.New("eris-fs: symbolic link leaves image")
-)
-
-// linkParentPrefix returns the part of a target through its last parent step.
-// An adapter must be able to resolve this prefix even when the link dangles.
-func linkParentPrefix(target string) string {
-	for end := len(target); end > 0; {
-		start := strings.LastIndexByte(target[:end], '/') + 1
-		if target[start:end] == ".." {
-			return target[:end]
-		}
-		end = start - 1
-	}
-	return ""
-}
 
 // FS provides context-aware access to an ERIS-FS image. Use NewIOFS to
 // use the standard library file-system interfaces. Nested ERIS-FS indexes are
@@ -192,24 +171,24 @@ func (item *node) load(ctx context.Context) error {
 }
 
 func (fileSystem *FS) find(ctx context.Context, name string, followFinal bool) (*node, error) {
-	item, err := fileSystem.findWithEscape(ctx, name, followFinal)
-	if err == errLinkEscape || err == errDangling {
-		return nil, stdfs.ErrNotExist
+	mode := keepFinalLink
+	if followFinal {
+		mode = followLinks
 	}
+	item, _, err := fileSystem.lookup(ctx, name, mode)
 	return item, err
 }
 
-// findWithEscape keeps link escapes distinct for ReadLink. Its other lookup
-// behavior is the same as find.
-func (fileSystem *FS) findWithEscape(ctx context.Context, name string, followFinal bool) (*node, error) {
+// lookup resolves a path from the root of the selected image or view.
+func (fileSystem *FS) lookup(ctx context.Context, name string, mode linkLookup) (*node, string, error) {
 	if ctx == nil {
-		return nil, stdfs.ErrInvalid
+		return nil, "", stdfs.ErrInvalid
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if fileSystem == nil || fileSystem.root == nil || !stdfs.ValidPath(name) {
-		return nil, stdfs.ErrInvalid
+		return nil, "", stdfs.ErrInvalid
 	}
 	currentPath := name
 	if fileSystem.prefix != "." {
@@ -218,90 +197,21 @@ func (fileSystem *FS) findWithEscape(ctx context.Context, name string, followFin
 		// directory, even when the prefix ends in a symlink. Lstat and
 		// ReadLink must not expose the prefix's final link as the new root.
 		if name == "." {
-			followFinal = true
+			mode = followLinks
 		}
 	}
-	if currentPath == "." {
-		return fileSystem.root, nil
-	}
-	// Keep one unprocessed string per followed link. Splitting and copying
-	// all target components can multiply memory use when a link points to
-	// itself followed by a long suffix, even with the 40-link limit.
-	type linkPath struct {
-		path string
-		root *node // The image that contains this link.
-	}
-	pending := []linkPath{{currentPath, fileSystem.root}}
-	missing := func() error {
-		for _, frame := range pending {
-			if linkParentPrefix(frame.path) != "" {
-				return errLinkEscape
-			}
+	return resolveLinks(fileSystem.root, currentPath, mode, func(dir *node, name string) (*node, EntryType, string, error) {
+		if err := dir.load(ctx); err != nil {
+			return nil, 0, "", err
 		}
-		return errDangling
-	}
-	ancestors := []*node{fileSystem.root}
-	links := 0
-	for len(pending) > 0 {
-		current := ancestors[len(ancestors)-1]
-		if !current.isDir() {
-			return nil, missing()
-		}
-		last := len(pending) - 1
-		frame := pending[last]
-		component, rest, more := strings.Cut(frame.path, "/")
-		if more {
-			pending[last].path = rest
-		} else {
-			pending = pending[:last]
-		}
-		switch component {
-		case "", ".":
-			continue
-		case "..":
-			if current == frame.root {
-				return nil, errLinkEscape
-			}
-			ancestors = ancestors[:len(ancestors)-1]
-			continue
-		}
-		if err := current.load(ctx); err != nil {
-			return nil, err
-		}
-		current.mu.Lock()
-		next := current.children[component]
-		current.mu.Unlock()
+		dir.mu.Lock()
+		next := dir.children[name]
+		dir.mu.Unlock()
 		if next == nil {
-			return nil, missing()
+			return nil, 0, "", errDangling
 		}
-		if next.kind != Symlink || (len(pending) == 0 && !followFinal) {
-			ancestors = append(ancestors, next)
-			continue
-		}
-		if links == 40 {
-			return nil, stdfs.ErrInvalid
-		}
-		links++
-		if next.target == "" {
-			return nil, missing()
-		}
-		if strings.HasPrefix(next.target, "/") {
-			return nil, errLinkEscape
-		}
-		// Resolve each target component before processing its parent segments.
-		// Cleaning the text first can select a different file through a link.
-		// Each nested index is an image. Its links have the same boundary
-		// here as when the index is opened by its own capability.
-		root := fileSystem.root
-		for _, dir := range slices.Backward(ancestors) {
-			if dir.kind == Subdirectory {
-				root = dir
-				break
-			}
-		}
-		pending = append(pending, linkPath{next.target, root})
-	}
-	return ancestors[len(ancestors)-1], nil
+		return next, next.kind, next.target, nil
+	})
 }
 
 // Open opens a file. The returned file uses ctx for all later block reads.
@@ -440,35 +350,17 @@ func (fileSystem *FS) ReadDir(ctx context.Context, path string) ([]stdfs.DirEntr
 // can still be read if all of its parent steps have been resolved.
 // A cycle or a chain past the expansion limit returns fs.ErrInvalid because
 // safety cannot be proved. An escaping or absolute link returns fs.ErrNotExist,
-// as it does when opened.
+// including when a client could escape by cleaning the target before lookup.
 func (fileSystem *FS) ReadLink(ctx context.Context, path string) (string, error) {
 	if fileSystem != nil && fileSystem.subRoot != nil {
 		// A native adapter can export a Sub view as its own mount.
 		fileSystem = &FS{root: fileSystem.subRoot, prefix: "."}
 	}
-	item, err := fileSystem.find(ctx, path, false)
+	_, target, err := fileSystem.lookup(ctx, path, exportFinalLink)
 	if err != nil {
 		return "", pathError("readlink", path, err)
 	}
-	if item.kind != Symlink {
-		return "", pathError("readlink", path, stdfs.ErrInvalid)
-	}
-	// Check the path with normal component-by-component link expansion. A
-	// lexical check alone is insufficient: another link in the target can
-	// change the depth before a later ".." component is processed.
-	_, err = fileSystem.findWithEscape(ctx, path, true)
-	if errors.Is(err, errLinkEscape) {
-		return "", pathError("readlink", path, stdfs.ErrNotExist)
-	}
-	// These bytes can change the meaning of a target in native adapters.
-	// Backslash is a separator and colon can select a drive on Windows.
-	if strings.ContainsAny(item.target, "\\:\x00") {
-		return "", pathError("readlink", path, stdfs.ErrInvalid)
-	}
-	if err != nil && err != errDangling {
-		return "", pathError("readlink", path, err)
-	}
-	return item.target, nil
+	return target, nil
 }
 
 // Sub selects a directory. Links in the result can resolve to paths outside

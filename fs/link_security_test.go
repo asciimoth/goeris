@@ -25,24 +25,32 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	if err := builder.AddFile(ctx, "dir/child/file", strings.NewReader("child"), false); err != nil {
 		t.Fatal(err)
 	}
+	if err := builder.AddFile(ctx, "dir/cOm¹ .txt", strings.NewReader("image file"), false); err != nil {
+		t.Fatal(err)
+	}
 	for name, target := range map[string]string{
-		"dir/safe":       "file",
-		"dir/up":         "..",
-		"dir/escape":     "../..",
-		"root-alias":     ".",
-		"deep-alias":     "dir/child",
-		"safe-via-alias": "deep-alias/../../dir/file",
-		"through-alias":  "root-alias/../outside",
-		"chain":          "through-alias",
-		"root-escape":    "../outside",
-		"absolute":       "/outside",
-		"backslash":      `..\outside`,
-		"drive":          "C:/outside",
-		"nul":            "dir/\x00outside",
-		"missing":        "absent",
-		"missing-safe":   "dir/../absent",
-		"missing-escape": "absent/../../outside",
-		"cycle":          "cycle",
+		"dir/safe":         "file",
+		"dir/up":           "..",
+		"dir/escape":       "../..",
+		"root-alias":       ".",
+		"deep-alias":       "dir/child",
+		"ambiguous-parent": "deep-alias/../file",
+		"clean-escape":     "deep-alias/../../dir/file",
+		"through-alias":    "root-alias/../outside",
+		"chain":            "through-alias",
+		"root-escape":      "../outside",
+		"absolute":         "/outside",
+		"backslash":        `..\outside`,
+		"drive":            "C:/outside",
+		"nul":              "dir/\x00outside",
+		"device":           "dir/cOm¹ .txt",
+		"device-alias":     "device",
+		"trimmed-parent":   ".. /outside",
+		"plan9-device":     "#c/cons",
+		"missing":          "absent",
+		"missing-safe":     "dir/../absent",
+		"missing-escape":   "absent/../../outside",
+		"cycle":            "cycle",
 	} {
 		if err := builder.AddSymlink(name, target); err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -70,7 +78,7 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	mount := NewMount(ctx, blocks, eris.BlockOptions{})
 	view := NewIOFS(ctx, image)
 	root := "fs/" + capability.String() + "/"
-	for _, name := range []string{"dir/safe", "dir/up", "missing", "missing-safe", "root-alias", "safe-via-alias"} {
+	for _, name := range []string{"dir/safe", "dir/up", "missing", "missing-safe", "root-alias", "deep-alias"} {
 		for label, read := range map[string]func(string) (string, error){
 			"image": imageReadLink(ctx, image),
 			"mount": func(path string) (string, error) { return mount.ReadLink(root + path) },
@@ -81,7 +89,7 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"dir/escape", "through-alias", "chain", "root-escape", "absolute", "missing-escape"} {
+	for _, name := range []string{"dir/escape", "through-alias", "chain", "root-escape", "absolute", "missing-escape", "clean-escape", "ambiguous-parent"} {
 		if info, err := mount.Lstat(root + name); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
 			t.Fatalf("Lstat(%q) = %v, %v", name, info, err)
 		}
@@ -95,7 +103,14 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"backslash", "drive", "nul"} {
+	// Image lookup expands deep-alias before processing the parent steps.
+	if got, err := image.ReadFile(ctx, "clean-escape"); err != nil || string(got) != "content" {
+		t.Errorf("in-image read through directory alias = %q, %v", got, err)
+	}
+	if got, err := image.ReadFile(ctx, "device-alias"); err != nil || string(got) != "image file" {
+		t.Errorf("in-image read of literal file name = %q, %v", got, err)
+	}
+	for _, name := range []string{"backslash", "drive", "nul", "device", "device-alias", "trimmed-parent", "plan9-device"} {
 		if got, err := mount.ReadLink(root + name); got != "" || !errors.Is(err, stdfs.ErrInvalid) {
 			t.Errorf("ReadLink(%q) = %q, %v", name, got, err)
 		}

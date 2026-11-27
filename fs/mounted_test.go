@@ -85,6 +85,10 @@ func TestMountedOperations(t *testing.T) {
 		"broken-safe":   "docs/../missing",
 		"broken-escape": "missing/../../outside",
 		"unsafe":        "C:/file",
+		"unsafe-chain":  "unsafe",
+		"device":        "docs/nuL.txt",
+		"broken-chain":  "broken-escape",
+		"safe-chain":    "broken-safe",
 		"sibling":       "../" + other.String() + "/hello.txt",
 		"host":          filepath.Join(host, "hello.txt"),
 		"indirect":      "alias/../sibling",
@@ -127,9 +131,9 @@ func TestMountedOperations(t *testing.T) {
 			t.Fatal(name, got, err)
 		}
 	}
-	for _, name := range []string{"escape", "unsafe", ".", "missing", "broken-escape"} {
-		if _, err := image.ReadLink(ctx, name); err == nil {
-			t.Fatal(name)
+	for _, name := range []string{"escape", "unsafe", "unsafe-chain", "device", ".", "missing", "broken-escape", "broken-chain"} {
+		if target, err := image.ReadLink(ctx, name); err == nil || target != "" {
+			t.Errorf("ReadLink(%q) = %q, %v", name, target, err)
 		}
 	}
 	for _, name := range []string{"sibling", "host", "indirect"} {
@@ -143,7 +147,7 @@ func TestMountedOperations(t *testing.T) {
 			t.Errorf("ResolvePath(%q) = %q, %v", name, path, err)
 		}
 	}
-	for _, name := range []string{"broken", "broken-child", "broken-safe"} {
+	for _, name := range []string{"broken", "broken-child", "broken-safe", "safe-chain"} {
 		want := links[name]
 		if target, err := image.ReadLink(ctx, name); err != nil || target != want {
 			t.Errorf("ReadLink(%q) = %q, %v, want %q", name, target, err, want)

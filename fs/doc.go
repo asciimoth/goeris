@@ -104,8 +104,11 @@
 // A host mount supplies an expanded tree and must enforce its nested index
 // boundaries. MountStore checks the capability directory and confines lookups
 // to that directory.
-// ReadLink rejects targets that escape the exposed view or contain a backslash,
-// colon, or NUL byte. In a Sub view, Open can follow an in-image link outside
+// ReadLink checks each target in the chain before exporting the link. It rejects
+// targets that can leave the view when a client cleans the path, and parent
+// steps that would remove a directory link. It also rejects native device names,
+// backslashes, colons, NUL bytes, and names ending in a dot or space.
+// In a Sub view, Open can follow an in-image link outside
 // the selected directory. ReadLink rejects such a target so an adapter can
 // mount the subdirectory on its own. Applications that extract an image must
 // still check native paths before writing them.
