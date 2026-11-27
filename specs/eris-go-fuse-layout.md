@@ -170,7 +170,8 @@ backend and look up its target in another. If the backends can establish that
 they serve the same indexed directory and agree on the export, `ReadLink` can
 use that index's policy. Otherwise it checks parent steps and the directories
 they remove in each backend. A directory alias or an unknown boundary prevents
-export when those checks cannot establish a safe parent step.
+export when those checks cannot establish a safe parent step. An alternate mount
+that has no capability directory supplies no path components for this check.
 
 A host mount has no nested index markers in its expanded tree. For parent steps,
 `MountStore` reads the necessary decoded indexes at `M/C`. If an index is

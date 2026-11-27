@@ -89,28 +89,78 @@ func TestMountedIndexSymlinkBoundaries(t *testing.T) {
 	if err := os.Symlink(trees, treeAlias); err != nil {
 		t.Fatal(err)
 	}
-	for _, backend := range []ImageStore{
-		mounted, NewMountStore(treeAlias), NewCombinedStore(store, mounted), NewCombinedStore(mounted, store),
-	} {
-		view := NewMountWithStore(ctx, backend, nil, options)
-		prefix := "fs/" + cap.String() + "/"
+	checkLinks := func(t *testing.T, view stdfs.FS, prefix string) {
+		t.Helper()
 		for _, name := range []string{"docs/back", "alias/back", "nested/local/back"} {
-			if got, err := view.ReadFile(prefix + name); err != nil || string(got) != "local" {
-				t.Errorf("%T ReadFile(%q) = %q, %v", backend, name, got, err)
+			if got, err := stdfs.ReadFile(view, prefix+name); err != nil || string(got) != "local" {
+				t.Errorf("ReadFile(%q) = %q, %v", name, got, err)
 			}
-			if got, err := view.ReadLink(prefix + name); err != nil || got != "../file" {
-				t.Errorf("%T ReadLink(%q) = %q, %v", backend, name, got, err)
+			if got, err := stdfs.ReadLink(view, prefix+name); err != nil || got != "../file" {
+				t.Errorf("ReadLink(%q) = %q, %v", name, got, err)
 			}
 		}
 		for _, name := range []string{"nested/up", "nested/local/up", "host", "other", "chain"} {
-			if got, err := view.ReadFile(prefix + name); got != nil || !errors.Is(err, stdfs.ErrNotExist) {
-				t.Errorf("%T ReadFile(%q) = %q, %v", backend, name, got, err)
+			if got, err := stdfs.ReadFile(view, prefix+name); got != nil || !errors.Is(err, stdfs.ErrNotExist) {
+				t.Errorf("ReadFile(%q) = %q, %v", name, got, err)
 			}
-			if got, err := view.ReadLink(prefix + name); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
-				t.Errorf("%T ReadLink(%q) = %q, %v", backend, name, got, err)
+			if got, err := stdfs.ReadLink(view, prefix+name); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+				t.Errorf("ReadLink(%q) = %q, %v", name, got, err)
 			}
 		}
 	}
+	missingTrees := filepath.Join(t.TempDir(), "fs")
+	missingMount := NewMountStore(missingTrees)
+	for name, backend := range map[string]ImageStore{
+		"mounted":                     mounted,
+		"mount path alias":            NewMountStore(treeAlias),
+		"decoded then mounted":        NewCombinedStore(store, mounted),
+		"mounted then decoded":        NewCombinedStore(mounted, store),
+		"absent mount first":          NewCombinedStore(missingMount, mounted),
+		"absent mount last":           NewCombinedStore(mounted, missingMount),
+		"all alternate mounts absent": NewCombinedStore(NewCombinedStore(missingMount, missingMount), mounted),
+	} {
+		t.Run(name, func(t *testing.T) {
+			checkLinks(t, NewMountWithStore(ctx, backend, nil, options), "fs/"+cap.String()+"/")
+		})
+	}
+	// The default mount searches two directories. Either capability tree
+	// can be absent while the other still supplies a valid link.
+	for _, roots := range [][]string{{missingTrees, trees}, {trees, missingTrees}} {
+		view, err := openMountedTrees(ctx, cap, roots).result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkLinks(t, NewIOFS(ctx, view), "")
+	}
+	unindexedTrees := filepath.Join(t.TempDir(), "fs")
+	unindexedDocs := filepath.Join(unindexedTrees, cap.String(), "docs")
+	if err := os.MkdirAll(unindexedDocs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../file", filepath.Join(unindexedDocs, "back")); err != nil {
+		t.Fatal(err)
+	}
+	view, err := openMountedTrees(ctx, cap, []string{trees, unindexedTrees}).result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := view.ReadLink(ctx, "docs/back"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ReadLink with an alternate tree without index metadata = %q, %v", got, err)
+	}
+
+	// The last open error of an alternate chain can report a missing
+	// capability even when an earlier mount had a different error.
+	invalidTrees := t.TempDir()
+	writeFile(filepath.Join(invalidTrees, cap.String()), nil)
+	alternate := NewCombinedStore(NewMountStore(invalidTrees), missingMount)
+	view, err = NewCombinedStore(mounted, alternate).OpenFS(ctx, cap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := view.ReadLink(ctx, "docs/back"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ReadLink with an invalid alternate tree = %q, %v", got, err)
+	}
+
 	image, err := mounted.OpenFS(ctx, cap)
 	if err != nil {
 		t.Fatal(err)

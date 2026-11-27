@@ -44,7 +44,7 @@ func mountFixtureMember(t testing.TB, tree fixtureTree, cap eris.Capability, sta
 }
 
 // d3 is an implicit directory. Its route goes up to the parent and then
-// down to d1/local. A decoder can follow it. A host mount must reject it.
+// down to d1/local. The fixture mount has no index to verify the parent step.
 func checkMixedParentLink(t *testing.T, chain *CombinedStore, cap eris.Capability, memory, host fixtureMember) {
 	t.Helper()
 	image, err := chain.OpenFS(t.Context(), cap)
@@ -60,8 +60,12 @@ func checkMixedParentLink(t *testing.T, chain *CombinedStore, cap eris.Capabilit
 	} else if len(data) != 0 || err == nil {
 		t.Fatalf("mixed ReadFile(%q) = %q, %v; want failure", name, data, err)
 	}
-	// The mount either lacks the image or has no index marker for d3.
-	if target, err := image.ReadLink(t.Context(), name); target != "" || err == nil {
+	target, err := image.ReadLink(t.Context(), name)
+	if host.state == absentTree && memory.openError() == nil && memory.state != brokenChild {
+		if err != nil || target != "../d1/local" {
+			t.Fatalf("mixed ReadLink(%q) = %q, %v; want ../d1/local", name, target, err)
+		}
+	} else if target != "" || err == nil {
 		t.Fatalf("mixed ReadLink(%q) = %q, %v; want failure", name, target, err)
 	}
 	// Only the mount can return a host path. Check a chain of links both

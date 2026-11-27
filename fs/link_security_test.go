@@ -401,9 +401,9 @@ func TestCombinedReadLinkWithDifferentDirectoryTargets(t *testing.T) {
 	)
 	second := linkTestImage(Entry{Path: []string{"dir"}, Type: Symlink, Target: "."})
 	// Stores for the same capability can differ in which entries are available.
-	view, err := openImages(ctx, []*FS{first, second}, nil, func(_ context.Context, image *FS) (FileSystem, error) {
-		return image, nil
-	})
+	view, err := openImages(ctx, []*FS{first, second}, nil, func(_ context.Context, image *FS) openedImage {
+		return openedImage{view: image}
+	}).result()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,9 +421,9 @@ func TestCombinedReadLinkChecksDirectoryAliasesInOtherBackends(t *testing.T) {
 	alias := linkTestImage(Entry{Path: []string{"dir"}, Type: Symlink, Target: "."})
 	combine := func(images ...FileSystem) FileSystem {
 		t.Helper()
-		view, err := openImages(ctx, images, nil, func(_ context.Context, image FileSystem) (FileSystem, error) {
-			return image, nil
-		})
+		view, err := openImages(ctx, images, nil, func(_ context.Context, image FileSystem) openedImage {
+			return openedImage{view: image}
+		}).result()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -448,9 +448,9 @@ func TestCombinedReadLinkChecksUnavailableParent(t *testing.T) {
 	second := &FS{root: buildTree(Index{Entries: []Entry{
 		{Path: []string{"nested"}, Type: Subdirectory, Capability: pathTestCapability(t)},
 	}}, store, ".", DefaultMaxIndexSize), prefix: "."}
-	view, err := openImages(ctx, []*FS{first, second}, nil, func(_ context.Context, image *FS) (FileSystem, error) {
-		return image, nil
-	})
+	view, err := openImages(ctx, []*FS{first, second}, nil, func(_ context.Context, image *FS) openedImage {
+		return openedImage{view: image}
+	}).result()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,9 +476,9 @@ func TestCombinedReadLinkRespectsNestedRootsInEveryBackend(t *testing.T) {
 		Entry{Path: []string{"child", "dir", "up"}, Type: Symlink, Target: "../.."},
 	)
 	for _, images := range [][]*FS{{flat, nested}, {nested, flat}} {
-		view, err := openImages(ctx, images, nil, func(_ context.Context, image *FS) (FileSystem, error) {
-			return image, nil
-		})
+		view, err := openImages(ctx, images, nil, func(_ context.Context, image *FS) openedImage {
+			return openedImage{view: image}
+		}).result()
 		if err != nil {
 			t.Fatal(err)
 		}

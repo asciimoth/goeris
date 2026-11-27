@@ -728,7 +728,7 @@ func TestMountStoreFallbackWithinImage(t *testing.T) {
 	if err := os.Remove(filepath.Join(a, "hello.txt")); err != nil {
 		t.Fatal(err)
 	}
-	view, err := openMountedTrees(ctx, cap, []string{first, second})
+	view, err := openMountedTrees(ctx, cap, []string{first, second}).result()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -742,7 +742,7 @@ func TestMountStoreFallbackWithinImage(t *testing.T) {
 	if err := view.Prefetch(canceled, "."); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Prefetch with canceled context returned %v", err)
 	}
-	view, err = openMountedTrees(ctx, cap, []string{filepath.Join(first, "absent"), second})
+	view, err = openMountedTrees(ctx, cap, []string{filepath.Join(first, "absent"), second}).result()
 	if err != nil {
 		t.Fatal(err)
 	}

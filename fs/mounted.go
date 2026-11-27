@@ -43,28 +43,28 @@ func (s *MountStore) roots() []string {
 // OpenFS opens the tree for the canonical capability URN. With the default
 // mount directories, each lookup can fall back to the second mount.
 func (s *MountStore) OpenFS(ctx context.Context, cap eris.Capability) (FileSystem, error) {
-	return openMountedTrees(ctx, cap, s.roots())
+	return openMountedTrees(ctx, cap, s.roots()).result()
 }
 
-func openMountedTrees(ctx context.Context, cap eris.Capability, roots []string) (FileSystem, error) {
+func openMountedTrees(ctx context.Context, cap eris.Capability, roots []string) openedImage {
 	if ctx == nil {
-		return nil, stdfs.ErrInvalid
+		return openedImage{err: stdfs.ErrInvalid}
 	}
 	if err := cap.Validate(); err != nil {
-		return nil, err
+		return openedImage{err: err}
 	}
-	return openImages(ctx, roots, nil, func(ctx context.Context, root string) (FileSystem, error) {
+	return openImages(ctx, roots, nil, func(ctx context.Context, root string) openedImage {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return openedImage{err: err}
 		}
 		name, err := streamio.AbsolutePath(root, cap.String())
 		if err != nil {
-			return nil, err
+			return openedImage{err: err}
 		}
 		if _, err := mountedRootInfo(name); err != nil {
-			return nil, err
+			return openedImage{err: err, absentMount: errors.Is(err, stdfs.ErrNotExist)}
 		}
-		return &mountedImage{root: name, prefix: ".", capability: cap}, nil
+		return openedImage{view: &mountedImage{root: name, prefix: ".", capability: cap}}
 	})
 }
 

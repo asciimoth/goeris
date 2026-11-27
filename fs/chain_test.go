@@ -510,12 +510,12 @@ func TestCombinedImageUsesOperationContext(t *testing.T) {
 	openCtx, expire := context.WithCancel(t.Context())
 	defer expire()
 	var calls []string
-	view, err := openImages(openCtx, []string{"first", "second"}, nil, func(ctx context.Context, backend string) (FileSystem, error) {
+	view, err := openImages(openCtx, []string{"first", "second"}, nil, func(ctx context.Context, backend string) openedImage {
 		calls = append(calls, "open "+backend)
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return openedImage{err: err}
 		}
-		return probeImage{run: func(ctx context.Context, path string) ([]byte, error) {
+		return openedImage{view: probeImage{run: func(ctx context.Context, path string) ([]byte, error) {
 			calls = append(calls, "read "+backend)
 			if ctx != t.Context() || path != "file" {
 				t.Fatal("wrong operation arguments")
@@ -524,8 +524,8 @@ func TestCombinedImageUsesOperationContext(t *testing.T) {
 				return nil, io.ErrUnexpectedEOF
 			}
 			return []byte("complete"), nil
-		}}, nil
-	})
+		}}}
+	}).result()
 	if err != nil {
 		t.Fatal(err)
 	}
