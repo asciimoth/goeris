@@ -47,8 +47,8 @@ type BlockRequest struct {
 
 // PutBlockRequest holds one encrypted block and its storage options.
 // Expected is optional. If set, it must match the block's reference. A mismatch
-// returns ErrInvalidBlock without storing that block. The sink must copy Data
-// if it retains the bytes after PutBlock returns.
+// returns ErrInvalidBlock without storing that block. To retain Data or
+// Expected after PutBlock returns, the sink must copy the bytes or reference.
 type PutBlockRequest struct {
 	Data     []byte
 	TTL      TTL

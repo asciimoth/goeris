@@ -181,8 +181,9 @@ func (s BlockSet) putBlock(_ context.Context, block []byte, _ TTL, options Block
 	if len(expected) > 1 || len(expected) == 1 && expected[0] != ref {
 		return Reference{}, ErrInvalidBlock
 	}
-	options.HighPriority = options.HighPriority || s.Blocks[ref].Options.HighPriority
-	options.Root = options.Root || s.Blocks[ref].Options.Root
+	stored := s.Blocks[ref].Options
+	options.HighPriority = options.HighPriority || stored.HighPriority
+	options.Root = options.Root || stored.Root
 	s.Blocks[ref] = Block{Data: append([]byte(nil), block...), Options: options}
 	return ref, nil
 }
@@ -206,12 +207,17 @@ var base32Encoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 // String returns the unpadded Base32 encoding of r.
 func (r Reference) String() string {
-	return base32Encoding.EncodeToString(r[:])
+	var text [ReferenceTextSize]byte
+	base32Encoding.Encode(text[:], r[:])
+	return string(text[:])
 }
 
 // URN returns the canonical URN for r.
 func (r Reference) URN() string {
-	return ReferenceURNPrefix + r.String()
+	var text [len(ReferenceURNPrefix) + ReferenceTextSize]byte
+	copy(text[:], ReferenceURNPrefix)
+	base32Encoding.Encode(text[len(ReferenceURNPrefix):], r[:])
+	return string(text[:])
 }
 
 // ParseReference parses a canonical unpadded Base32 reference.
@@ -220,11 +226,15 @@ func ParseReference(text string) (Reference, error) {
 	if len(text) != ReferenceTextSize {
 		return ref, ErrInvalidBlock
 	}
-	b, err := base32Encoding.DecodeString(text)
-	if err != nil || len(b) != len(ref) || base32Encoding.EncodeToString(b) != text {
-		return ref, ErrInvalidBlock
+	n, err := base32Encoding.Decode(ref[:], []byte(text))
+	if err != nil || n != len(ref) {
+		return Reference{}, ErrInvalidBlock
 	}
-	copy(ref[:], b)
+	var canonical [ReferenceTextSize]byte
+	base32Encoding.Encode(canonical[:], ref[:])
+	if string(canonical[:]) != text {
+		return Reference{}, ErrInvalidBlock
+	}
 	return ref, nil
 }
 

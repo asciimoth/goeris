@@ -30,8 +30,7 @@ func prefetch(ctx context.Context, capability Capability, source BlockSource, tt
 	}
 	reader := &Reader{
 		ctx: ctx, source: source, options: options, ttl: ttl, capability: capability,
-		maxSize: -1, cache: make(map[decodeNodeID][]Pair),
-		summaries: make(map[decodeNodeID]treeSummary), prefetchAll: true,
+		maxSize: -1, prefetchAll: true,
 	}
 	PrefetchBlock(ctx, source, capability.Root.Reference, ttl, options)
 	_, _, err := reader.inspect(capability.Root, capability.Level, true)
@@ -60,13 +59,16 @@ func (reader *Reader) Prefetch(ctx context.Context) error {
 // that keep hints after return must copy it as required by BlockSource.
 func prefetchPairs(ctx context.Context, source BlockSource, pairs []Pair, ttl TTL, options BlockOptions) {
 	limit := batch.Limit(source.BatchSize())
+	var requests []BlockRequest
 	for len(pairs) > 0 && ctx.Err() == nil {
 		count := min(limit, len(pairs))
-		requests := make([]BlockRequest, count)
+		if requests == nil {
+			requests = make([]BlockRequest, count)
+		}
 		for i, pair := range pairs[:count] {
 			requests[i] = BlockRequest{Reference: pair.Reference, TTL: ttl, Options: options}
 		}
-		source.PrefetchBlock(ctx, requests)
+		source.PrefetchBlock(ctx, requests[:count:count])
 		pairs = pairs[count:]
 	}
 }
@@ -133,7 +135,8 @@ func (reader *Reader) hintPairs(pairs []Pair) {
 	if reader.hinted == nil {
 		reader.hinted = make(map[Reference]bool)
 	}
-	var pending []Pair
+	var buffer [16]Pair
+	pending := buffer[:0]
 	for _, pair := range pairs {
 		if reader.hinted[pair.Reference] {
 			continue

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"slices"
 	"sync"
 
 	"github.com/asciimoth/goeris/internal/batch"
@@ -39,11 +40,11 @@ func encodeContent(ctx context.Context, content io.Reader, secret Secret, sink B
 		return Capability{}, err
 	}
 	encoder := treeEncoder{
-		ctx: ctx, secret: secret, blockSize: blockSize, sink: sink,
+		ctx: ctx, leafHash: newLeafHasher(secret), blockSize: blockSize, sink: sink,
 		options: options.BlockOptions, preserveRoot: options.PreserveRoot,
 		batchSize: batch.Limit(sink.BatchSize()),
 	}
-	// putNode allocates separate encrypted blocks for pending writes.
+	// Pending writes have their own buffers.
 	node := make([]byte, int(blockSize))
 	ended := false
 	for {
@@ -65,12 +66,19 @@ func encodeContent(ctx context.Context, content io.Reader, secret Secret, sink B
 		}
 		encoder.ended = ended && n < len(node)
 		writeOptions := encoder.options
-		if !encoder.preserveRoot && encoder.ended && len(encoder.levels) == 0 {
+		singleLeaf := encoder.ended && len(encoder.levels) == 0
+		if !encoder.preserveRoot && singleLeaf {
 			writeOptions.Root = true
 		}
 		pair, err := encoder.putNode(node, 0, writeOptions)
 		if err != nil {
 			return Capability{}, err
+		}
+		if singleLeaf {
+			if err := encoder.flush(); err != nil {
+				return Capability{}, err
+			}
+			return Capability{BlockSize: blockSize, Root: pair}, nil
 		}
 		if err = encoder.add(0, pair); err != nil {
 			return Capability{}, err
@@ -119,13 +127,23 @@ func (encoder *treeEncoder) putNode(node []byte, level Level, options BlockOptio
 	if err := encoder.ctx.Err(); err != nil {
 		return Pair{}, err
 	}
-	block, key, err := EncryptNodeForStorage(node, encoder.secret, level)
-	if err != nil {
-		return Pair{}, err
+	if !ValidBlockLength(len(node)) {
+		return Pair{}, ErrInvalidBlockSize
 	}
-	// Encryption has already checked the block length.
-	ref, _ := ReferenceOf(block)
-	encoder.writes = append(encoder.writes, PutBlockRequest{Data: block, TTL: NoTTL, Options: options, Expected: &ref})
+	// Grow only as needed. After a flush, reuse the buffers in these slots.
+	encoder.writes = slices.Grow(encoder.writes, 1)[:len(encoder.writes)+1]
+	request := &encoder.writes[len(encoder.writes)-1]
+	if request.Expected == nil {
+		request.Expected = new(Reference)
+	}
+	if len(request.Data) != len(node) {
+		request.Data = make([]byte, len(node))
+	}
+	key := encryptNodeInto(request.Data, node, encoder.leafHash, level)
+	ref, _ := ReferenceOf(request.Data)
+	*request.Expected = ref
+	request.TTL = NoTTL
+	request.Options = options
 	if len(encoder.writes) >= encoder.batchSize {
 		if err := encoder.flush(); err != nil {
 			return Pair{}, err
@@ -141,7 +159,8 @@ func (encoder *treeEncoder) flush() error {
 	if err := encoder.ctx.Err(); err != nil {
 		return err
 	}
-	refs, err := encoder.sink.PutBlock(encoder.ctx, encoder.writes)
+	writes := slices.Clip(encoder.writes)
+	refs, err := encoder.sink.PutBlock(encoder.ctx, writes)
 	if err != nil {
 		return err
 	}
@@ -153,14 +172,13 @@ func (encoder *treeEncoder) flush() error {
 			return ErrInvalidBlock
 		}
 	}
-	clear(encoder.writes)
 	encoder.writes = encoder.writes[:0]
 	return nil
 }
 
 type treeEncoder struct {
 	ctx          context.Context
-	secret       Secret
+	leafHash     *leafHasher
 	blockSize    BlockSize
 	sink         BlockSink
 	options      BlockOptions
@@ -169,6 +187,7 @@ type treeEncoder struct {
 	ended        bool
 	batchSize    int
 	writes       []PutBlockRequest
+	parentNode   []byte
 }
 
 func (encoder *treeEncoder) add(level int, pair Pair) error {
@@ -194,12 +213,17 @@ func (encoder *treeEncoder) parent(level int) (Pair, error) {
 	if level >= int(^Level(0)) {
 		return Pair{}, ErrInvalidTree
 	}
-	node := make([]byte, int(encoder.blockSize))
-	for i, pair := range encoder.levels[level] {
-		offset := i * PairSize
-		copy(node[offset:offset+32], pair.Reference[:])
-		copy(node[offset+32:offset+PairSize], pair.Key[:])
+	if encoder.parentNode == nil {
+		encoder.parentNode = make([]byte, int(encoder.blockSize))
 	}
+	node := encoder.parentNode
+	pairs := encoder.levels[level]
+	for i, pair := range pairs {
+		offset := i * PairSize
+		copy(node[offset:offset+ReferenceSize], pair.Reference[:])
+		copy(node[offset+ReferenceSize:offset+PairSize], pair.Key[:])
+	}
+	clear(node[len(pairs)*PairSize:])
 	options := encoder.options
 	if !encoder.preserveRoot && encoder.ended {
 		if count, _, _ := encoder.pending(); count == len(encoder.levels[level]) {

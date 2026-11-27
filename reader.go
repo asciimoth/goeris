@@ -82,7 +82,7 @@ func (s *blockCapabilityStore) NewReaderWithSize(ctx context.Context, capability
 	}
 	return &Reader{
 		ctx: ctx, source: s.source, options: options, capability: capability, size: size, leaves: leaves,
-		maxSize: -1, sized: true, cache: make(map[decodeNodeID][]Pair),
+		maxSize: -1, sized: true,
 	}, nil
 }
 
@@ -95,7 +95,6 @@ func (s *blockCapabilityStore) NewReaderWithLimit(ctx context.Context, capabilit
 	}
 	reader := &Reader{
 		ctx: ctx, source: s.source, options: options, capability: capability, maxSize: maxSize, ttl: ttl,
-		cache: make(map[decodeNodeID][]Pair), summaries: make(map[decodeNodeID]treeSummary),
 	}
 	leaves, last, err := reader.inspect(capability.Root, capability.Level, true)
 	if err != nil {
@@ -195,12 +194,13 @@ func (reader *Reader) readAt(buffer []byte, offset int64) (int, error) {
 			return written, err
 		}
 		first := offset / blockSize
-		demand := 1 + (int(offset%blockSize)+requested-written-1)/int(blockSize)
+		within := int(offset % blockSize)
+		demand := 1 + (within+requested-written-1)/int(blockSize)
 		end := first + min(reader.leaves-first, int64(min(64, demand+reader.readAhead)))
 		reader.prefetchRange(first, end)
 		// Batch only leaves needed by this read. Resolve internal paths through
 		// the existing bounded cache and keep no additional leaves between calls.
-		count := min(batch.Limit(reader.source.BatchSize()), 1+(int(offset%blockSize)+requested-written-1)/int(blockSize))
+		count := min(batch.Limit(reader.source.BatchSize()), demand)
 		if count > 1 {
 			n, err := reader.readBatch(buffer[written:requested], offset, count)
 			written += n
@@ -210,9 +210,7 @@ func (reader *Reader) readAt(buffer []byte, offset int64) (int, error) {
 			}
 			continue
 		}
-		leafIndex := offset / blockSize
-		within := int(offset % blockSize)
-		pair, err := reader.leafPair(leafIndex)
+		pair, err := reader.leafPair(first)
 		if err != nil {
 			return written, err
 		}
@@ -220,7 +218,7 @@ func (reader *Reader) readAt(buffer []byte, offset int64) (int, error) {
 		if err != nil {
 			return written, err
 		}
-		if reader.sized && leafIndex == reader.leaves-1 {
+		if reader.sized && first == reader.leaves-1 {
 			if err := reader.checkPadding(node); err != nil {
 				return written, err
 			}
@@ -245,7 +243,7 @@ func (reader *Reader) readAt(buffer []byte, offset int64) (int, error) {
 // readBatch returns all bytes completed before a path, fetch, or decode error.
 // A storage failure must never look like the end of the decoded stream.
 func (reader *Reader) readBatch(buffer []byte, offset int64, count int) (int, error) {
-	pairs := make([]Pair, 0, count)
+	keys := make([]Key, 0, count)
 	requests := make([]BlockRequest, 0, count)
 	blockSize := int64(reader.capability.BlockSize)
 	first := offset / blockSize
@@ -259,7 +257,7 @@ func (reader *Reader) readBatch(buffer []byte, offset int64, count int) (int, er
 		if pathErr != nil {
 			break
 		}
-		pairs = append(pairs, pair)
+		keys = append(keys, pair.Key)
 		requests = append(requests, BlockRequest{Reference: pair.Reference, TTL: reader.ttl, Options: reader.options})
 	}
 	blocks, err := reader.source.GetBlock(reader.ctx, requests)
@@ -279,14 +277,19 @@ func (reader *Reader) readBatch(buffer []byte, offset int64, count int) (int, er
 		if len(block.Data) != int(blockSize) {
 			return written, errors.Join(ErrInvalidBlock, ErrInvalidBlockSize)
 		}
-		// The capability and the size check above guarantee a valid length.
-		node, _ := DecryptNodeFromSource(block.Data, pairs[i].Key, 0)
-		if reader.sized && first+int64(i) == reader.leaves-1 {
+		last := reader.sized && first+int64(i) == reader.leaves-1
+		node := reader.leafData
+		if node == nil || last {
+			// Keep the previous leaf cached if the new leaf fails validation.
+			node = make([]byte, int(blockSize))
+		}
+		xorNode(node, block.Data, keys[i], 0)
+		if last {
 			if paddingErr := reader.checkPadding(node); paddingErr != nil {
 				return written, paddingErr
 			}
 		}
-		reader.leafID, reader.leafData = pairs[i], node
+		reader.leafID, reader.leafData = Pair{Reference: requests[i].Reference, Key: keys[i]}, node
 		within := int(offset % blockSize)
 		amount := min(len(buffer)-written, len(node)-within)
 		copy(buffer[written:written+amount], node[within:within+amount])
@@ -388,6 +391,9 @@ func (reader *Reader) inspect(pair Pair, level Level, root bool) (int64, Pair, e
 		last = candidate
 	}
 	if !root {
+		if reader.summaries == nil {
+			reader.summaries = make(map[decodeNodeID]treeSummary)
+		}
 		reader.summaries[id] = treeSummary{leaves: total, last: last}
 	}
 	return total, last, nil
@@ -412,7 +418,9 @@ func (reader *Reader) internal(pair Pair, level Level, root bool) ([]Pair, error
 	if err != nil {
 		return nil, err
 	}
-	if len(reader.cache) >= 64 {
+	if reader.cache == nil {
+		reader.cache = make(map[decodeNodeID][]Pair)
+	} else if len(reader.cache) >= 64 {
 		// Clear a bounded cache instead of retaining an entire large tree.
 		clear(reader.cache)
 	}
@@ -424,12 +432,16 @@ func (reader *Reader) leaf(pair Pair) ([]byte, error) {
 	if reader.leafData != nil && reader.leafID == pair {
 		return reader.leafData, nil
 	}
-	data, err := reader.decrypt(pair, 0)
+	block, err := reader.readBlock(pair.Reference)
 	if err != nil {
 		return nil, err
 	}
-	reader.leafID, reader.leafData = pair, data
-	return data, nil
+	if reader.leafData == nil {
+		reader.leafData = make([]byte, len(block))
+	}
+	xorNode(reader.leafData, block, pair.Key, 0)
+	reader.leafID = pair
+	return reader.leafData, nil
 }
 
 func (reader *Reader) checkPadding(data []byte) error {
@@ -463,10 +475,18 @@ func (reader *Reader) checkLast() error {
 }
 
 func (reader *Reader) decrypt(pair Pair, level Level) ([]byte, error) {
+	block, err := reader.readBlock(pair.Reference)
+	if err != nil {
+		return nil, err
+	}
+	return DecryptNodeFromSource(block, pair.Key, level)
+}
+
+func (reader *Reader) readBlock(ref Reference) ([]byte, error) {
 	if err := reader.ctx.Err(); err != nil {
 		return nil, err
 	}
-	block, err, _ := GetBlock(reader.ctx, reader.source, pair.Reference, reader.ttl, reader.options)
+	block, err, _ := GetBlock(reader.ctx, reader.source, ref, reader.ttl, reader.options)
 	if err != nil {
 		// A block fetch is not the end of the decoded content. Keep a source
 		// EOF from making io.ReadAll or io.Copy accept a truncated file.
@@ -478,7 +498,7 @@ func (reader *Reader) decrypt(pair Pair, level Level) ([]byte, error) {
 	if len(block) != int(reader.capability.BlockSize) {
 		return nil, errors.Join(ErrInvalidBlock, ErrInvalidBlockSize)
 	}
-	return DecryptNodeFromSource(block, pair.Key, level)
+	return block, nil
 }
 
 func (reader *Reader) leafPair(index int64) (Pair, error) {

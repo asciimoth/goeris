@@ -3,6 +3,7 @@ package eris
 import (
 	"bytes"
 	"encoding"
+	"slices"
 )
 
 const (
@@ -35,16 +36,18 @@ func (c Capability) Validate() error {
 
 // MarshalBinary returns the 66-byte ERIS capability encoding.
 func (c Capability) MarshalBinary() ([]byte, error) {
+	return c.appendBinary(nil)
+}
+
+func (c Capability) appendBinary(dst []byte) ([]byte, error) {
 	code, err := c.BlockSize.code()
 	if err != nil {
 		return nil, ErrInvalidCapability
 	}
-	out := make([]byte, CapabilitySize)
-	out[0] = code
-	out[1] = byte(c.Level)
-	copy(out[2:34], c.Root.Reference[:])
-	copy(out[34:], c.Root.Key[:])
-	return out, nil
+	dst = slices.Grow(dst, CapabilitySize)
+	dst = append(dst, code, byte(c.Level))
+	dst = append(dst, c.Root.Reference[:]...)
+	return append(dst, c.Root.Key[:]...), nil
 }
 
 // UnmarshalBinary parses a 66-byte ERIS capability encoding.
@@ -74,14 +77,18 @@ func ParseCapability(data []byte) (Capability, error) {
 
 // MarshalText returns the canonical ERIS capability URN.
 func (c Capability) MarshalText() ([]byte, error) {
-	binary, err := c.MarshalBinary()
+	return c.appendText(nil)
+}
+
+func (c Capability) appendText(dst []byte) ([]byte, error) {
+	var buffer [CapabilitySize]byte
+	binary, err := c.appendBinary(buffer[:0])
 	if err != nil {
 		return nil, err
 	}
-	out := make([]byte, 0, CapabilityTextSize)
-	out = append(out, CapabilityURNPrefix...)
-	out = base32Encoding.AppendEncode(out, binary)
-	return out, nil
+	dst = slices.Grow(dst, CapabilityTextSize)
+	dst = append(dst, CapabilityURNPrefix...)
+	return base32Encoding.AppendEncode(dst, binary), nil
 }
 
 // UnmarshalText parses a canonical ERIS capability URN.
@@ -89,12 +96,18 @@ func (c *Capability) UnmarshalText(text []byte) error {
 	if c == nil || len(text) != CapabilityTextSize || !bytes.HasPrefix(text, []byte(CapabilityURNPrefix)) {
 		return ErrInvalidCapability
 	}
-	binary, err := base32Encoding.DecodeString(string(text[len(CapabilityURNPrefix):]))
-	if err != nil || len(binary) != CapabilitySize ||
-		base32Encoding.EncodeToString(binary) != string(text[len(CapabilityURNPrefix):]) {
+	text = text[len(CapabilityURNPrefix):]
+	var binary [CapabilitySize]byte
+	var canonical [CapabilityTextSize - len(CapabilityURNPrefix)]byte
+	n, err := base32Encoding.Decode(binary[:], text)
+	if err != nil || n != len(binary) {
 		return ErrInvalidCapability
 	}
-	return c.UnmarshalBinary(binary)
+	base32Encoding.Encode(canonical[:], binary[:])
+	if !bytes.Equal(canonical[:], text) {
+		return ErrInvalidCapability
+	}
+	return c.UnmarshalBinary(binary[:])
 }
 
 // ParseURN parses a canonical ERIS capability URN.
@@ -107,7 +120,8 @@ func ParseURN(urn string) (Capability, error) {
 // String returns the canonical capability URN. It returns an empty string if
 // the capability has an invalid block size.
 func (c Capability) String() string {
-	text, err := c.MarshalText()
+	var buffer [CapabilityTextSize]byte
+	text, err := c.appendText(buffer[:0])
 	if err != nil {
 		return ""
 	}
@@ -116,14 +130,8 @@ func (c Capability) String() string {
 
 // MarshalCBOR returns tag 276 containing the binary capability.
 func (c Capability) MarshalCBOR() ([]byte, error) {
-	binary, err := c.MarshalBinary()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]byte, CapabilityCBORSize)
-	copy(out, capabilityCBORHeader[:])
-	copy(out[len(capabilityCBORHeader):], binary)
-	return out, nil
+	// The output grows beyond the header array, so each call gets its own bytes.
+	return c.appendBinary(capabilityCBORHeader[:])
 }
 
 // UnmarshalCBOR parses tag 276 containing a binary capability.

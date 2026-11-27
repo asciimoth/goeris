@@ -8,28 +8,23 @@ func ParseInternalNode(node []byte) ([]Pair, error) {
 	if !ValidBlockLength(len(node)) {
 		return nil, ErrInvalidNode
 	}
-	pairs := make([]Pair, 0, len(node)/PairSize)
-	foundEnd := false
+	end := len(node)
+	var empty [PairSize]byte
 	for offset := 0; offset < len(node); offset += PairSize {
-		slot := node[offset : offset+PairSize]
-		zero := true
-		for _, value := range slot {
-			zero = zero && value == 0
-		}
-		if zero {
-			foundEnd = true
-			continue
-		}
-		if foundEnd {
+		if *(*[PairSize]byte)(node[offset:]) == empty {
+			end = min(end, offset)
+		} else if offset >= end {
 			return nil, ErrInvalidNode
 		}
-		var pair Pair
-		copy(pair.Reference[:], slot[:32])
-		copy(pair.Key[:], slot[32:])
-		pairs = append(pairs, pair)
 	}
-	if len(pairs) == 0 {
+	if end == 0 {
 		return nil, ErrInvalidNode
+	}
+	pairs := make([]Pair, end/PairSize)
+	for i := range pairs {
+		slot := node[i*PairSize : (i+1)*PairSize]
+		copy(pairs[i].Reference[:], slot[:ReferenceSize])
+		copy(pairs[i].Key[:], slot[ReferenceSize:])
 	}
 	return pairs, nil
 }

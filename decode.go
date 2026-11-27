@@ -1,6 +1,9 @@
 package eris
 
-import "math"
+import (
+	"math"
+	"math/bits"
+)
 
 type decodeNodeID struct {
 	pair  Pair
@@ -22,13 +25,10 @@ func paddedContentLength(node []byte) (int, error) {
 }
 
 func subtreeLeafCapacity(blockSize BlockSize, level Level) int64 {
-	arity, _ := blockSize.Arity()
-	capacity := int64(1)
-	for range level {
-		if capacity > math.MaxInt64/int64(arity) {
-			return math.MaxInt64
-		}
-		capacity *= int64(arity)
+	// Both supported block sizes have arities that are powers of two.
+	shift := int(level) * bits.TrailingZeros32(uint32(blockSize/PairSize))
+	if shift >= 63 {
+		return math.MaxInt64
 	}
-	return capacity
+	return int64(1) << shift
 }

@@ -3,6 +3,7 @@ package eris
 import (
 	"crypto/subtle"
 	"fmt"
+	"hash"
 
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/chacha20"
@@ -10,13 +11,10 @@ import (
 
 // ReferenceOf computes the reference for an encrypted ERIS block.
 func ReferenceOf(block []byte) (Reference, error) {
-	var ref Reference
 	if !ValidBlockLength(len(block)) {
-		return ref, ErrInvalidBlockSize
+		return Reference{}, ErrInvalidBlockSize
 	}
-	digest := blake2b.Sum256(block)
-	copy(ref[:], digest[:])
-	return ref, nil
+	return Reference(blake2b.Sum256(block)), nil
 }
 
 // VerifyBlock checks the size and reference of an encrypted block.
@@ -45,21 +43,27 @@ func EncryptNode(node []byte, secret Secret, level Level) ([]byte, Pair, error) 
 // EncryptNodeForStorage encrypts one node without hashing the block. The sink
 // that stores the block computes its reference.
 func EncryptNodeForStorage(node []byte, secret Secret, level Level) ([]byte, Key, error) {
-	var key Key
 	if !ValidBlockLength(len(node)) {
 		return nil, Key{}, ErrInvalidBlockSize
 	}
-
+	var leafHash *leafHasher
 	if level == 0 {
-		key = keyedHash(node, secret)
-	} else {
-		digest := blake2b.Sum256(node)
-		copy(key[:], digest[:])
+		leafHash = newLeafHasher(secret)
 	}
-
 	block := make([]byte, len(node))
+	return block, encryptNodeInto(block, node, leafHash, level), nil
+}
+
+// encryptNodeInto requires a valid node length and an equally large output.
+func encryptNodeInto(block, node []byte, leafHash *leafHasher, level Level) Key {
+	var key Key
+	if level == 0 {
+		key = leafHash.sum(node)
+	} else {
+		key = Key(blake2b.Sum256(node))
+	}
 	xorNode(block, node, key, level)
-	return block, key, nil
+	return key
 }
 
 // DecryptNode verifies and decrypts one full block.
@@ -81,12 +85,22 @@ func DecryptNodeFromSource(block []byte, key Key, level Level) ([]byte, error) {
 	return node, nil
 }
 
-func keyedHash(data []byte, secret Secret) Key {
-	var key Key
-	hash, _ := blake2b.New256(secret[:])
-	_, _ = hash.Write(data)
-	copy(key[:], hash.Sum(nil))
-	return key
+// leafHasher reuses the keyed digest and its output space within one encode.
+type leafHasher struct {
+	digest hash.Hash
+	key    Key
+}
+
+func newLeafHasher(secret Secret) *leafHasher {
+	digest, _ := blake2b.New256(secret[:])
+	return &leafHasher{digest: digest}
+}
+
+func (h *leafHasher) sum(node []byte) Key {
+	_, _ = h.digest.Write(node)
+	_ = h.digest.Sum(h.key[:0])
+	h.digest.Reset()
+	return h.key
 }
 
 func xorNode(dst, src []byte, key Key, level Level) {

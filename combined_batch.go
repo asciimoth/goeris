@@ -73,6 +73,12 @@ func (op combinedBatchOperation[Request, Result]) run(ctx context.Context, reque
 		if !op.valid(got, err, count) {
 			got, err = nil, ErrInvalidBatchResult
 		}
+		if err == nil && (op.read || op.retry == nil) {
+			// A validated read or write success has no fallback slots.
+			results = append(results, got...)
+			requests = requests[count:]
+			continue
+		}
 		missing := false
 		for i := 0; i < len(got); {
 			if op.retry == nil || !op.retry(got[i]) {
@@ -142,14 +148,10 @@ func (op combinedBatchOperation[Request, Result]) valid(got []Result, err error,
 	if !op.read {
 		return true
 	}
-	missing := false
 	for _, result := range got {
 		if op.retry(result) {
-			missing = true
+			return errors.Is(err, ErrMissingBlock)
 		}
-	}
-	if missing && !errors.Is(err, ErrMissingBlock) {
-		return false
 	}
 	return true
 }

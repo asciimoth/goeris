@@ -195,6 +195,36 @@ func TestSizedReaderRejectsWrongSizeAndCorruption(t *testing.T) {
 	}
 }
 
+func TestReadBatchKeepsLastValidLeafOnPaddingError(t *testing.T) {
+	blockSize := int(BlockSize1KiB)
+	content := bytes.Repeat([]byte{'a'}, blockSize+2)
+	content[blockSize] = 'b'
+	blocks := &batchProbe{BlockSet: BlockSet{Blocks: make(map[Reference]Block)}}
+	store := NewBlockCapabilityStore(blocks)
+	capability, err := store.Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The final leaf decrypts correctly, but the padding reveals a size mismatch.
+	reader, err := store.NewReaderWithSize(t.Context(), capability, int64(blockSize+1), BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+	got := make([]byte, blockSize+1)
+	if n, err := reader.Read(got); n != blockSize || !errors.Is(err, ErrSizeMismatch) ||
+		!bytes.Equal(got[:n], content[:blockSize]) {
+		t.Fatalf("batch read = (%d, %v)", n, err)
+	}
+	reads := len(blocks.reads)
+	if n, err := reader.ReadAt(got[:1], 0); n != 1 || err != nil || got[0] != content[0] {
+		t.Fatalf("cached read = (%d, %v), first byte = %q", n, err, got[0])
+	}
+	if len(blocks.reads) != reads {
+		t.Fatal("the failed leaf replaced the valid cached leaf")
+	}
+}
+
 func TestSizedReaderRejectsMalformedVisitedTree(t *testing.T) {
 	blocks := BlockSet{Blocks: make(map[Reference]Block)}
 	store := NewBlockCapabilityStore(blocks)

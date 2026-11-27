@@ -116,6 +116,11 @@ func TestReferenceEncoding(t *testing.T) {
 			t.Errorf("ParseReferenceURN(%q) error = %v", invalid, err)
 		}
 	}
+	// Nonzero unused bits in the last symbol must fail the canonical check.
+	zeroText := (Reference{}).String()
+	if got, err := ParseReference(zeroText[:len(zeroText)-1] + "B"); got != (Reference{}) || !errors.Is(err, ErrInvalidBlock) {
+		t.Fatalf("noncanonical reference = (%v, %v)", got, err)
+	}
 }
 
 func TestCapabilityEncoding(t *testing.T) {
@@ -213,6 +218,12 @@ func TestCapabilityRejectsInvalidEncoding(t *testing.T) {
 	if err := (*Capability)(nil).UnmarshalText(validText); !errors.Is(err, ErrInvalidCapability) {
 		t.Errorf("nil UnmarshalText() error = %v", err)
 	}
+	noncanonical, _ := (Capability{BlockSize: BlockSize1KiB}).MarshalText()
+	noncanonical[len(noncanonical)-1] = 'B'
+	capability = valid
+	if err := capability.UnmarshalText(noncanonical); !errors.Is(err, ErrInvalidCapability) || capability != valid {
+		t.Fatalf("noncanonical text: receiver = %v, error = %v", capability, err)
+	}
 
 	validCBOR, _ := valid.MarshalCBOR()
 	if err := capability.UnmarshalCBOR(nil); !errors.Is(err, ErrInvalidCapability) {
@@ -221,6 +232,10 @@ func TestCapabilityRejectsInvalidEncoding(t *testing.T) {
 	validCBOR[0] = 0
 	if err := capability.UnmarshalCBOR(validCBOR); !errors.Is(err, ErrInvalidCapability) {
 		t.Errorf("UnmarshalCBOR(bad tag) error = %v", err)
+	}
+	freshCBOR, err := valid.MarshalCBOR()
+	if err != nil || freshCBOR[0] != 0xd9 {
+		t.Fatalf("MarshalCBOR after changing a prior result = (%x, %v)", freshCBOR, err)
 	}
 }
 
