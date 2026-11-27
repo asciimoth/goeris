@@ -160,6 +160,8 @@ func TestReadLinkThroughSiblingDirectoryAlias(t *testing.T) {
 		{Path: []string{"file"}, Type: Regular, Capability: file, Size: int64(len(payload))},
 		{Path: []string{"link"}, Type: Symlink, Target: target},
 		{Path: []string{"alias"}, Type: Symlink, Target: "docs"},
+		{Path: []string{"docs", "up"}, Type: Symlink, Target: ".."},
+		{Path: []string{"docs", "local"}, Type: Symlink, Target: "marker"},
 		{Path: []string{"docs", "marker"}, Type: Regular, Capability: file, Size: int64(len(payload))},
 	}}
 	v2, err := EncodeIndex(ctx, index, eris.Secret{}, content, eris.BlockOptions{})
@@ -168,6 +170,7 @@ func TestReadLinkThroughSiblingDirectoryAlias(t *testing.T) {
 	}
 	mount := NewMount(ctx, blocks, eris.BlockOptions{})
 	for _, cap := range []eris.Capability{storeV1Index(t, index, blocks), v2} {
+		checkCombinedAlias(t, content, cap, target)
 		parent, err := EncodeIndex(ctx, Index{Entries: []Entry{
 			{Path: []string{"book"}, Type: Subdirectory, Capability: cap},
 		}}, eris.Secret{}, content, eris.BlockOptions{})
@@ -186,6 +189,48 @@ func TestReadLinkThroughSiblingDirectoryAlias(t *testing.T) {
 				t.Errorf("ReadFile = %q, %v", got, err)
 			}
 		}
+	}
+}
+
+func checkCombinedAlias(t *testing.T, content eris.CapabilityStore, cap eris.Capability, target string) {
+	t.Helper()
+	ctx := t.Context()
+	store := NewStore(content, eris.BlockOptions{})
+	a, err := store.OpenFS(ctx, cap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.OpenFS(ctx, cap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := NewCombinedStore(store, NewCombinedStore(store, store))
+	chain, err := combined.OpenFSWithLimit(ctx, cap, DefaultMaxIndexSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range []FileSystem{chain, NewCombinedFileSystem(a, b), NewCombinedFileSystem(a, chain)} {
+		if got, err := view.ReadLink(ctx, "link"); got != target || err != nil {
+			t.Fatalf("combined ReadLink = %q, %v", got, err)
+		}
+	}
+	sub, err := a.Sub(ctx, "alias")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := NewCombinedFileSystem(a, sub).ReadLink(ctx, "link"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Fatalf("combined different directories = %q, %v", got, err)
+	}
+	equivalent, err := b.Sub(ctx, "docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := NewCombinedFileSystem(sub, equivalent)
+	if got, err := view.ReadLink(ctx, "up"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Fatalf("link above combined Sub = %q, %v", got, err)
+	}
+	if got, err := view.ReadLink(ctx, "local"); got != "marker" || err != nil {
+		t.Fatalf("link in combined Sub = %q, %v", got, err)
 	}
 }
 
@@ -356,7 +401,7 @@ func TestCombinedReadLinkWithDifferentDirectoryTargets(t *testing.T) {
 	)
 	second := linkTestImage(Entry{Path: []string{"dir"}, Type: Symlink, Target: "."})
 	// Stores for the same capability can differ in which entries are available.
-	view, err := openImages(ctx, []*FS{first, second}, func(_ context.Context, image *FS) (FileSystem, error) {
+	view, err := openImages(ctx, []*FS{first, second}, false, func(_ context.Context, image *FS) (FileSystem, error) {
 		return image, nil
 	})
 	if err != nil {
@@ -376,7 +421,7 @@ func TestCombinedReadLinkChecksDirectoryAliasesInOtherBackends(t *testing.T) {
 	alias := linkTestImage(Entry{Path: []string{"dir"}, Type: Symlink, Target: "."})
 	combine := func(images ...FileSystem) FileSystem {
 		t.Helper()
-		view, err := openImages(ctx, images, func(_ context.Context, image FileSystem) (FileSystem, error) {
+		view, err := openImages(ctx, images, false, func(_ context.Context, image FileSystem) (FileSystem, error) {
 			return image, nil
 		})
 		if err != nil {
@@ -403,7 +448,7 @@ func TestCombinedReadLinkChecksUnavailableParent(t *testing.T) {
 	second := &FS{root: buildTree(Index{Entries: []Entry{
 		{Path: []string{"nested"}, Type: Subdirectory, Capability: pathTestCapability(t)},
 	}}, store, ".", DefaultMaxIndexSize), prefix: "."}
-	view, err := openImages(ctx, []*FS{first, second}, func(_ context.Context, image *FS) (FileSystem, error) {
+	view, err := openImages(ctx, []*FS{first, second}, false, func(_ context.Context, image *FS) (FileSystem, error) {
 		return image, nil
 	})
 	if err != nil {
@@ -431,7 +476,7 @@ func TestCombinedReadLinkRespectsNestedRootsInEveryBackend(t *testing.T) {
 		Entry{Path: []string{"child", "dir", "up"}, Type: Symlink, Target: "../.."},
 	)
 	for _, images := range [][]*FS{{flat, nested}, {nested, flat}} {
-		view, err := openImages(ctx, images, func(_ context.Context, image *FS) (FileSystem, error) {
+		view, err := openImages(ctx, images, false, func(_ context.Context, image *FS) (FileSystem, error) {
 			return image, nil
 		})
 		if err != nil {
@@ -448,8 +493,21 @@ func TestCombinedReadLinkRespectsNestedRootsInEveryBackend(t *testing.T) {
 
 func TestCombinedReadLinkConfinesTargetToSelectedImage(t *testing.T) {
 	ctx := t.Context()
-	first := linkTestImage(Entry{Path: []string{"dir", "link"}, Type: Symlink, Target: "file"})
-	second := linkTestImage(Entry{Path: []string{"dir", "file"}, Type: Regular, Capability: pathTestCapability(t)})
+	store := NewStore(newTestStore(), eris.BlockOptions{})
+	open := func(entry Entry) FileSystem {
+		t.Helper()
+		cap, err := store.EncodeIndex(ctx, Index{Entries: []Entry{entry}}, eris.Secret{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		view, err := store.OpenFS(ctx, cap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return view
+	}
+	first := open(Entry{Path: []string{"dir", "link"}, Type: Symlink, Target: "file"})
+	second := open(Entry{Path: []string{"dir", "file"}, Type: Regular, Capability: pathTestCapability(t)})
 
 	view := NewIOFS(ctx, NewCombinedFileSystem(first, second))
 	if _, err := view.Stat("dir/file"); err != nil {

@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"errors"
+	"fmt"
 	stdfs "io/fs"
 	"strings"
 	"testing"
@@ -66,5 +67,43 @@ func TestSubSymlinkRoot(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSubStartsNewSymlinkLookup(t *testing.T) {
+	ctx := t.Context()
+	store := newTestStore()
+	builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
+	if err := builder.AddFile(ctx, "docs/manual", strings.NewReader("text"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.AddSymlink("docs/latest", "manual"); err != nil {
+		t.Fatal(err)
+	}
+	next := "docs/../docs"
+	for i := range 40 {
+		name := fmt.Sprintf("alias%d", i)
+		if err := builder.AddSymlink(name, next); err != nil {
+			t.Fatal(err)
+		}
+		next = name
+	}
+	cap, err := builder.Finish(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := OpenFS(ctx, cap, store, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := image.ReadFile(ctx, next+"/latest"); !errors.Is(err, stdfs.ErrInvalid) {
+		t.Fatalf("41 links in one lookup: %v", err)
+	}
+	view, err := image.Sub(ctx, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := view.ReadFile(ctx, "latest"); err != nil || string(data) != "text" {
+		t.Fatalf("ReadFile in selected directory = %q, %v", data, err)
 	}
 }

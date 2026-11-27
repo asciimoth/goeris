@@ -9,6 +9,7 @@ import (
 	stdfs "io/fs"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,27 +18,35 @@ import (
 )
 
 // storeV1Index builds the old wire format without using the production writer.
-// These fixtures have one entry, so key order does not affect their encoding.
+// Sort encoded keys so generated fixtures can contain entries in any order.
 func storeV1Index(t testing.TB, index Index, blocks eris.BlockSet) eris.Capability {
 	t.Helper()
 	data := append(bytes.Clone([]byte(MagicPrefix)), 0x82, 1)
 	data = cborwire.AppendHead(data, 5, uint64(len(index.Entries)))
+	type pair struct{ key, value []byte }
+	var pairs []pair
 	for _, entry := range index.Entries {
-		data = cborwire.AppendHead(data, 4, uint64(len(entry.Path)))
+		key := cborwire.AppendHead(nil, 4, uint64(len(entry.Path)))
 		for _, part := range entry.Path {
-			data = appendText(data, part)
+			key = appendText(key, part)
 		}
-		data = append(data, 0x82, byte(entry.Type))
+		value := []byte{0x82, byte(entry.Type)}
 		if entry.Type == Symlink {
-			data = appendText(data, entry.Target)
+			value = appendText(value, entry.Target)
 		} else {
 			cap, err := entry.Capability.MarshalBinary()
 			if err != nil {
 				t.Fatal(err)
 			}
-			data = cborwire.AppendHead(data, 6, eris.CapabilityCBORTag)
-			data = appendBytes(data, cap)
+			value = cborwire.AppendHead(value, 6, eris.CapabilityCBORTag)
+			value = appendBytes(value, cap)
 		}
+		pairs = append(pairs, pair{key, value})
+	}
+	slices.SortFunc(pairs, func(a, b pair) int { return bytes.Compare(a.key, b.key) })
+	for _, p := range pairs {
+		data = append(data, p.key...)
+		data = append(data, p.value...)
 	}
 	cap, err := eris.NewBlockCapabilityStore(blocks).EncodeContent(context.Background(), bytes.NewReader(data), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {

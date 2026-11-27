@@ -20,17 +20,28 @@ var ErrNoBackend = errors.New("eris-fs: no backend")
 // NewBuilder returns the selected builder. OpenFS retains the first image
 // that opens. Its view opens other backends on demand for fallback and
 // Prefetch. Each operation uses the context supplied to that call.
-type CombinedStore struct{ stores []ImageStore }
+type CombinedStore struct {
+	stores      []ImageStore
+	decodedOnly bool
+}
 
 // NewCombinedStore copies the store list and omits nil members.
 func NewCombinedStore(stores ...ImageStore) *CombinedStore {
+	decodedOnly := true
 	var members []ImageStore
 	for _, s := range stores {
 		if s != nil {
+			switch store := s.(type) {
+			case *Store:
+			case *CombinedStore:
+				decodedOnly = decodedOnly && store != nil && store.decodedOnly
+			default:
+				decodedOnly = false
+			}
 			members = append(members, s)
 		}
 	}
-	return &CombinedStore{members}
+	return &CombinedStore{stores: members, decodedOnly: decodedOnly}
 }
 
 // CombinedFileSystem tries each complete file operation in order. It returns
@@ -40,6 +51,28 @@ type CombinedFileSystem struct {
 	images []imageOpener
 	// All openers created by openImages select the same capability.
 	sameCapability bool
+	// location identifies the directory shared by all decoded members.
+	location decodedLocation
+}
+
+// The zero location denotes a view whose index or directory is unknown.
+type decodedLocation struct {
+	root eris.Capability
+	dir  string
+}
+
+func locationOf(view FileSystem) decodedLocation {
+	switch image := view.(type) {
+	case *FS:
+		if image != nil && image.root != nil && image.root.capability != (eris.Capability{}) {
+			return decodedLocation{image.root.capability, image.prefix}
+		}
+	case *CombinedFileSystem:
+		if image != nil {
+			return image.location
+		}
+	}
+	return decodedLocation{}
 }
 
 type imageOpener func(context.Context) (FileSystem, error)
@@ -49,16 +82,23 @@ func fixedImage(image FileSystem) imageOpener {
 }
 
 // NewCombinedFileSystem copies the view list and omits nil members. When the
-// list contains multiple views, ReadLink cannot export targets across the
-// combined namespace. Sub selects one backend and uses its link policy.
+// views decode the same image at the same directory, ReadLink can use the
+// selected decoder. Other multi-image views require Sub to export links.
 func NewCombinedFileSystem(images ...FileSystem) *CombinedFileSystem {
 	var members []imageOpener
-	for _, s := range images {
-		if s != nil {
-			members = append(members, fixedImage(s))
+	var location decodedLocation
+	for _, image := range images {
+		if image == nil {
+			continue
 		}
+		if len(members) == 0 {
+			location = locationOf(image)
+		} else if location != locationOf(image) {
+			location = decodedLocation{}
+		}
+		members = append(members, fixedImage(image))
 	}
-	return &CombinedFileSystem{images: members}
+	return &CombinedFileSystem{images: members, location: location}
 }
 
 func checkContext(ctx context.Context) error {
@@ -147,8 +187,9 @@ func (s *CombinedStore) NewBuilder(secret eris.Secret) (ImageBuilder, error) {
 }
 
 // openImages retains the first successful lookup. Lazy openers use the same
-// capability and limit even when the initial context has expired.
-func openImages[B any](ctx context.Context, backends []B, open func(context.Context, B) (FileSystem, error)) (FileSystem, error) {
+// capability and limit even when the initial context has expired. Set decodedOnly
+// when every opener decodes the requested root index with Store.
+func openImages[B any](ctx context.Context, backends []B, decodedOnly bool, open func(context.Context, B) (FileSystem, error)) (FileSystem, error) {
 	selected := -1
 	image, err := firstResult(ctx, backends, func(b B) (FileSystem, error) {
 		selected++
@@ -165,17 +206,21 @@ func openImages[B any](ctx context.Context, backends []B, open func(context.Cont
 			views[i] = func(ctx context.Context) (FileSystem, error) { return open(ctx, store) }
 		}
 	}
-	return &CombinedFileSystem{images: views, sameCapability: true}, nil
+	combined := &CombinedFileSystem{images: views, sameCapability: true}
+	if decodedOnly {
+		combined.location = locationOf(image)
+	}
+	return combined, nil
 }
 
 func (s *CombinedStore) OpenFS(ctx context.Context, cap eris.Capability) (FileSystem, error) {
-	return openImages(ctx, s.stores, func(ctx context.Context, store ImageStore) (FileSystem, error) {
+	return openImages(ctx, s.stores, s.decodedOnly, func(ctx context.Context, store ImageStore) (FileSystem, error) {
 		return store.OpenFS(ctx, cap)
 	})
 }
 
 func (s *CombinedStore) OpenFSWithLimit(ctx context.Context, cap eris.Capability, limit int64) (FileSystem, error) {
-	return openImages(ctx, s.stores, func(ctx context.Context, store ImageStore) (FileSystem, error) {
+	return openImages(ctx, s.stores, s.decodedOnly, func(ctx context.Context, store ImageStore) (FileSystem, error) {
 		return store.OpenFSWithLimit(ctx, cap, limit)
 	})
 }
@@ -232,7 +277,7 @@ func (s *CombinedFileSystem) Sub(ctx context.Context, name string) (FileSystem, 
 // target in a separate lookup, which can select a different backend.
 func (s *CombinedFileSystem) ReadLink(ctx context.Context, name string) (string, error) {
 	target, err := firstImageResult(ctx, s, func(b FileSystem) (string, error) { return b.ReadLink(ctx, name) })
-	if err != nil || len(s.images) == 1 {
+	if err != nil || len(s.images) == 1 || s.location.dir != "" {
 		return target, err
 	}
 	if !s.sameCapability {

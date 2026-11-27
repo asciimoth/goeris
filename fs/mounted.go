@@ -52,7 +52,7 @@ func openMountedTrees(ctx context.Context, cap eris.Capability, roots []string) 
 	if err := cap.Validate(); err != nil {
 		return nil, err
 	}
-	return openImages(ctx, roots, func(ctx context.Context, root string) (FileSystem, error) {
+	return openImages(ctx, roots, false, func(ctx context.Context, root string) (FileSystem, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}

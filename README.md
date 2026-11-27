@@ -131,13 +131,13 @@ host mount controls its own index limits. Image reads use the image store’s
 options. Raw-block reads use the options supplied to the mount constructor. Both
 use the mount context. Each decoded index confines its own links, including when
 the index is nested in another image. `ReadLink` returns the original target for
-safe links. In a `Sub` view it also checks the selected directory boundary. With
-multiple backends for the same capability, it rejects targets that contain `..`
-after a named component because fallback can change where that component leads.
-It permits leading `..` steps only if each directory they leave is known to be
-inside the same image in every backend that supplies that directory. A view that
-combines independently opened images rejects link export because the client
-could resolve the target in a different image. Missing blocks match both
+safe links. In a `Sub` view it also checks the selected directory boundary. When
+all backends decode the same image capability at the same directory, they share
+its link targets and nested index boundaries. The selected decoder checks the
+link. A chain that also uses expanded mounts or other backends checks parent
+steps across those backends before it exports the target. A chain of
+independently opened views can export a link when all views are decoded from the
+same capability and select the same directory. Missing blocks match both
 `io/fs.ErrNotExist` and `eris.ErrMissingBlock` in errors returned by `Mount`
 methods.
 

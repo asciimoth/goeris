@@ -496,7 +496,7 @@ func TestCombinedImageUsesOperationContext(t *testing.T) {
 	openCtx, expire := context.WithCancel(t.Context())
 	defer expire()
 	var calls []string
-	view, err := openImages(openCtx, []string{"first", "second"}, func(ctx context.Context, backend string) (FileSystem, error) {
+	view, err := openImages(openCtx, []string{"first", "second"}, false, func(ctx context.Context, backend string) (FileSystem, error) {
 		calls = append(calls, "open "+backend)
 		if err := ctx.Err(); err != nil {
 			return nil, err

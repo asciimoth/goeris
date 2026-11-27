@@ -89,6 +89,7 @@ func (s *Store) openFS(ctx context.Context, capability eris.Capability, limit in
 		return nil, err
 	}
 	root := buildTree(index, s, ".", limit)
+	root.capability = capability
 	return &FS{root: root, prefix: "."}, nil
 }
 
@@ -194,12 +195,6 @@ func (fileSystem *FS) lookup(ctx context.Context, name string, mode imagepath.Mo
 	currentPath := name
 	if fileSystem.prefix != "." {
 		currentPath = path.Join(fileSystem.prefix, name)
-		// Sub has already selected a directory. Its "." names that
-		// directory, even when the prefix ends in a symlink. Lstat and
-		// ReadLink must not expose the prefix's final link as the new root.
-		if name == "." {
-			mode = imagepath.Follow
-		}
 	}
 	return imagepath.Resolve(fileSystem.root, currentPath, mode, func(dir *node, name string) (*node, imagepath.Kind, string, error) {
 		if err := dir.load(ctx); err != nil {
@@ -380,7 +375,8 @@ func (fileSystem *FS) ReadLink(ctx context.Context, path string) (string, error)
 // the selected directory but remain inside the same image. ReadLink only
 // exports targets that also stay inside the selected directory.
 func (fileSystem *FS) Sub(ctx context.Context, name string) (FileSystem, error) {
-	item, err := fileSystem.find(ctx, name, true)
+	// Save the resolved path so later lookups start with a fresh link limit.
+	item, prefix, err := fileSystem.lookup(ctx, name, imagepath.Canonical)
 	if err != nil {
 		return nil, pathError("sub", name, err)
 	}
@@ -389,10 +385,6 @@ func (fileSystem *FS) Sub(ctx context.Context, name string) (FileSystem, error) 
 	}
 	if !item.isDir() {
 		return nil, pathError("sub", name, stdfs.ErrInvalid)
-	}
-	prefix := name
-	if fileSystem.prefix != "." {
-		prefix = path.Join(fileSystem.prefix, name)
 	}
 	return &FS{root: fileSystem.root, prefix: prefix, subRoot: item}, nil
 }

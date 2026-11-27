@@ -22,13 +22,14 @@ const (
 	ImageRoot // A directory with its own boundary for links.
 )
 
-// Mode selects how Resolve handles the final link.
+// Mode selects how Resolve handles the final link and which path it returns.
 type Mode int
 
 const (
 	Follow Mode = iota
 	KeepFinal
 	Export
+	Canonical // Follow links and return the resolved path from root.
 )
 
 // Resolve walks slash-separated components in order. The child lookup
@@ -48,6 +49,7 @@ func Resolve[T comparable](root T, name string, mode Mode, child func(T, string)
 	}
 	pending := []linkPath{{path: name}}
 	var zero T
+	var components []string
 	var exported string
 	haveTarget := false
 	missing := func() (T, string, error) {
@@ -106,6 +108,9 @@ func Resolve[T comparable](root T, name string, mode Mode, child func(T, string)
 				return zero, "", stdfs.ErrNotExist
 			}
 			ancestors = ancestors[:len(ancestors)-1]
+			if mode == Canonical {
+				components = components[:len(components)-1]
+			}
 			continue
 		}
 		next, kind, target, err := child(current.value, component)
@@ -121,6 +126,9 @@ func Resolve[T comparable](root T, name string, mode Mode, child func(T, string)
 				boundary = len(ancestors)
 			}
 			ancestors = append(ancestors, step{next, kind, boundary})
+			if mode == Canonical {
+				components = append(components, component)
+			}
 			continue
 		}
 		if links == 40 {
@@ -154,6 +162,13 @@ func Resolve[T comparable](root T, name string, mode Mode, child func(T, string)
 		// Each nested index is an image. Its links have the same boundary
 		// here as when the index is opened by its own capability.
 		pending = append(pending, linkPath{path: target, root: current.root})
+	}
+	if mode == Canonical {
+		resolved := "."
+		if len(components) > 0 {
+			resolved = strings.Join(components, "/")
+		}
+		return ancestors[len(ancestors)-1].value, resolved, nil
 	}
 	if mode == Export && !haveTarget {
 		return zero, "", stdfs.ErrInvalid
