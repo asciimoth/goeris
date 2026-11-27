@@ -18,26 +18,41 @@ import (
 // HOME must then be absolute. Missing or invalid required environment values
 // return an error that matches fs.ErrInvalid.
 func DefaultChainPaths() ([]string, error) {
+	paths, err := defaultChainPaths()
+	if err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+// Keep the defaults that resolve. An explicit path list can use these paths
+// even when another default requires an environment value that is invalid.
+func defaultChainPaths() ([]string, error) {
 	if runtime.GOOS == "windows" {
 		paths := make([]string, 0, 2)
+		var firstErr error
 		for _, key := range []string{"ProgramData", "LOCALAPPDATA"} {
 			base, err := absoluteEnvPath(key)
 			if err != nil {
-				return nil, err
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
 			}
 			paths = append(paths, filepath.Join(base, "eris", "block"))
 		}
-		return paths, nil
+		return paths, firstErr
 	}
+	const system = "/eris/block"
 	cache := os.Getenv("XDG_CACHE_HOME")
 	if !filepath.IsAbs(cache) {
 		home, err := absoluteEnvPath("HOME")
 		if err != nil {
-			return nil, err
+			return []string{system}, err
 		}
 		cache = filepath.Join(home, ".cache")
 	}
-	return []string{"/eris/block", filepath.Join(cache, "eris", "block")}, nil
+	return []string{system, filepath.Join(cache, "eris", "block")}, nil
 }
 
 func absoluteEnvPath(key string) (string, error) {

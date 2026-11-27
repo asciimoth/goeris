@@ -4,6 +4,7 @@
 // block files in directories. A regular file root is read-only.
 // OpenChain combines a semicolon-separated path list in left-to-right order.
 // An empty list selects the platform defaults returned by DefaultChainPaths.
+// OpenAvailableChain can create selected default roots and skip missing roots.
 // See specs/eris-volume.md for the storage format.
 package volume
 
@@ -44,6 +45,10 @@ func Open(name string) (*Volume, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openVolume(name, info)
+}
+
+func openVolume(name string, info fs.FileInfo) (*Volume, error) {
 	if info.IsDir() {
 		root, err := os.OpenRoot(directoryOpenPath(name))
 		if err != nil {

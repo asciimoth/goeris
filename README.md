@@ -6,6 +6,60 @@ Local copies of the specification and ERIS extension documents are in
 
 Install this library with `go get github.com/asciimoth/goeris`.
 
+## Storage for tools
+
+Use `github.com/asciimoth/goeris/auto` to open the stores for the current
+environment. Pass `stores.Blocks`, `stores.Capabilities`, or `stores.Images` to
+code that works with encrypted blocks, decoded objects, or ERIS-FS images.
+
+```go
+stores, err := auto.Open()
+if err != nil {
+    return err
+}
+defer stores.Close()
+
+image, err := stores.Images.OpenFS(ctx, capability)
+```
+
+- Blocks use `volume.OpenAvailableChain` with the semicolon-separated
+  `ERIS_BLOCK_PATH`. An empty value selects the platform's default volume paths.
+- Capabilities use the configured block chain, then the decoded files under
+  `ERIS_MNT` or the default mount roots.
+- Images use the configured capability chain, then the expanded trees under
+  `ERIS_FS_MNT`. If `ERIS_FS_MNT` is empty, the mount store uses `ERIS_MNT/fs`
+  or the `fs` directories under the default mount roots.
+
+The Unix mount roots are `/n/eris` and `/eris`, in that order. Windows uses
+`eris` under the absolute `ProgramData` and `LOCALAPPDATA` paths, in that order.
+Mount lookups require host support for literal capability URN names. The mounts
+handle content verification and provide read access.
+
+`Open` skips missing volume roots. For each selected platform default, it tries
+to create the directory and its missing parents, even if the path came from
+`ERIS_BLOCK_PATH`. If creation fails, it skips that volume. The block chain can
+be empty.
+
+The mount stores check their paths during lookups, so absent mounts do not
+prevent setup. Call `Close` after all operations finish to release the volume
+handles. The caller owns stores supplied through options.
+
+Use `PrependBlocks`, `AppendBlocks`, or `ReplaceBlocks` to change the block
+chain. The corresponding `Capabilities` and `Images` options change those
+chains. For each chain, the prepended stores come first, the default or
+replacement stores come next, and the appended stores come last. Use
+`auto.Open(auto.ReplaceBlocks())` for mount access without opening any volumes.
+Use an empty replacement to remove the default entries at any layer.
+
+Fallback uses the library's combined stores. A stream write can try the next
+backend while the input is unread. When opening a file of known size, the
+default block backend checks the first byte (or EOF for an empty file). This
+lets the capability mount supply a file missing from the volumes. A returned
+reader or image builder stays with the store that opened it. Use `PrependImages`
+to give a custom builder priority.
+
+## Packages
+
 The `eris` package implements:
 
 - ERIS padding and recommended block-size selection;
@@ -20,8 +74,7 @@ The `eris` package implements:
 Use `eris.NewMountCapabilityStore(root).ResolvePath(ctx, capability)` to find
 decoded content on a local mount that uses the
 [ERIS FUSE path layout](specs/eris-go-fuse-layout.md). Set `root` to select one
-mount. An empty root uses `ERIS_MNT` if set and nonempty. Otherwise, it tries
-`/n/eris`, then `/eris`.
+mount. An empty root uses `ERIS_MNT` or the platform's default mount roots.
 
 The method returns an absolute path to the regular file at
 `<mount>/<full capability URN>`. Relative mount paths use the current working
@@ -184,8 +237,8 @@ restrict access to the mount when those keys must stay private.
 Pass an `fs.ImageStore` to code that builds or opens images. Use
 `fs.NewStore(content, options)` for a capability store or
 `fs.NewMountStore("/eris/fs")` for a mounted tree. An empty mount path selects
-`ERIS_FS_MNT`, then `ERIS_MNT` with `/fs` appended. If both are empty, the
-backend tries `/n/eris/fs` and `/eris/fs` in order.
+`ERIS_FS_MNT`, then `ERIS_MNT` with `fs` appended. If both are empty, the
+backend tries the `fs` directories under the platform's default mount roots.
 
 ```go
 images := erisfs.NewCombinedStore(erisfs.NewStore(content, options), erisfs.NewMountStore(""))

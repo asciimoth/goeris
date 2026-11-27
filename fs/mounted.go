@@ -24,7 +24,8 @@ type MountStore struct{ mount string }
 
 // NewMountStore selects the directory containing the capability trees, e.g.
 // /eris/fs. With an empty path each OpenFS checks ERIS_FS_MNT, then ERIS_MNT
-// with /fs appended. With neither set it tries /n/eris/fs and /eris/fs.
+// with fs appended. With neither set it checks the fs directory in each
+// default mount root. See [eris.NewMountCapabilityStore].
 func NewMountStore(path string) *MountStore { return &MountStore{mount: path} }
 
 func (s *MountStore) roots() []string {
@@ -37,7 +38,11 @@ func (s *MountStore) roots() []string {
 	if root := os.Getenv("ERIS_MNT"); root != "" {
 		return []string{root + string(filepath.Separator) + "fs"}
 	}
-	return []string{"/n/eris/fs", "/eris/fs"}
+	roots := streamio.DefaultMountRoots()
+	for i, root := range roots {
+		roots[i] = root + string(filepath.Separator) + "fs"
+	}
+	return roots
 }
 
 // OpenFS opens the tree for the canonical capability URN. With the default
@@ -52,6 +57,12 @@ func openMountedTrees(ctx context.Context, cap eris.Capability, roots []string) 
 	}
 	if err := cap.Validate(); err != nil {
 		return openedImage{err: err}
+	}
+	if len(roots) == 0 {
+		if err := ctx.Err(); err != nil {
+			return openedImage{err: err}
+		}
+		return openedImage{err: stdfs.ErrNotExist, absentTree: true}
 	}
 	return openImages(ctx, roots, nil, func(ctx context.Context, root string) openedImage {
 		if err := ctx.Err(); err != nil {

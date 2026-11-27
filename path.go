@@ -32,7 +32,7 @@ func mountRoots(mount string) []string {
 	if mount != "" {
 		return []string{mount}
 	}
-	return []string{"/n/eris", "/eris"}
+	return streamio.DefaultMountRoots()
 }
 
 // Check each candidate through the requested operation. A file can disappear

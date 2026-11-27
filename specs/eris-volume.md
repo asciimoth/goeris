@@ -157,9 +157,14 @@ file-system paths separated by the literal character `;`. For example:
 ```
 
 Applications SHOULD use the environment variable `ERIS_BLOCK_PATH` for this
-list. The library does not read `ERIS_BLOCK_PATH` automatically. An application
-can call `volume.OpenChain(os.Getenv("ERIS_BLOCK_PATH"))`. An unset or empty
-variable selects the default chain described below.
+list. `auto.Open()` uses `volume.OpenAvailableChain` to open its block store.
+This helper skips missing volumes and tries to create selected platform default
+directories. It skips a default volume if creation fails. These rules also apply
+to default paths named in `ERIS_BLOCK_PATH`.
+
+Applications that use strict volume chain construction can call
+`volume.OpenChain(os.Getenv("ERIS_BLOCK_PATH"))`. An unset or empty variable
+selects the default chain described below.
 
 New volumes SHOULD be added to the **end** of the chain. Unlike the common
 practice of prepending entries to `$PATH`, appending keeps the existing volumes
@@ -180,16 +185,16 @@ The path-list syntax is fixed:
 - Preserve entry order and duplicates. Do not trim whitespace or expand `~`,
   environment variables, or wildcard characters. Shell expansion, if desired, is
   the caller's responsibility.
-- Relative paths refer to the working directory at construction time. Each entry
-  MUST identify an existing directory or regular file.
+- Relative paths refer to the working directory at construction time.
 - There is no quoting or escape syntax within the list. Paths containing `;`
   cannot be represented. Colons are part of paths, so Windows drive-letter paths
   such as `C:\eris` can be used.
 
-Construction MUST open every entry in order. If one cannot be opened, it MUST
-close the handles already opened and return an error without returning a partial
-chain. Missing roots are not silently skipped or created. As with `Open`, a
-regular file is parsed as ERIS CBOR only when a read is attempted.
+Strict construction with `OpenChain` MUST open every entry in order. If one
+cannot be opened, it MUST close the handles already opened and return an error
+without returning a partial chain. Missing roots are not silently skipped or
+created. As with `Open`, a regular file is parsed as ERIS CBOR only when a read
+is attempted.
 
 ### Default chains
 
@@ -219,11 +224,12 @@ Append `eris/block` using the host directory separator. Treat each resulting
 path as one entry, even if an environment value contains `;`. This resolution
 applies only to default paths; explicit path lists still use literal paths.
 
-Default roots follow the same rules as explicit roots: they MUST already exist,
-and construction MUST fail if any root cannot be opened. Do not create or skip
-missing default roots. Applications can use `volume.DefaultChainPaths()` to
-obtain the paths before preparing the roots. This function does not open or
-create them. A nonempty chain string replaces the default chain completely.
+For `OpenChain`, default roots follow the same rules as explicit roots: they
+MUST already exist, and construction MUST fail if any root cannot be opened. Do
+not create or skip missing default roots. Applications can use
+`volume.DefaultChainPaths()` to obtain the paths before preparing the roots.
+This function does not open or create them. A nonempty chain string replaces the
+default chain completely.
 
 ### Chain operations
 
@@ -345,6 +351,9 @@ rename on platforms where it is unavailable.
 - `OpenChain(pathList) (*Chain, error)` to open a semicolon-separated list and
   combine it with `eris.CombinedBlockStore`, using default paths for an empty
   string;
+- `OpenAvailableChain(pathList) (*Chain, error)` to prepare selected default
+  directories and open the available volumes for application setup;
+- `Chain.Len()` to count the volumes in a chain;
 - `DefaultChainPaths() ([]string, error)` to resolve the platform's default
   paths without opening or creating roots;
 - `BlockPath(ref) string` to compute the canonical relative host path;

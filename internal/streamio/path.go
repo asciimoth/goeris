@@ -6,6 +6,20 @@ import (
 	"strings"
 )
 
+// DefaultMountRoots returns the platform's ERIS mount roots in lookup order.
+func DefaultMountRoots() []string {
+	if filepath.Separator != '\\' {
+		return []string{"/n/eris", "/eris"}
+	}
+	var roots []string
+	for _, key := range []string{"ProgramData", "LOCALAPPDATA"} {
+		if base := os.Getenv(key); filepath.IsAbs(base) {
+			roots = append(roots, filepath.Join(base, "eris"))
+		}
+	}
+	return roots
+}
+
 // AbsolutePath returns the absolute path to name in dir. An empty name
 // selects the directory itself.
 func AbsolutePath(dir, name string) (string, error) {

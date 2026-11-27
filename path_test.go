@@ -248,7 +248,8 @@ func TestResolvePathMountSearch(t *testing.T) {
 		}
 		return path
 	}
-	first, second := absolute("/n/eris"), absolute("/eris")
+	roots := setupDefaultMountRoots(t)
+	first, second := absolute(roots[0]), absolute(roots[1])
 	custom := absolute(filepath.Join(fixture, "custom"))
 
 	for _, test := range []struct {
@@ -313,6 +314,7 @@ func TestResolvePathMissingWorkingDirectory(t *testing.T) {
 }
 
 func TestMountSearchReportsMissingOnlyWhenAllPathsAreAbsent(t *testing.T) {
+	setupDefaultMountRoots(t)
 	t.Setenv("ERIS_MNT", "")
 	c := pathTestCapability(t)
 	for _, tc := range []struct {
@@ -340,4 +342,15 @@ func TestMountSearchReportsMissingOnlyWhenAllPathsAreAbsent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func setupDefaultMountRoots(t *testing.T) [2]string {
+	t.Helper()
+	if filepath.Separator != '\\' {
+		return [2]string{"/n/eris", "/eris"}
+	}
+	system, local := t.TempDir(), t.TempDir()
+	t.Setenv("ProgramData", system)
+	t.Setenv("LOCALAPPDATA", local)
+	return [2]string{filepath.Join(system, "eris"), filepath.Join(local, "eris")}
 }

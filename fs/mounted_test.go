@@ -46,11 +46,6 @@ func TestMountStoreSelection(t *testing.T) {
 			t.Fatal(got, err)
 		}
 	}
-	t.Setenv("ERIS_FS_MNT", "")
-	t.Setenv("ERIS_MNT", "")
-	if got := NewMountStore("").roots(); !slices.Equal(got, []string{"/n/eris/fs", "/eris/fs"}) {
-		t.Fatal(got)
-	}
 	if err := os.WriteFile(filepath.Join(base, cap.String()), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +60,34 @@ func TestMountStoreSelection(t *testing.T) {
 	cancel()
 	if _, err := store.OpenFS(ctx, cap); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+func TestMountStoreDefaultRoots(t *testing.T) {
+	t.Setenv("ERIS_FS_MNT", "")
+	t.Setenv("ERIS_MNT", "")
+	want := []string{"/n/eris/fs", "/eris/fs"}
+	if filepath.Separator == '\\' {
+		system, local := t.TempDir(), t.TempDir()
+		t.Setenv("ProgramData", system)
+		t.Setenv("LOCALAPPDATA", local)
+		want = []string{filepath.Join(system, "eris", "fs"), filepath.Join(local, "eris", "fs")}
+	}
+	if got := NewMountStore("").roots(); !slices.Equal(got, want) {
+		t.Fatalf("default roots = %q, want %q", got, want)
+	}
+}
+
+func TestOpenMountedTreesWithoutRoots(t *testing.T) {
+	ctx := t.Context()
+	cap := pathTestCapability(t)
+	if result := openMountedTrees(ctx, cap, nil); !result.absentTree || !errors.Is(result.err, stdfs.ErrNotExist) {
+		t.Fatalf("no mount roots: %v", result)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if result := openMountedTrees(canceled, cap, nil); result.absentTree || !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("canceled lookup with no roots: %v", result)
 	}
 }
 

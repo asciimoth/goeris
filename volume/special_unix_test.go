@@ -20,12 +20,19 @@ import (
 // Run in a subprocess so a blocking FIFO open cannot hang the test suite.
 func TestRejectFIFO(t *testing.T) {
 	if root := os.Getenv("GOERIS_FIFO_TEST_ROOT"); root != "" {
-		fifo := filepath.Join(root, "fifo")
+		t.Setenv("XDG_CACHE_HOME", root)
+		fifo := filepath.Join(root, "eris", "block")
+		if err := os.Mkdir(filepath.Dir(fifo), 0o700); err != nil {
+			t.Fatal(err)
+		}
 		if err := unix.Mkfifo(fifo, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if v, err := volume.Open(fifo); v != nil || !errors.Is(err, fs.ErrInvalid) {
 			t.Fatalf("FIFO root: %v, %v", v, err)
+		}
+		if chain, err := volume.OpenAvailableChain(fifo); chain != nil || !errors.Is(err, fs.ErrInvalid) {
+			t.Fatalf("FIFO at default volume path: %v, %v", chain, err)
 		}
 		v := openVolume(t, root)
 		block, ref := testBlock(t, eris.BlockSize1KiB, 91)

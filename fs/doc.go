@@ -43,8 +43,8 @@
 // [ImageStore] supplies builders and read-only [FileSystem] views.
 // [NewMountStore] opens decoded trees on a host mount. The view's ResolvePath method
 // handles files and directories, including files decompressed by the mount.
-// An empty mount directory uses ERIS_FS_MNT, then ERIS_MNT with /fs appended,
-// then the default directories /n/eris/fs and /eris/fs.
+// An empty mount directory uses ERIS_FS_MNT, then ERIS_MNT with fs appended,
+// then the fs directories under the platform's default ERIS mount roots.
 // [NewCombinedStore] tries stores in order. Builders and open files retain
 // their selected backend. [NewCombinedFileSystem] combines open image views.
 // Prefetch visits every member of a combined view.
