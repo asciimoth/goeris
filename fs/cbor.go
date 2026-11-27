@@ -27,11 +27,21 @@ func (index Index) MarshalBinary() ([]byte, error) {
 		return nil, err
 	}
 	entries := make([]*Entry, len(index.Entries))
+	// Reserve space for the fields present in every record and for each
+	// capability payload. Long paths and targets can grow the buffer.
+	capacity := len(MagicPrefix) + 3 + 6*len(entries)
 	for i := range entries {
-		entries[i] = &index.Entries[i]
+		entry := &index.Entries[i]
+		if entry.Size < 0 {
+			return nil, ErrUnknownSize
+		}
+		if entry.Type != Symlink {
+			capacity += eris.CapabilitySize
+		}
+		entries[i] = entry
 	}
 	slices.SortFunc(entries, func(a, b *Entry) int { return compareWirePaths(a.Path, b.Path) })
-	out := append([]byte(nil), MagicPrefix...)
+	out := append(make([]byte, 0, capacity), MagicPrefix...)
 	out = cborwire.AppendHead(out, 4, 2)
 	out = cborwire.AppendHead(out, 0, SpecificationVersion)
 	out = cborwire.AppendHead(out, 5, uint64(len(entries)))
@@ -42,9 +52,6 @@ func (index Index) MarshalBinary() ([]byte, error) {
 		}
 		fields := uint64(2)
 		if entry.Type == Regular || entry.Type == Executable {
-			if entry.Size < 0 {
-				return nil, ErrUnknownSize
-			}
 			fields = 3
 		}
 		out = cborwire.AppendHead(out, 4, fields)
@@ -246,24 +253,29 @@ func (decoder *cborDecoder) target() (string, error) {
 	}
 	var target strings.Builder
 	for i := uint64(0); i < count; i++ {
-		part, err := decoder.text()
-		if err != nil || strings.Contains(part, "/") {
+		part, err := decoder.textBytes()
+		if err != nil || bytes.IndexByte(part, '/') >= 0 {
 			return "", ErrInvalidIndex
 		}
 		if i != 0 {
 			target.WriteByte('/')
 		}
-		target.WriteString(part)
+		target.Write(part)
 	}
 	return target.String(), nil
 }
 
 func (decoder *cborDecoder) text() (string, error) {
+	data, err := decoder.textBytes()
+	return string(data), err
+}
+
+func (decoder *cborDecoder) textBytes() ([]byte, error) {
 	data, err := decoder.stringData(3)
 	if err != nil || !utf8.Valid(data) {
-		return "", ErrInvalidIndex
+		return nil, ErrInvalidIndex
 	}
-	return string(data), nil
+	return data, nil
 }
 
 func (decoder *cborDecoder) byteString() ([]byte, error) {

@@ -24,10 +24,8 @@ type Builder struct {
 
 // Store path components once. Storing every joined prefix would use quadratic
 // memory and processing time for a deeply nested path from an untrusted caller.
-type builderPath struct {
-	children map[string]*builderPath
-	entry    bool
-}
+// A nil child marks a complete entry. A non-nil child holds its descendants.
+type builderPath map[string]builderPath
 
 // NewBuilder returns a builder that writes files and indexes to content.
 // It keeps a copy of options. File writes preserve the supplied Root flag;
@@ -210,36 +208,37 @@ func (builder *Builder) add(entry Entry) error {
 		return err
 	}
 	builder.entries = append(builder.entries, entry)
+	if parent == nil {
+		builder.paths = make(builderPath)
+		parent = builder.paths
+	}
 	parent.addSuffix(suffix)
 	return nil
 }
 
 // insertionPoint returns the existing parent and the missing path components.
-func (builder *Builder) insertionPoint(components []string) (*builderPath, []string, error) {
-	current := &builder.paths
+func (builder *Builder) insertionPoint(components []string) (builderPath, []string, error) {
+	current := builder.paths
 	for i, component := range components {
-		if current.entry {
-			return nil, nil, ErrPathConflict
-		}
-		next := current.children[component]
-		if next == nil {
+		next, exists := current[component]
+		if !exists {
 			return current, components[i:], nil
+		}
+		if next == nil {
+			return nil, nil, ErrPathConflict
 		}
 		current = next
 	}
 	return nil, nil, ErrPathConflict
 }
 
-func (current *builderPath) addSuffix(components []string) {
-	for _, component := range components {
-		if current.children == nil {
-			current.children = make(map[string]*builderPath)
-		}
-		next := &builderPath{}
-		current.children[component] = next
+func (current builderPath) addSuffix(components []string) {
+	for _, component := range components[:len(components)-1] {
+		next := make(builderPath)
+		current[component] = next
 		current = next
 	}
-	current.entry = true
+	current[components[len(components)-1]] = nil
 }
 
 func splitPath(path string) ([]string, error) {

@@ -78,3 +78,23 @@ func TestBuilderCheckPathDoesNotReserve(t *testing.T) {
 		}
 	}
 }
+
+func TestBuilderRejectsAncestorAfterSiblingInsert(t *testing.T) {
+	builder := NewBuilder(newTestStore(), eris.Secret{}, eris.BlockOptions{})
+	for _, name := range []string{"dir/file", "dir/sub/file", "other/file"} {
+		if err := builder.AddSymlink(name, "."); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"dir", "dir/sub", "dir/file/child", "other/file"} {
+		if err := builder.AddSymlink(name, "."); !errors.Is(err, ErrPathConflict) {
+			t.Fatalf("AddSymlink(%q) = %v", name, err)
+		}
+	}
+	if err := builder.AddSymlink("dir/sub/sibling", "."); err != nil {
+		t.Fatal(err)
+	}
+	if entries := builder.Index().Entries; len(entries) != 4 {
+		t.Fatalf("got %d entries, want 4", len(entries))
+	}
+}
