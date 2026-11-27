@@ -147,6 +147,45 @@ func imageReadLink(ctx context.Context, image *FS) func(string) (string, error) 
 	return func(path string) (string, error) { return image.ReadLink(ctx, path) }
 }
 
+func TestLegacyLinkConfinedToItsNestedImage(t *testing.T) {
+	ctx := t.Context()
+	sibling, blocks := contextImage(t)
+	source := storeV1Index(t, Index{Entries: []Entry{
+		{Path: []string{"link"}, Type: Symlink, Target: "../sibling/nested/file"},
+	}}, blocks)
+	store := eris.NewBlockCapabilityStore(blocks)
+	parent, err := EncodeIndex(ctx, Index{Entries: []Entry{
+		{Path: []string{"source"}, Type: Subdirectory, Capability: source},
+		{Path: []string{"sibling"}, Type: Subdirectory, Capability: sibling},
+	}}, eris.Secret{}, store, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := OpenFS(ctx, parent, store, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := image.ReadFile(ctx, "sibling/nested/file"); err != nil || string(data) != "payload" {
+		t.Fatalf("direct read of sibling = %q, %v", data, err)
+	}
+	const link = "source/link"
+	if info, err := image.Lstat(ctx, link); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
+		t.Fatalf("Lstat = %v, %v", info, err)
+	}
+	if data, err := image.ReadFile(ctx, link); data != nil || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ReadFile = %q, %v", data, err)
+	}
+	if target, err := image.ReadLink(ctx, link); target != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ReadLink = %q, %v", target, err)
+	}
+	if name, err := image.ResolvePath(ctx, link); name != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ResolvePath = %q, %v", name, err)
+	}
+	if err := image.Prefetch(ctx, link); !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("Prefetch = %v", err)
+	}
+}
+
 type missingIndexStore struct{ eris.CapabilityStore }
 
 func (s missingIndexStore) DecodeWithLimit(ctx context.Context, cap eris.Capability, limit int64, options eris.BlockOptions) ([]byte, error) {

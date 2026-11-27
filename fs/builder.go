@@ -157,8 +157,9 @@ func (reader *countReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// AddSymlink adds a symbolic link. The target is stored verbatim and can point
-// outside the image. Applications must apply their own link safety policy.
+// AddSymlink stores the target verbatim, including absolute and dangling targets.
+// Image lookup enforces the image boundary. Use [FS.ReadLink] to get a target
+// for a native mount adapter.
 func (builder *Builder) AddSymlink(path, target string) error {
 	components, err := splitPath(path)
 	if err != nil {

@@ -80,6 +80,8 @@ type Entry struct {
 	Capability eris.Capability
 	// Target is a symlink target with slash-separated components. The codec
 	// stores these components as a CBOR array and preserves empty components.
+	// This is the recorded text. Use [FileSystem.ReadLink] to check a target
+	// before passing it to a native mount adapter.
 	Target string
 	// Size is the uncompressed file length. Zero denotes an empty file.
 	// Parsed v1 files have Size -1. Set their size before encoding them as v2.
