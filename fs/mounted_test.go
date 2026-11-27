@@ -235,8 +235,6 @@ func TestMountedOperations(t *testing.T) {
 	}
 }
 
-// The mount supplies the same directory metadata for an implicit directory
-// and a nested image. Check all operations that could follow a nested link.
 func TestCombinedReadLinkInSameMountedDirectory(t *testing.T) {
 	ctx := t.Context()
 	cap := pathTestCapability(t)
@@ -244,6 +242,7 @@ func TestCombinedReadLinkInSameMountedDirectory(t *testing.T) {
 	root := makePathTestTree(t, mount, cap)
 	for name, target := range map[string]string{
 		"alias": "docs", "docs/latest": "./readme.txt", "docs/parent": "..",
+		"round-trip": "alias/../hello.txt",
 	} {
 		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
 			t.Skipf("cannot create a symlink: %v", err)
@@ -273,14 +272,53 @@ func TestCombinedReadLinkInSameMountedDirectory(t *testing.T) {
 		t.Errorf("ReadLink above shared directory = %q, %v", got, err)
 	}
 	otherMount := t.TempDir()
-	makePathTestTree(t, otherMount, cap)
+	otherRoot := makePathTestTree(t, otherMount, cap)
 	for _, other := range []FileSystem{open(mount, "."), open(otherMount, "docs")} {
 		if got, err := NewCombinedFileSystem(view, other).ReadLink(ctx, "latest"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
 			t.Errorf("ReadLink across distinct mounted directories = %q, %v", got, err)
 		}
 	}
+
+	// A store chain can open the same immutable tree more than once.
+	// The common tree is sufficient to validate the directory alias.
+	mountAlias := filepath.Join(t.TempDir(), "trees")
+	if err := os.Symlink(mount, mountAlias); err != nil {
+		t.Fatal(err)
+	}
+	const target = "alias/../hello.txt"
+	for name, link := range map[string]string{"alias": "docs", "round-trip": target} {
+		if err := os.Symlink(link, filepath.Join(otherRoot, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := open(otherMount, ".").ReadLink(ctx, "round-trip"); got != target || err != nil {
+		t.Fatalf("ReadLink in the other mounted tree = %q, %v", got, err)
+	}
+	first := NewMountStore(mount)
+	for _, tc := range []struct {
+		name      string
+		alternate ImageStore
+		want      string
+		wantErr   error
+	}{
+		{"same mount", first, target, nil},
+		{"mount alias", NewMountStore(mountAlias), target, nil},
+		{"different mount", NewMountStore(otherMount), "", stdfs.ErrNotExist},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			image, err := NewCombinedStore(first, tc.alternate).OpenFS(ctx, cap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := image.ReadLink(ctx, "round-trip"); got != tc.want || !errors.Is(err, tc.wantErr) {
+				t.Errorf("ReadLink(round-trip) = %q, %v; want %q, %v", got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
 }
 
+// The mount supplies the same directory metadata for an implicit directory
+// and a nested image. Check all operations that could follow a nested link.
 func TestMountedNestedImageBoundary(t *testing.T) {
 	ctx := t.Context()
 	cap := pathTestCapability(t)

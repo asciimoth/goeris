@@ -166,20 +166,23 @@ backslash, a colon, a NUL byte, or a name ending in a dot or space prevents
 export. The components `.` and `..` retain their usual meaning.
 
 When backends serve the same capability, a client can read a link from one
-backend and look up its target in another. If the backends can establish that
-they serve the same indexed directory and agree on the export, `ReadLink` can
-use that index's policy. Otherwise it checks parent steps and the directories
-they remove in each backend. A directory alias or an unknown boundary prevents
-export when those checks cannot establish a safe parent step. An alternate mount
-that has no capability directory supplies no path components for this check.
+backend and look up its target in another. `ReadLink` checks parent steps and
+the directories they remove in each backend. If all backends serve the same
+indexed directory or the same directory in an immutable mounted tree, their
+checks can also establish that a directory alias is safe. They must agree on the
+target. A mount with no capability directory supplies no path components to
+check. The same applies when a decoded store cannot open the root index because
+a block is missing. Missing data inside an opened tree still requires a safety
+check.
 
 A host mount has no nested index markers in its expanded tree. For parent steps,
 `MountStore` reads the necessary decoded indexes at `M/C`. If an index is
 unavailable, it treats each directory that index would describe as a possible
 image root.
 
-A view that combines independently opened images rejects link export. Use `Sub`
-to select a directory from one backend and apply its link policy.
+A view that combines independently opened images exports links when the views
+select the same directory in the same index or immutable mounted tree. Use `Sub`
+to select a directory and apply its backend's link policy.
 
 Callers can explicitly enable recent listings with
 `Mount.WithListingCache(capabilityLimit, blockLimit)`. Both categories are

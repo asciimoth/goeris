@@ -62,7 +62,7 @@ func openMountedTrees(ctx context.Context, cap eris.Capability, roots []string) 
 			return openedImage{err: err}
 		}
 		if _, err := mountedRootInfo(name); err != nil {
-			return openedImage{err: err, absentMount: errors.Is(err, stdfs.ErrNotExist)}
+			return openedImage{err: err, absentTree: errors.Is(err, stdfs.ErrNotExist)}
 		}
 		return openedImage{view: &mountedImage{root: name, prefix: ".", capability: cap}}
 	})

@@ -153,14 +153,30 @@ func (m *mountedImage) isImplicitDirectory(ctx context.Context, name string) (bo
 	})
 }
 
-func (m *mountedImage) indexedLocation(ctx context.Context) imageLocation {
-	location, _ := withMountedRoot(ctx, m, "open", ".", func(r *os.Root, _ string) (imageLocation, error) {
+func (m *mountedImage) linkLocation(ctx context.Context) imageLocation {
+	location, err := withMountedRoot(ctx, m, "open", ".", func(r *os.Root, _ string) (imageLocation, error) {
 		b := mountedBoundaries{image: m, tree: r}
 		defer b.close()
-		if b.index(ctx, m.capability) == nil || ctx.Err() != nil {
-			return imageLocation{}, nil
+		if b.index(ctx, m.capability) != nil {
+			return imageLocation{index: m.capability, dir: m.prefix}, ctx.Err()
 		}
-		return imageLocation{index: m.capability, dir: m.prefix}, nil
+		// Two paths can name the same immutable tree even without an index.
+		root, err := filepath.EvalSymlinks(m.root)
+		if err != nil {
+			return imageLocation{}, err
+		}
+		expected, err := mountedRootInfo(root)
+		if err != nil {
+			return imageLocation{}, err
+		}
+		actual, err := r.Stat(".")
+		if err != nil || !os.SameFile(expected, actual) {
+			return imageLocation{}, err
+		}
+		return imageLocation{mountRoot: root, dir: m.prefix}, ctx.Err()
 	})
+	if err != nil {
+		return imageLocation{}
+	}
 	return location
 }

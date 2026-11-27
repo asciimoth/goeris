@@ -110,6 +110,7 @@ func TestMountedIndexSymlinkBoundaries(t *testing.T) {
 	}
 	missingTrees := filepath.Join(t.TempDir(), "fs")
 	missingMount := NewMountStore(missingTrees)
+	missingStore := NewStore(eris.NewBlockCapabilityStore(eris.BlockSet{}), options)
 	for name, backend := range map[string]ImageStore{
 		"mounted":                     mounted,
 		"mount path alias":            NewMountStore(treeAlias),
@@ -118,6 +119,10 @@ func TestMountedIndexSymlinkBoundaries(t *testing.T) {
 		"absent mount first":          NewCombinedStore(missingMount, mounted),
 		"absent mount last":           NewCombinedStore(mounted, missingMount),
 		"all alternate mounts absent": NewCombinedStore(NewCombinedStore(missingMount, missingMount), mounted),
+		"decoded root absent first":   NewCombinedStore(missingStore, mounted),
+		"decoded root absent last":    NewCombinedStore(mounted, missingStore),
+		"all alternate roots absent":  NewCombinedStore(NewCombinedStore(missingStore, missingMount), mounted),
+		"alternate missing blocks":    NewCombinedStore(mounted, NewCombinedStore(missingMount, missingStore)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			checkLinks(t, NewMountWithStore(ctx, backend, nil, options), "fs/"+cap.String()+"/")

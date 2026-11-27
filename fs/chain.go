@@ -105,9 +105,9 @@ func locationOf(view FileSystem) imageLocation {
 type openedImage struct {
 	view FileSystem
 	err  error
-	// An absent capability directory has no entries for a client to follow.
-	// A missing index or entry inside an opened tree cannot prove this.
-	absentMount bool
+	// A backend without the root tree supplies no entries to follow.
+	// Missing data inside an opened tree cannot establish this.
+	absentTree bool
 }
 
 func (o openedImage) result() (FileSystem, error) {
@@ -235,12 +235,12 @@ func openImages[B any](ctx context.Context, backends []B, kindOf func(B) imageVi
 	image, err := firstResult(ctx, backends, func(b B) (FileSystem, error) {
 		selected++
 		result := open(ctx, b)
-		allAbsent = allAbsent && result.absentMount
+		allAbsent = allAbsent && result.absentTree
 		return result.result()
 	})
 	if err != nil || len(backends) == 1 {
-		absentMount := allAbsent && selected == len(backends)-1 && errors.Is(err, stdfs.ErrNotExist)
-		return openedImage{view: image, err: err, absentMount: absentMount}
+		absentTree := allAbsent && selected == len(backends)-1 && checkContext(ctx) == nil
+		return openedImage{view: image, err: err, absentTree: absentTree}
 	}
 	views := make([]imageOpener, len(backends))
 	var linkViews []imageOpener
@@ -277,6 +277,8 @@ func (s *CombinedStore) openFS(ctx context.Context, cap eris.Capability) openedI
 		return open
 	}, func(ctx context.Context, store ImageStore) openedImage {
 		switch store := store.(type) {
+		case *Store:
+			return openedDecodedImage(store.OpenFS(ctx, cap))
 		case *MountStore:
 			return openMountedTrees(ctx, cap, store.roots())
 		case *CombinedStore:
@@ -289,13 +291,28 @@ func (s *CombinedStore) openFS(ctx context.Context, cap eris.Capability) openedI
 }
 
 func (s *CombinedStore) OpenFSWithLimit(ctx context.Context, cap eris.Capability, limit int64) (FileSystem, error) {
+	return s.openFSWithLimit(ctx, cap, limit).result()
+}
+
+func (s *CombinedStore) openFSWithLimit(ctx context.Context, cap eris.Capability, limit int64) openedImage {
 	return openImages(ctx, s.stores, func(store ImageStore) imageViewKind {
 		_, limited := storeViewKinds(store)
 		return limited
 	}, func(ctx context.Context, store ImageStore) openedImage {
-		view, err := store.OpenFSWithLimit(ctx, cap, limit)
-		return openedImage{view: view, err: err}
-	}).result()
+		switch store := store.(type) {
+		case *Store:
+			return openedDecodedImage(store.OpenFSWithLimit(ctx, cap, limit))
+		case *CombinedStore:
+			return store.openFSWithLimit(ctx, cap, limit)
+		default:
+			view, err := store.OpenFSWithLimit(ctx, cap, limit)
+			return openedImage{view: view, err: err}
+		}
+	})
+}
+
+func openedDecodedImage(view FileSystem, err error) openedImage {
+	return openedImage{view: view, err: err, absentTree: errors.Is(err, eris.ErrMissingBlock)}
 }
 
 func firstImageResult[T any](ctx context.Context, s *CombinedFileSystem, call func(FileSystem) (T, error)) (T, error) {
@@ -359,10 +376,9 @@ func (s *CombinedFileSystem) ReadLink(ctx context.Context, name string) (string,
 	for part := range strings.SplitSeq(target, "/") {
 		if part == ".." {
 			if err := s.checkTargetParents(ctx, name, target); err != nil {
-				// Equivalent indexed views have the same aliases and image
-				// boundaries. In that case the selected backend's export
-				// check already covers the lookup through any of them.
-				if !errors.Is(err, stdfs.ErrNotExist) || s.indexedLinkLocation(ctx, name, target).dir == "" {
+				// Equivalent views have the same aliases and boundaries.
+				// Their own export checks cover lookup through any of them.
+				if !errors.Is(err, stdfs.ErrNotExist) || s.sharedLinkLocation(ctx, name, target).dir == "" {
 					if ctx.Err() != nil {
 						return "", pathError("readlink", name, ctx.Err())
 					}
@@ -375,11 +391,11 @@ func (s *CombinedFileSystem) ReadLink(ctx context.Context, name string) (string,
 	return target, nil
 }
 
-func (s *CombinedFileSystem) indexedLinkLocation(ctx context.Context, name, target string) imageLocation {
+func (s *CombinedFileSystem) sharedLinkLocation(ctx context.Context, name, target string) imageLocation {
 	var shared imageLocation
 	for _, open := range s.linkImages {
 		result := open(ctx)
-		if result.absentMount {
+		if result.absentTree {
 			continue
 		}
 		image, err := result.result()
@@ -388,19 +404,19 @@ func (s *CombinedFileSystem) indexedLinkLocation(ctx context.Context, name, targ
 		}
 		var location imageLocation
 		if combined, ok := image.(*CombinedFileSystem); ok {
-			location = combined.indexedLinkLocation(ctx, name, target)
+			location = combined.sharedLinkLocation(ctx, name, target)
 		} else {
 			location = locationOf(image)
 			if mounted, ok := image.(*mountedImage); ok {
-				location = mounted.indexedLocation(ctx)
+				location = mounted.linkLocation(ctx)
 			}
-			if location.index != (eris.Capability{}) {
+			if location.dir != "" {
 				if got, err := image.ReadLink(ctx, name); err != nil || got != target {
 					return imageLocation{}
 				}
 			}
 		}
-		if location.index == (eris.Capability{}) || (shared.dir != "" && location != shared) {
+		if location.dir == "" || (shared.dir != "" && location != shared) {
 			return imageLocation{}
 		}
 		shared = location
@@ -413,7 +429,7 @@ func (s *CombinedFileSystem) indexedLinkLocation(ctx context.Context, name, targ
 func (s *CombinedFileSystem) checkTargetParents(ctx context.Context, name, target string) error {
 	for _, open := range s.linkImages {
 		result := open(ctx)
-		if result.absentMount {
+		if result.absentTree {
 			continue
 		}
 		image, err := result.result()
