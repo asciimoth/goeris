@@ -9,7 +9,8 @@ import (
 	"github.com/asciimoth/zpgo"
 )
 
-func dump(progress *zpgo.Progress, setup auto.DefaultSetup) error {
+// dump reports the environment and the lookup order of the configured stores.
+func dump(progress *zpgo.Progress, setup auto.DefaultSetup, paths storageFlags) error {
 	var out bytes.Buffer
 	out.WriteString("Environment\n")
 	for _, key := range []string{
@@ -33,18 +34,25 @@ func dump(progress *zpgo.Progress, setup auto.DefaultSetup) error {
 	}
 
 	out.WriteString("\nStorage lookup order\n")
-	_, _ = fmt.Fprintf(&out, "  Block volumes %q\n", setup.BlockVolumes)
+	_, _ = fmt.Fprintf(&out, "  Block volumes %q\n", paths.blocks.lookupOrder(setup.BlockVolumes))
 	out.WriteString("  Capabilities\n")
-	if setup.CapabilitiesFromBlocks {
-		out.WriteString("    Block store\n")
-	}
-	_, _ = fmt.Fprintf(&out, "    Mount roots %q\n", setup.CapabilityMountRoots)
+	dumpMounts(&out, paths.capabilities, setup.CapabilityMountRoots, setup.CapabilitiesFromBlocks, "Block store")
 	out.WriteString("  ERIS-FS images\n")
-	if setup.ImagesFromCapabilities {
-		out.WriteString("    Capability store\n")
-	}
-	_, _ = fmt.Fprintf(&out, "    Mount roots %q\n", setup.ImageMountRoots)
+	dumpMounts(&out, paths.images, setup.ImageMountRoots, setup.ImagesFromCapabilities, "Capability store")
 
 	_, err := progress.WriteStdout(out.Bytes())
 	return err
+}
+
+// dumpMounts groups consecutive mount roots. A derived backend follows the
+// prepended mounts and precedes the default mounts.
+func dumpMounts(out *bytes.Buffer, paths storePaths, defaults []string, hasSource bool, source string) {
+	if hasSource {
+		if len(paths.before) > 0 {
+			_, _ = fmt.Fprintf(out, "    Mount roots %q\n", paths.before)
+		}
+		_, _ = fmt.Fprintf(out, "    %s\n", source)
+		paths.before = nil
+	}
+	_, _ = fmt.Fprintf(out, "    Mount roots %q\n", paths.lookupOrder(defaults))
 }

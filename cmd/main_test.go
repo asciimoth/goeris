@@ -21,16 +21,19 @@ func TestRun(t *testing.T) {
 		{"long help", []string{"--help"}, 0, usage, ""},
 		{"help command", []string{"help"}, 0, usage, ""},
 		{"help for dump", []string{"dump", "--help"}, 0, usage, ""},
-		{"unknown option", []string{"--unknown"}, 2, usage, "goeris: unknown command \"--unknown\"\n"},
+		{"help with storage flags", []string{"--prepend-blocks=missing", "dump", "--help"}, 0, usage, ""},
+		{"unknown option", []string{"--unknown"}, 2, usage, "goeris: flag provided but not defined: -unknown\n"},
+		{"unknown dump option", []string{"dump", "--unknown"}, 2, usage, "goeris: dump: flag provided but not defined: -unknown\n"},
 		{"unknown command", []string{"wrongcmd"}, 2, usage, "goeris: unknown command \"wrongcmd\"\n"},
 		{"extra dump argument", []string{"dump", "file name"}, 2, usage, "goeris: dump: unexpected arguments: [\"file name\"]\n"},
+		{"missing value", []string{"dump", "--replace-fs"}, 2, usage, "goeris: dump: flag needs an argument: -replace-fs\n"},
+		{"empty prepend", []string{"dump", "--prepend-blocks="}, 2, usage, "goeris: dump: invalid value \"\" for flag -prepend-blocks: path list contains an empty entry\n"},
+		{"empty list entry", []string{"dump", "--append-capabilities=first;;last"}, 2, usage, "goeris: dump: invalid value \"first;;last\" for flag -append-capabilities: path list contains an empty entry\n"},
+		{"empty replacement entry", []string{"dump", "--replace-fs=first;"}, 2, usage, "goeris: dump: invalid value \"first;\" for flag -replace-fs: path list contains an empty entry\n"},
+		{"end of flags", []string{"dump", "--", "--replace-blocks="}, 2, usage, "goeris: dump: unexpected arguments: [\"--replace-blocks=\"]\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.code == 0 {
-				t.Setenv("ERIS_BLOCK_PATH", ";")
-			} else {
-				t.Setenv("ERIS_BLOCK_PATH", filepath.Join(t.TempDir(), "missing"))
-			}
+			t.Setenv("ERIS_BLOCK_PATH", ";")
 			stdout, stderr := captureOutput(t)
 			if code := run(tc.args); code != tc.code {
 				t.Fatalf("exit code = %d, want %d", code, tc.code)
@@ -86,13 +89,23 @@ func TestDump(t *testing.T) {
 }
 
 func TestRunSetupFailure(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
 	t.Setenv("ERIS_BLOCK_PATH", ";")
-	for _, command := range []string{"dump", "unknown"} {
-		t.Run(command, func(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"defaults", []string{"dump"}, "open block volumes"},
+		{"prepend", []string{"dump", "--prepend-blocks", missing}, "open --prepend-blocks"},
+		{"replace", []string{"dump", "--replace-blocks", missing}, "open --replace-blocks"},
+		{"append", []string{"dump", "--replace-blocks=" + t.TempDir(), "--append-blocks", missing}, "open --append-blocks"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			stdout, stderr := captureOutput(t)
-			code := run([]string{command})
+			code := run(tc.args)
 			out, errout := readOutput(t, stdout), readOutput(t, stderr)
-			if code != 1 || out != "" || !strings.Contains(errout, "open block volumes") {
+			if code != 1 || out != "" || !strings.Contains(errout, tc.want) {
 				t.Errorf("exit code = %d, stdout = %q, stderr = %q", code, out, errout)
 			}
 		})

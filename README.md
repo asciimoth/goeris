@@ -58,6 +58,34 @@ lets the capability mount supply a file missing from the volumes. A returned
 reader or image builder stays with the store that opened it. Use `PrependImages`
 to give a custom builder priority.
 
+### Command-line storage flags
+
+Run `goeris dump` to show the environment and the storage lookup order. Set
+storage flags before or after `dump`.
+
+| Chain             | Prepend                  | Append                  | Replace                  |
+| ----------------- | ------------------------ | ----------------------- | ------------------------ |
+| Block volumes     | `--prepend-blocks`       | `--append-blocks`       | `--replace-blocks`       |
+| Capability mounts | `--prepend-capabilities` | `--append-capabilities` | `--replace-capabilities` |
+| ERIS-FS mounts    | `--prepend-fs`           | `--append-fs`           | `--replace-fs`           |
+
+Each flag takes a semicolon-separated list of paths. Quote the list if it
+contains semicolons or spaces. Explicit block volumes must be existing
+directories or ERIS CBOR files. Capability paths name roots with decoded files.
+ERIS-FS paths name roots with expanded trees, such as `/eris/fs`. The command
+checks mounts on lookup.
+
+Prepends come first, then the defaults or the list from the last replacement,
+then the appends. Repeated prepends and appends keep their order. Use an empty
+replacement to remove the defaults for that chain. A capability or ERIS-FS
+replacement also removes the default backend that reads from the preceding
+chain.
+
+```sh
+goeris dump --prepend-blocks '/var/eris;backup.cbor' --append-fs /backup/fs
+goeris dump --replace-blocks= --replace-capabilities= --replace-fs=
+```
+
 ## Packages
 
 The `eris` package implements:
