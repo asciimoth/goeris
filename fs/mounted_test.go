@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	stdfs "io/fs"
 	"net"
@@ -781,5 +782,55 @@ func TestMountedPrefetchTraversal(t *testing.T) {
 	cancel()
 	if err := prefetchMountedTree(ctx, tree, "dir"); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+func TestMountedListingRetainsEntryMetadata(t *testing.T) {
+	root := t.TempDir()
+	for i := range 35 {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("file%02d", i)), make([]byte, i), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	image := &mountedImage{root: root, prefix: "."}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	all, err := image.ReadDir(ctx, ".")
+	if err != nil || len(all) != 35 {
+		t.Fatalf("ReadDir = %d entries, %v", len(all), err)
+	}
+	file, err := image.Open(t.Context(), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paged := file.(stdfs.ReadDirFile)
+	var pages []stdfs.DirEntry
+	for {
+		page, err := paged.ReadDir(17)
+		pages = append(pages, page...)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != len(all) {
+		t.Fatalf("paged listing has %d entries, want %d", len(pages), len(all))
+	}
+	slices.SortFunc(pages, func(a, b stdfs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
+	cancel()
+	for i, entry := range pages {
+		info, err := entry.Info()
+		name := fmt.Sprintf("file%02d", i)
+		if err != nil || info.Name() != name || info.Size() != int64(i) || all[i].Name() != name {
+			t.Fatalf("entry %d = %v, %v", i, info, err)
+		}
+		if _, err := all[i].Info(); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Info(%q) after cancel = %v", name, err)
+		}
 	}
 }

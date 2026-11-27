@@ -54,14 +54,8 @@ func (index Index) MarshalBinary() ([]byte, error) {
 				return nil, ErrPathConflict
 			}
 		}
-	} else {
-		paths := make([][]string, len(entries))
-		for i := range index.Entries {
-			paths[i] = index.Entries[i].Path
-		}
-		if err := checkPathConflicts(paths); err != nil {
-			return nil, err
-		}
+	} else if err := index.checkPathConflicts(); err != nil {
+		return nil, err
 	}
 	if unknownSize {
 		return nil, ErrUnknownSize
@@ -141,11 +135,14 @@ func (index *Index) UnmarshalBinary(data []byte) error {
 	if err != nil || count > uint64(len(data)) {
 		return ErrInvalidIndex
 	}
+	decoder.pathBatchSize = int(min(count, 32))
 	// Grow only after entries are parsed. An untrusted count must not cause
 	// allocation for entries that are absent or invalid.
 	next := Index{Entries: []Entry{}}
 	var previous []byte
 	bytewise, lengthFirst := true, true
+	// A v1 text key and an array key can describe the same path.
+	checkConflicts := version == LegacySpecificationVersion
 	for range count {
 		start := decoder.offset
 		entry, keyEnd, decodeErr := decoder.entry(version)
@@ -154,6 +151,7 @@ func (index *Index) UnmarshalBinary(data []byte) error {
 		}
 		key := data[start:keyEnd]
 		if previous != nil {
+			checkConflicts = checkConflicts || len(entry.Path) != len(next.Entries[0].Path)
 			order := bytes.Compare(previous, key)
 			bytewise = bytewise && order < 0
 			lengthFirst = lengthFirst && (len(previous) < len(key) || (len(previous) == len(key) && order < 0))
@@ -167,7 +165,9 @@ func (index *Index) UnmarshalBinary(data []byte) error {
 		previous = key
 		next.Entries = append(next.Entries, entry)
 	}
-	if decoder.offset != len(data) || next.Validate() != nil {
+	// entry validates each field as it is read. At equal depth, v2 paths
+	// cannot be ancestors, and strict wire order already excludes duplicates.
+	if decoder.offset != len(data) || (checkConflicts && next.checkPathConflicts() != nil) {
 		return ErrInvalidIndex
 	}
 	*index = next
@@ -182,8 +182,42 @@ func ParseIndex(data []byte) (Index, error) {
 }
 
 type cborDecoder struct {
-	data   []byte
-	offset int
+	data          []byte
+	offset        int
+	pathSlots     []string
+	pathBatchSize int
+}
+
+func (decoder *cborDecoder) path() ([]string, error) {
+	length, err := decoder.head(4)
+	// A component needs at least a text header and one byte.
+	if err != nil || length == 0 || length > uint64((len(decoder.data)-decoder.offset)/2) {
+		return nil, ErrInvalidIndex
+	}
+
+	var components []string
+	if length <= 8 {
+		// Batch short paths to reduce allocations. Limit each batch so one
+		// retained path keeps only a small number of other components alive.
+		n := int(length)
+		if len(decoder.pathSlots) < n {
+			decoder.pathSlots = make([]string, max(n, decoder.pathBatchSize))
+		}
+		components = decoder.pathSlots[:0:n]
+		decoder.pathSlots = decoder.pathSlots[n:]
+	} else {
+		// Bound the initial allocation for an untrusted length. Additional
+		// space is allocated only as valid components arrive.
+		components = make([]string, 0, int(min(length, 16)))
+	}
+	for range length {
+		component, err := decoder.text()
+		if err != nil || !validPathComponent(component) {
+			return nil, ErrInvalidIndex
+		}
+		components = append(components, component)
+	}
+	return components, nil
 }
 
 func (decoder *cborDecoder) entry(version uint64) (Entry, int, error) {
@@ -198,22 +232,11 @@ func (decoder *cborDecoder) entry(version uint64) (Entry, int, error) {
 			return Entry{}, 0, ErrInvalidIndex
 		}
 	} else {
-		pathLength, err := decoder.head(4)
-		if err != nil || pathLength == 0 || pathLength > uint64(len(decoder.data)) {
-			return Entry{}, 0, ErrInvalidIndex
+		components, err := decoder.path()
+		if err != nil {
+			return Entry{}, 0, err
 		}
-		for range pathLength {
-			component, err := decoder.text()
-			if err != nil {
-				return Entry{}, 0, err
-			}
-			// Reject invalid components before allocating the rest of an
-			// untrusted path array. Validate uses the same component rules.
-			if !validPathComponent(component) {
-				return Entry{}, 0, ErrInvalidIndex
-			}
-			entry.Path = append(entry.Path, component)
-		}
+		entry.Path = components
 	}
 	keyEnd := decoder.offset
 	length, err := decoder.head(4)

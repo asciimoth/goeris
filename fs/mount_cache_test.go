@@ -307,6 +307,12 @@ func TestMountListingCacheViewsAndSnapshots(t *testing.T) {
 	if err != nil || len(old) != 1 || old[0].Name() != hash[3:6] {
 		t.Fatalf("prefix snapshot: %v, %v", old, err)
 	}
+	replacement := caps[1].Root.Reference.String()
+	checkMountListing(t, m, ".", "fs", mountReadme, replacement, replacement[:3])
+	info, err := old[0].Info()
+	if err != nil || info.Name() != hash[3:6] || !info.IsDir() {
+		t.Fatalf("evicted prefix metadata: %v, %v", info, err)
+	}
 }
 
 func TestMountListingCacheFailuresAndMetadata(t *testing.T) {
@@ -569,4 +575,68 @@ func BenchmarkMountListingRefresh(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestMountCachedDirectoryMetadata(t *testing.T) {
+	blocks, _ := mountFixture(t)
+	m := withMountCache(t, NewMount(t.Context(), blocks, eris.BlockOptions{}), 1, 1)
+	ref := mountCacheCaps(t)[0].Root.Reference
+	if _, err := m.Stat(ref.String()); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{".", "Fs", strings.ToLower(ref.String()[:3])} {
+		for _, stat := range []func(string) (stdfs.FileInfo, error){m.Stat, m.Lstat} {
+			info, err := stat(dir)
+			if err != nil || !info.IsDir() || info.Name() != dir {
+				t.Fatalf("metadata for %q = %v, %v", dir, info, err)
+			}
+		}
+		if _, err := m.OpenFile(dir); !errors.Is(err, stdfs.ErrInvalid) {
+			t.Fatalf("OpenFile(%q) = %v", dir, err)
+		}
+	}
+}
+
+func TestMountListingRemembersSuccessfulOpenAfterReadError(t *testing.T) {
+	ctx := t.Context()
+	capability := pathTestCapability(t)
+	want := strings.Repeat("a", 512)
+	failed := errors.New("storage read failed")
+	reader := &readFileTestReader{
+		imageResultReader: imageResultReader{Reader: strings.NewReader(want), size: 1024},
+		readErr:           failed,
+	}
+	store := NewStore(&imageResultStore{reader: reader}, eris.BlockOptions{})
+	m := withMountCache(t, NewMountWithStore(ctx, store, nil, eris.BlockOptions{}), 1, 0)
+	name := capability.String()
+	data, err := m.ReadFile(name)
+	checkMountError(t, "readfile", name, err, failed)
+	if string(data) != want || !reader.closed {
+		t.Fatalf("ReadFile = %d bytes, closed = %v", len(data), reader.closed)
+	}
+	entries, err := m.ReadDir(".")
+	if err != nil || names(entries) != "fs,"+name {
+		t.Fatalf("ReadDir = %v, %v", entries, err)
+	}
+	info, err := entries[1].Info()
+	if err != nil || info.Size() != 1024 {
+		t.Fatalf("cached metadata = %v, %v", info, err)
+	}
+}
+
+func TestMountListingSharedVolumePrefixes(t *testing.T) {
+	blocks, _ := mountFixture(t)
+	m := withMountCache(t, NewMount(t.Context(), blocks, eris.BlockOptions{}), 0, 2)
+	var a, b eris.Reference
+	b[len(b)-1] = 1
+	m.rememberBlock(a, 1024)
+	m.rememberBlock(b, 32768)
+	first, second := a.String(), b.String()
+	checkMountListing(t, m, ".", "fs", first, second, first[:3])
+	dir := first[:3]
+	for _, part := range []string{first[3:6], first[6:9]} {
+		checkMountListing(t, m, dir, part)
+		dir += "/" + part
+	}
+	checkMountListing(t, m, dir, first[9:], second[9:])
 }

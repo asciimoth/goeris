@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"bytes"
 	"context"
 	"io"
 	stdfs "io/fs"
@@ -39,7 +40,6 @@ type node struct {
 	mu          sync.Mutex
 	store       *Store
 	name        string
-	kind        EntryType
 	capability  eris.Capability
 	target      string
 	// A nested index has nil children until load succeeds. After that the
@@ -49,6 +49,7 @@ type node struct {
 	loading     chan struct{}
 	indexLimit  int64
 	size        int64
+	kind        EntryType
 	sizeKnown   bool
 	compression Compression
 }
@@ -97,11 +98,18 @@ func (s *Store) openFS(ctx context.Context, capability eris.Capability, limit in
 
 // buildTree consumes an index that DecodeIndexWithLimit has already validated.
 func buildTree(index Index, s *Store, rootName string, indexLimit int64) *node {
+	// In a v2 index, single-component paths come first in wire order.
+	// They give a lower bound even for legacy indexes with another order.
+	rootEntries := 0
+	for rootEntries < len(index.Entries) && len(index.Entries[rootEntries].Path) == 1 {
+		rootEntries++
+	}
 	root := &node{
-		name: rootName, kind: directoryType, store: s, children: make(map[string]*node),
+		name: rootName, kind: directoryType, store: s, children: make(map[string]*node, rootEntries),
 		indexLimit: indexLimit,
 	}
-	for _, entry := range index.Entries {
+	var leaves []node
+	for i, entry := range index.Entries {
 		parent := root
 		for _, component := range entry.Path[:len(entry.Path)-1] {
 			child := parent.children[component]
@@ -115,7 +123,19 @@ func buildTree(index Index, s *Store, rootName string, indexLimit int64) *node {
 			parent = child
 		}
 		name := entry.Path[len(entry.Path)-1]
-		child := &node{
+		var child *node
+		if entry.Type == Subdirectory {
+			// A loaded image can retain a whole tree. Give its root an
+			// independent allocation so a sibling's metadata cannot retain it.
+			child = new(node)
+		} else {
+			if len(leaves) == 0 {
+				leaves = make([]node, min(8, len(index.Entries)-i))
+			}
+			child = &leaves[0]
+			leaves = leaves[1:]
+		}
+		*child = node{
 			name: name, kind: entry.Type, store: s, capability: entry.Capability,
 			target: entry.Target, indexLimit: indexLimit,
 			size: entry.Size, sizeKnown: entry.Size >= 0, compression: entry.Compression,
@@ -239,20 +259,37 @@ func (fileSystem *FS) Open(ctx context.Context, path string) (stdfs.File, error)
 	return item.openRegular(ctx, path)
 }
 
-// ReadFile reads the complete file. It grows the buffer as content is read,
-// without allocating from the untrusted size in the index. To limit memory for
-// large content, use Open and read through an io.LimitReader instead.
+// ReadFile reads the complete file. It uses a bounded size hint for the initial
+// buffer. To limit memory for large content, use Open with an io.LimitReader.
 func (fileSystem *FS) ReadFile(ctx context.Context, name string) ([]byte, error) {
 	file, err := fileSystem.Open(ctx, name)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = file.Close() }()
-	data, err := io.ReadAll(file)
+	data, err := readImageFile(file)
 	if err != nil {
 		return data, pathError("read", name, err)
 	}
 	return data, nil
+}
+
+func readImageFile(file stdfs.File) ([]byte, error) {
+	var size int64
+	switch f := file.(type) {
+	case *regularFile:
+		size = f.node.Size()
+	case *lzipFile:
+		size = f.node.size
+	}
+	// The size can come from an untrusted index. Limit the initial allocation
+	// and keep room for the read that verifies EOF or reports a size mismatch.
+	if size < bytes.MinRead || size > 32<<10 {
+		return io.ReadAll(file)
+	}
+	buffer := bytes.NewBuffer(make([]byte, 0, int(size)+bytes.MinRead))
+	_, err := buffer.ReadFrom(file)
+	return buffer.Bytes(), err
 }
 
 func (item *node) openRegular(ctx context.Context, path string) (ReadSeekCloser, error) {

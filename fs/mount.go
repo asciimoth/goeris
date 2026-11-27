@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"io"
 	stdfs "io/fs"
 	"path"
 	"strings"
@@ -95,34 +94,56 @@ func (mount *Mount) withIndexLimit(limit int64) (*Mount, error) {
 	return mount, nil
 }
 
-// resolve selects an image and a path within it. Virtual directories and
-// content files use the same tree lookup and metadata as FS.
-func (m *Mount) resolve(name string) (FileSystem, string, error) {
+func (m *Mount) checkedPath(name string) (string, error) {
 	if m == nil || m.ctx == nil || !stdfs.ValidPath(name) {
-		return nil, "", stdfs.ErrInvalid
+		return "", stdfs.ErrInvalid
 	}
 	if err := m.ctx.Err(); err != nil {
+		return "", err
+	}
+	return m.fullPath(name), nil
+}
+
+type mountResolveOptions uint8
+
+const (
+	mountMetadata   mountResolveOptions = 0
+	mountList       mountResolveOptions = 1 << 0
+	mountBlockBytes mountResolveOptions = 1 << 1
+)
+
+// resolve selects an image and a path within it. Virtual directories and
+// content files use the same tree lookup and metadata as FS.
+func (m *Mount) resolve(name string, options mountResolveOptions) (FileSystem, string, error) {
+	full, err := m.checkedPath(name)
+	if err != nil {
 		return nil, "", err
 	}
-	full := m.fullPath(name)
-	root := buildTree(Index{}, m.content, ".", m.indexLimit)
-	image := &FS{root: root, prefix: "."}
-	if full == "." {
-		if m.images != nil {
-			root.children["fs"] = buildTree(Index{}, m.content, "fs", m.indexLimit)
+	return m.resolvePath(full, options)
+}
+
+func (m *Mount) resolvePath(full string, options mountResolveOptions) (FileSystem, string, error) {
+	virtualDirectory := func(base string) *FS {
+		root := &node{name: base, kind: directoryType}
+		if options&mountList != 0 {
+			root.children = make(map[string]*node)
+			if full == "." && m.images != nil {
+				root.children["fs"] = &node{name: "fs", kind: directoryType}
+			}
+			m.addListings(root, full)
 		}
-		m.addListings(root, full)
-		return image, ".", nil
+		return &FS{root: root, prefix: "."}
+	}
+	if full == "." {
+		return virtualDirectory("."), ".", nil
 	}
 	first, rest, tree := strings.Cut(full, "/")
-	if mountUpper(first) == "FS" {
+	if isMountFS(first) {
 		if m.images == nil {
 			return nil, "", stdfs.ErrNotExist
 		}
 		if !tree {
-			root.name = first
-			m.addListings(root, full)
-			return image, ".", nil
+			return virtualDirectory(first), ".", nil
 		}
 		capName, inner, more := strings.Cut(rest, "/")
 		capability, err := mountCapability(capName)
@@ -144,23 +165,20 @@ func (m *Mount) resolve(name string) (FileSystem, string, error) {
 	if ref, directory, ok := mountBlockPath(full); ok && m.source != nil {
 		base := path.Base(full)
 		if directory {
-			root.name = base
-			m.addListings(root, full)
-			return image, ".", nil
+			return virtualDirectory(base), ".", nil
 		}
-		data, err, _ := eris.GetBlock(m.ctx, m.source, ref, eris.NoTTL, m.options)
+		data, err := m.loadBlock(ref)
 		if err != nil {
 			return nil, "", err
 		}
-		if err := eris.VerifyBlock(data, ref); err != nil {
-			return nil, "", err
-		}
-		m.rememberBlock(ref, int64(len(data)))
-		root.children[base] = &node{
+		child := &node{
 			name: base, kind: Regular, size: int64(len(data)), sizeKnown: true,
-			block: bytes.Clone(data),
 		}
-		return image, base, nil
+		if options&mountBlockBytes != 0 {
+			child.block = bytes.Clone(data)
+		}
+		root := &node{name: ".", kind: directoryType, children: map[string]*node{base: child}}
+		return &FS{root: root, prefix: "."}, base, nil
 	}
 	if tree || m.content == nil { // Decoded content is always a file, even when it is an index.
 		return nil, "", stdfs.ErrNotExist
@@ -169,11 +187,25 @@ func (m *Mount) resolve(name string) (FileSystem, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	root := buildTree(Index{}, m.content, ".", m.indexLimit)
 	root.children[first] = &node{
 		name: first, kind: Regular, store: m.content,
 		capability: capability,
 	}
-	return image, first, nil
+	return &FS{root: root, prefix: "."}, first, nil
+}
+
+// loadBlock verifies the block. Callers that expose its bytes keep a copy.
+func (m *Mount) loadBlock(ref eris.Reference) ([]byte, error) {
+	data, err, _ := eris.GetBlock(m.ctx, m.source, ref, eris.NoTTL, m.options)
+	if err != nil {
+		return nil, err
+	}
+	if err := eris.VerifyBlock(data, ref); err != nil {
+		return nil, err
+	}
+	m.rememberBlock(ref, int64(len(data)))
+	return data, nil
 }
 
 func (m *Mount) openImage(ctx context.Context, cap eris.Capability) (FileSystem, error) {
@@ -194,32 +226,46 @@ func (m *Mount) fullPath(name string) string {
 	return m.prefix + "/" + name
 }
 
+func isMountFS(name string) bool {
+	return len(name) == 2 && strings.EqualFold(name, "fs")
+}
+
 func mountCapability(name string) (eris.Capability, error) {
-	name = mountUpper(name)
-	var capability eris.Capability
-	var err error
+	const prefix = eris.CapabilityURNPrefix
 	switch len(name) {
 	case eris.CapabilityTextSize:
-		if strings.HasPrefix(name, "URN:ERIS:") {
-			capability, err = eris.ParseURN(eris.CapabilityURNPrefix + name[len(eris.CapabilityURNPrefix):])
-		} else {
-			err = eris.ErrInvalidCapability
+		if !strings.EqualFold(name[:len(prefix)], prefix) {
+			return eris.Capability{}, stdfs.ErrNotExist
 		}
-	case eris.CapabilityTextSize - len(eris.CapabilityURNPrefix):
-		capability, err = eris.ParseURN(eris.CapabilityURNPrefix + name)
+		name = name[len(prefix):]
+	case eris.CapabilityTextSize - len(prefix):
+		// The caller supplied the base32 payload.
 	case 2 * eris.CapabilitySize:
-		var data []byte
-		data, err = hex.DecodeString(name)
-		if err == nil {
-			capability, err = eris.ParseCapability(data)
+		var data [eris.CapabilitySize]byte
+		if _, err := hex.Decode(data[:], []byte(name)); err != nil {
+			return eris.Capability{}, stdfs.ErrNotExist
 		}
+		cap, err := eris.ParseCapability(data[:])
+		if err != nil {
+			return eris.Capability{}, stdfs.ErrNotExist
+		}
+		return cap, nil
 	default:
-		err = eris.ErrInvalidCapability
-	}
-	if err != nil {
 		return eris.Capability{}, stdfs.ErrNotExist
 	}
-	return capability, nil
+
+	// Normalize into a fixed buffer. The public parser checks the base32
+	// alphabet and rejects nonzero padding bits.
+	var urn [eris.CapabilityTextSize]byte
+	copy(urn[:], prefix)
+	for i := range len(name) {
+		urn[len(prefix)+i] = mountUpperByte(name[i])
+	}
+	var cap eris.Capability
+	if err := cap.UnmarshalText(urn[:]); err != nil {
+		return eris.Capability{}, stdfs.ErrNotExist
+	}
+	return cap, nil
 }
 
 // mountError keeps the public path and operation, while preserving source
@@ -239,7 +285,7 @@ func mountError(op, name string, err error) error {
 // Open opens a file or directory. The image backend determines whether
 // a compressed file also supports random access.
 func (m *Mount) Open(name string) (stdfs.File, error) {
-	image, inner, err := m.resolve(name)
+	image, inner, err := m.resolve(name, mountList|mountBlockBytes)
 	if err != nil {
 		return nil, mountError("open", name, err)
 	}
@@ -253,7 +299,7 @@ func (m *Mount) Open(name string) (stdfs.File, error) {
 // OpenFile opens a regular file for Read, ReadAt, and Seek. A capability-
 // backed image returns ErrNotSeekable for compressed files.
 func (m *Mount) OpenFile(name string) (ReadSeekCloser, error) {
-	image, inner, err := m.resolve(name)
+	image, inner, err := m.resolve(name, mountBlockBytes)
 	if err != nil {
 		return nil, mountError("open", name, err)
 	}
@@ -267,20 +313,37 @@ func (m *Mount) OpenFile(name string) (ReadSeekCloser, error) {
 // ReadFile reads a complete file. It has no content size limit. Use Open with
 // io.LimitReader when the caller needs a limit on the output size.
 func (m *Mount) ReadFile(name string) ([]byte, error) {
+	full, err := m.checkedPath(name)
+	if err != nil {
+		return nil, mountError("readfile", name, err)
+	}
+	if m.source != nil {
+		if ref, directory, ok := mountBlockPath(full); ok && !directory {
+			data, err := m.loadBlock(ref)
+			if err != nil {
+				return nil, mountError("readfile", name, err)
+			}
+			data = bytes.Clone(data)
+			if err := m.ctx.Err(); err != nil {
+				return nil, mountError("readfile", name, err)
+			}
+			return data, nil
+		}
+	}
 	// At C the listing records a successful open even if a later read fails.
 	// At fs/C the backend must receive the complete read so it controls fallback.
-	if m != nil && m.listings != nil {
-		if _, err := mountCapability(m.fullPath(name)); err == nil {
+	if m.listings != nil {
+		if _, err := mountCapability(full); err == nil {
 			file, err := m.Open(name)
 			if err != nil {
 				return nil, mountError("readfile", name, err)
 			}
 			defer func() { _ = file.Close() }()
-			data, err := io.ReadAll(file)
+			data, err := readImageFile(file)
 			return data, mountError("readfile", name, err)
 		}
 	}
-	image, inner, err := m.resolve(name)
+	image, inner, err := m.resolvePath(full, mountMetadata)
 	if err != nil {
 		return nil, mountError("readfile", name, err)
 	}
@@ -290,7 +353,7 @@ func (m *Mount) ReadFile(name string) ([]byte, error) {
 
 // ReadDir returns sorted directory entries. Entry.Info retains the context.
 func (m *Mount) ReadDir(name string) ([]stdfs.DirEntry, error) {
-	image, inner, err := m.resolve(name)
+	image, inner, err := m.resolve(name, mountList)
 	if err != nil {
 		return nil, mountError("readdir", name, err)
 	}
@@ -300,7 +363,7 @@ func (m *Mount) ReadDir(name string) ([]stdfs.DirEntry, error) {
 
 // Stat returns metadata and follows links within their ERIS-FS image.
 func (m *Mount) Stat(name string) (stdfs.FileInfo, error) {
-	image, inner, err := m.resolve(name)
+	image, inner, err := m.resolve(name, mountMetadata)
 	if err != nil {
 		return nil, mountError("stat", name, err)
 	}
@@ -313,7 +376,7 @@ func (m *Mount) Stat(name string) (stdfs.FileInfo, error) {
 
 // Lstat returns metadata without following the final symbolic link.
 func (m *Mount) Lstat(name string) (stdfs.FileInfo, error) {
-	image, inner, err := m.resolve(name)
+	image, inner, err := m.resolve(name, mountMetadata)
 	if err != nil {
 		return nil, mountError("lstat", name, err)
 	}
@@ -326,7 +389,7 @@ func (m *Mount) Lstat(name string) (stdfs.FileInfo, error) {
 
 // ReadLink returns a link target only when it cannot leave the image.
 func (m *Mount) ReadLink(name string) (string, error) {
-	image, inner, err := m.resolve(name)
+	image, inner, err := m.resolve(name, mountMetadata)
 	if err != nil {
 		return "", mountError("readlink", name, err)
 	}
@@ -339,7 +402,7 @@ func (m *Mount) ReadLink(name string) (string, error) {
 // the selected backend controls link lookup. ReadLink also checks that the
 // target stays within the selected directory.
 func (m *Mount) Sub(name string) (stdfs.FS, error) {
-	image, inner, err := m.resolve(name)
+	image, inner, err := m.resolve(name, mountMetadata)
 	if err != nil {
 		return nil, mountError("sub", name, err)
 	}
@@ -348,7 +411,7 @@ func (m *Mount) Sub(name string) (stdfs.FS, error) {
 	}
 	full := m.fullPath(name)
 	_, directory, blockPath := mountBlockPath(full)
-	if mountUpper(full) == "FS" || (blockPath && directory) {
+	if isMountFS(full) || (blockPath && directory) {
 		sub := *m
 		sub.prefix = full
 		return &sub, nil

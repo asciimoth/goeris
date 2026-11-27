@@ -423,3 +423,190 @@ func TestMountBlockConcurrentClose(t *testing.T) {
 		t.Fatal("closed block handle retained data or context")
 	}
 }
+
+func BenchmarkMountBlockPath(b *testing.B) {
+	ref := eris.Reference{1, 2, 3}
+	nested := filepath.ToSlash(volume.BlockPath(ref))
+	for _, test := range []struct{ label, name string }{
+		{"flat", ref.String()}, {"nested", nested}, {"prefix", nested[:11]},
+		{"lowercase", strings.ToLower(nested)},
+	} {
+		b.Run(test.label, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, _, ok := mountBlockPath(test.name); !ok {
+					b.Fatal(test.name)
+				}
+			}
+		})
+	}
+}
+
+func TestMountBlockPathRequiresExactSeparators(t *testing.T) {
+	name := filepath.ToSlash(volume.BlockPath(eris.Reference{1, 2, 3}))
+	for _, length := range []int{3, 7, 11, eris.ReferenceTextSize, len(name)} {
+		valid := name[:length]
+		if length == eris.ReferenceTextSize {
+			valid = (eris.Reference{1, 2, 3}).String()
+		}
+		for i := range len(valid) {
+			bad := []byte(valid)
+			if bad[i] == '/' {
+				bad[i] = 'A'
+			} else {
+				bad[i] = '/'
+			}
+			if _, _, ok := mountBlockPath(string(bad)); ok {
+				t.Fatalf("accepted misplaced separator in %q", bad)
+			}
+		}
+	}
+}
+
+func BenchmarkMountCapability(b *testing.B) {
+	for _, tc := range []struct{ label, name string }{
+		{"canonical", mountHello},
+		{"lowercase", strings.ToLower(mountHello)},
+		{"image-path", "fs/" + mountIndex + "/" + strings.Repeat("dir/", 128) + "file"},
+	} {
+		b.Run(tc.label, func(b *testing.B) {
+			for b.Loop() {
+				_, _ = mountCapability(tc.name)
+			}
+		})
+	}
+}
+
+func TestMountRejectsInvalidCapabilityAliases(t *testing.T) {
+	blocks, _ := mountFixture(t)
+	ctx := t.Context()
+	source := &mountObservedSource{BlockSource: blocks, t: t, ctx: ctx}
+	m := NewMount(ctx, source, eris.BlockOptions{})
+	body := strings.TrimPrefix(mountHello, eris.CapabilityURNPrefix)
+	for _, name := range []string{
+		"urn:eriſ:" + body, "URN:ERIS:" + body[:12] + "K" + body[15:],
+		body[:len(body)-1] + "J", strings.Repeat("0", 2*eris.CapabilitySize),
+		"fſ/" + mountIndex,
+	} {
+		for _, p := range []string{name, "fs/" + name} {
+			_, err := m.ReadFile(p)
+			checkMountError(t, "readfile", p, err, stdfs.ErrNotExist)
+		}
+	}
+	if source.reads != 0 {
+		t.Fatalf("invalid names caused %d block reads", source.reads)
+	}
+}
+
+func BenchmarkMountReadRawBlock(b *testing.B) {
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	cap, err := eris.NewBlockCapabilityStore(blocks).Encode(b.Context(), []byte("payload"), eris.Secret{}, eris.BlockSize32KiB, eris.BlockOptions{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	m := NewMount(b.Context(), blocks, eris.BlockOptions{})
+	name := cap.Root.Reference.String()
+	b.Run("ReadFile", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := m.ReadFile(name); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("Stat", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := m.Stat(name); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func TestMountReadFileOwnsBlockBytes(t *testing.T) {
+	blocks, _ := mountFixture(t)
+	cap, err := eris.ParseURN(mountHello)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := cap.Root.Reference
+	source := mountBadBlockSource{blocks, blocks.Blocks[ref].Data}
+	want := bytes.Clone(source.data)
+	m := withMountCache(t, NewMount(t.Context(), source, eris.BlockOptions{}), 0, 1)
+	got, err := m.ReadFile(ref.String())
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("ReadFile returned %d bytes, %v", len(got), err)
+	}
+	got[0] ^= 0xff
+	again, err := m.ReadFile(filepath.ToSlash(volume.BlockPath(ref)))
+	if err != nil || !bytes.Equal(again, want) {
+		t.Fatalf("second ReadFile returned %d bytes, %v", len(again), err)
+	}
+}
+
+func TestMountOpenRetainsVerifiedBlock(t *testing.T) {
+	blocks, _ := mountFixture(t)
+	cap, err := eris.ParseURN(mountHello)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := cap.Root.Reference
+	want := blocks.Blocks[ref].Data
+	source := mountBadBlockSource{blocks, bytes.Clone(want)}
+	m := NewMount(t.Context(), source, eris.BlockOptions{})
+	name := ref.String()
+	nested := filepath.ToSlash(volume.BlockPath(ref))
+	file, err := m.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	seekable, err := m.OpenFile(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = seekable.Close() }()
+	info, err := m.Stat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.data[0] ^= 0xff
+	_, err = m.Lstat(nested)
+	checkMountError(t, "lstat", nested, err, eris.ErrInvalidBlock)
+	if info.Name() != name || info.Size() != int64(len(want)) || !info.Mode().IsRegular() {
+		t.Fatalf("retained raw block metadata: %v", info)
+	}
+	for _, opened := range []stdfs.File{file, seekable} {
+		data, err := io.ReadAll(opened)
+		if err != nil || !bytes.Equal(data, want) {
+			t.Fatalf("opened block returned %d bytes, %v", len(data), err)
+		}
+	}
+}
+
+type cancelOnBlockRead struct {
+	mountBadBlockSource
+	cancel context.CancelFunc
+}
+
+func (s cancelOnBlockRead) GetBlock(ctx context.Context, req []eris.BlockRequest) ([]eris.Block, error) {
+	s.cancel()
+	return s.mountBadBlockSource.GetBlock(ctx, req)
+}
+
+func TestMountReadFileCanceledDuringBlockLoad(t *testing.T) {
+	blocks, _ := mountFixture(t)
+	cap, err := eris.ParseURN(mountHello)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := cap.Root.Reference
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	source := cancelOnBlockRead{mountBadBlockSource{blocks, blocks.Blocks[ref].Data}, cancel}
+	m := NewMount(ctx, source, eris.BlockOptions{})
+	data, err := m.ReadFile(ref.String())
+	checkMountError(t, "readfile", ref.String(), err, context.Canceled)
+	if data != nil {
+		t.Fatal("canceled read returned block data")
+	}
+}

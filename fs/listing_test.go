@@ -3,10 +3,14 @@ package fs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	stdfs "io/fs"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/asciimoth/goeris"
 )
 
 func TestDirectoryListingContextAndOwnership(t *testing.T) {
@@ -80,6 +84,63 @@ func TestPagedListingRetainedEntries(t *testing.T) {
 		info, err := entry.Info()
 		if err != nil || info.Name() != want[i] || entry.Name() != want[i] {
 			t.Fatalf("entry %d = %v, %v, want %q", i, entry, err, want[i])
+		}
+	}
+}
+
+func TestWideImageReadsMixedEntries(t *testing.T) {
+	ctx := t.Context()
+	store := newTestStore()
+	nested := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
+	if err := nested.AddFile(ctx, "file", strings.NewReader("nested"), false); err != nil {
+		t.Fatal(err)
+	}
+	child, err := nested.Finish(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
+	for i := range 40 {
+		name := fmt.Sprintf("file-%02d", i)
+		if err := root.AddFile(ctx, name, strings.NewReader(name), i%2 == 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := root.AddSubdirectory("sub-dir", child); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.AddSymlink("symlink", "file-39"); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := root.Finish(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := OpenFS(ctx, capability, store, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := image.ReadDir(ctx, ".")
+	if err != nil || len(entries) != 42 {
+		t.Fatalf("ReadDir = %d entries, %v", len(entries), err)
+	}
+	for i, entry := range entries[:40] {
+		name := fmt.Sprintf("file-%02d", i)
+		info, err := entry.Info()
+		mode := stdfs.FileMode(0o444)
+		if i%2 == 0 {
+			mode = 0o555
+		}
+		if err != nil || info.Name() != name || info.Mode() != mode || info.Size() != int64(len(name)) {
+			t.Fatalf("Info for %q = %v, %v", name, info, err)
+		}
+		if got, err := image.ReadFile(ctx, name); err != nil || string(got) != name {
+			t.Fatalf("ReadFile(%q) = %q, %v", name, got, err)
+		}
+	}
+	for name, want := range map[string]string{"sub-dir/file": "nested", "symlink": "file-39"} {
+		if got, err := image.ReadFile(ctx, name); err != nil || string(got) != want {
+			t.Fatalf("ReadFile(%q) = %q, %v, want %q", name, got, err, want)
 		}
 	}
 }

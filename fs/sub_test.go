@@ -107,3 +107,40 @@ func TestSubStartsNewSymlinkLookup(t *testing.T) {
 		t.Fatalf("ReadFile in selected directory = %q, %v", data, err)
 	}
 }
+
+func TestDeepLinkLookup(t *testing.T) {
+	ctx := t.Context()
+	store := newTestStore()
+	b := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
+	deep := strings.Repeat("dir/", 20)
+	if err := b.AddFile(ctx, "root-file", strings.NewReader("root"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.AddSymlink(deep+"back", strings.Repeat("../", 20)+"root-file"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.AddSymlink(deep+"outside", strings.Repeat("../", 21)+"root-file"); err != nil {
+		t.Fatal(err)
+	}
+	cap, err := b.Finish(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := OpenFS(ctx, cap, store, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := image.Sub(ctx, strings.TrimSuffix(deep, "/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := sub.ReadFile(ctx, "back"); err != nil || string(got) != "root" {
+		t.Fatalf("read link to image root = %q, %v", got, err)
+	}
+	if _, err := sub.ReadFile(ctx, "outside"); !errors.Is(err, stdfs.ErrNotExist) {
+		t.Fatalf("read link above image root = %v", err)
+	}
+	if _, err := sub.ReadLink(ctx, "back"); !errors.Is(err, stdfs.ErrNotExist) {
+		t.Fatalf("export link above subdirectory = %v", err)
+	}
+}

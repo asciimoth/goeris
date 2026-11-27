@@ -388,3 +388,22 @@ func TestAutoFilePreservesReadErrors(t *testing.T) {
 		t.Fatalf("empty reads: %v", err)
 	}
 }
+
+func TestAutoProbeMatchBoundaries(t *testing.T) {
+	// The last "bcdX" can only match a key inserted inside the first match.
+	crossing := []byte("abcdabcdXbcdX")
+	if got, want := autoProbeSize(crossing), len(referenceAutoProbe(crossing)); got != want {
+		t.Fatalf("key crossing match boundary: probe size %d, want %d", got, want)
+	}
+	for _, length := range []int{4, 127, 128, 130, 131, 132} {
+		seed := autoRandomBytes(length)
+		sample := append(bytes.Clone(seed), seed...)
+		sample = append(sample, seed[1:]...)
+		for tail := 0; tail < 4; tail++ {
+			input := sample[:len(sample)-tail]
+			if got, want := autoProbeSize(input), len(referenceAutoProbe(input)); got != want {
+				t.Fatalf("length %d, tail %d: probe size %d, want %d", length, tail, got, want)
+			}
+		}
+	}
+}

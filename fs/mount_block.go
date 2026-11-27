@@ -21,39 +21,47 @@ func mountUpper(name string) string {
 	}, name)
 }
 
+func mountUpperByte(ch byte) byte {
+	if ch >= 'a' && ch <= 'z' {
+		return ch - ('a' - 'A')
+	}
+	return ch
+}
+
 // mountBlockPath recognizes flat hashes, the fixed 3/3/3/43 volume layout,
 // and its virtual prefix directories. It rejects other splits, padding, and
 // nonzero unused base32 bits. The public Reference parser remains strict.
 func mountBlockPath(name string) (ref eris.Reference, directory, ok bool) {
-	if len(name) > eris.ReferenceTextSize+3 {
-		return ref, false, false
-	}
-	parts := strings.Split(mountUpper(name), "/")
-	if len(parts) == 1 && len(parts[0]) == eris.ReferenceTextSize {
-		ref, err := eris.ParseReference(parts[0])
+	switch len(name) {
+	case eris.ReferenceTextSize:
+		ref, err := eris.ParseReference(mountUpper(name))
 		return ref, false, err == nil
-	}
-	if len(parts) > 4 {
+	case 3, 7, 11, eris.ReferenceTextSize + 3: // A volume prefix or a complete path.
+	default:
 		return ref, false, false
 	}
-	for i, part := range parts {
-		length := 3
-		if i == 3 {
-			length = eris.ReferenceTextSize - 9
-		}
-		if len(part) != length {
-			return ref, false, false
-		}
-		for _, ch := range part {
-			if (ch < 'A' || ch > 'Z') && (ch < '2' || ch > '7') {
+
+	var hash [eris.ReferenceTextSize]byte
+	n := 0
+	for i := 0; i < len(name); i++ {
+		ch := name[i]
+		if i == 3 || i == 7 || i == 11 {
+			if ch != '/' {
 				return ref, false, false
 			}
+			continue
 		}
+		ch = mountUpperByte(ch)
+		if (ch < 'A' || ch > 'Z') && (ch < '2' || ch > '7') {
+			return ref, false, false
+		}
+		hash[n] = ch
+		n++
 	}
-	if len(parts) < 4 {
+	if n < len(hash) {
 		return ref, true, true
 	}
-	ref, err := eris.ParseReference(strings.Join(parts, ""))
+	ref, err := eris.ParseReference(string(hash[:]))
 	return ref, false, err == nil
 }
 

@@ -71,7 +71,9 @@ func Resolve[T comparable](root T, name string, mode Mode, child func(T, string)
 		kind  Kind
 		root  int
 	}
-	ancestors := []step{{root, Directory, 0}}
+	// Keep shallow paths on the stack. Deeper paths grow as needed.
+	var local [8]step
+	ancestors := append(local[:0], step{root, Directory, 0})
 	links := 0
 	exportFloor := 0
 	for len(pending) > 0 {

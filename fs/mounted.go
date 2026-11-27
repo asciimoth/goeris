@@ -364,8 +364,14 @@ func bindMountedEntries(ctx context.Context, entries []stdfs.DirEntry) []stdfs.D
 	if ctx.Done() == nil {
 		return entries
 	}
-	for i, entry := range entries {
-		entries[i] = mountedDirEntry{DirEntry: entry, ctx: ctx}
+	// As in bindDirEntries, keep the group retained by any one entry small.
+	for rest := entries; len(rest) > 0; {
+		batch := make([]mountedDirEntry, min(16, len(rest)))
+		for i := range batch {
+			batch[i] = mountedDirEntry{DirEntry: rest[i], ctx: ctx}
+			rest[i] = &batch[i]
+		}
+		rest = rest[len(batch):]
 	}
 	return entries
 }

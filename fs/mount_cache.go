@@ -69,17 +69,31 @@ type mountListingCache struct {
 	blocks       mountRecent[eris.Reference, int64]
 }
 
+type mountListingKey interface {
+	comparable
+	String() string
+}
+
 // mountRecent is protected by mountListingCache.mu. Values have fixed size;
 // allocation depends on actual entries, never on the caller's limit alone.
-type mountRecent[K comparable, V any] struct {
+type mountRecent[K mountListingKey, V any] struct {
 	limit   int
 	entries map[K]*list.Element
 	order   list.List // Most recently used first.
 }
 
-type mountRecentEntry[K comparable, V any] struct {
-	key   K
-	value V
+type mountRecentEntry[K mountListingKey, V any] struct {
+	key         K
+	value       V
+	listingName string
+}
+
+// Format names only when listed. Refreshing a remembered entry keeps its name.
+func (e *mountRecentEntry[K, V]) name() string {
+	if e.listingName == "" {
+		e.listingName = e.key.String()
+	}
+	return e.listingName
 }
 
 func (c *mountRecent[K, V]) put(key K, value V) {
@@ -98,12 +112,12 @@ func (c *mountRecent[K, V]) put(key K, value V) {
 		oldest := c.order.Back()
 		entry := oldest.Value.(*mountRecentEntry[K, V])
 		delete(c.entries, entry.key)
-		entry.key, entry.value = key, value
+		*entry = mountRecentEntry[K, V]{key: key, value: value}
 		c.entries[key] = oldest
 		c.order.MoveToFront(oldest)
 		return
 	}
-	c.entries[key] = c.order.PushFront(&mountRecentEntry[K, V]{key, value})
+	c.entries[key] = c.order.PushFront(&mountRecentEntry[K, V]{key: key, value: value})
 }
 
 func (m *Mount) rememberCapability(cap eris.Capability, size int64, image bool) {
@@ -157,51 +171,55 @@ func (m *Mount) addListings(dir *node, full string) {
 	c := m.listings
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	directory := func(name string) *node {
-		return buildTree(Index{}, m.content, name, m.indexLimit)
+	addPrefix := func(name string) {
+		if dir.children[name] == nil {
+			dir.children[name] = &node{name: name, kind: directoryType}
+		}
 	}
 	switch {
 	case full == ".":
 		if m.content != nil {
-			for cap, element := range c.capabilities.entries {
-				info := element.Value.(*mountRecentEntry[eris.Capability, mountCapabilityInfo]).value
-				name := cap.String()
-				dir.children[name] = &node{name: name, kind: Regular, capability: cap,
+			for _, element := range c.capabilities.entries {
+				entry := element.Value.(*mountRecentEntry[eris.Capability, mountCapabilityInfo])
+				info, name := entry.value, entry.name()
+				dir.children[name] = &node{name: name, kind: Regular, capability: entry.key,
 					store: m.content, size: info.size, sizeKnown: info.size >= 0}
 			}
 		}
-		for ref, element := range c.blocks.entries {
-			name := ref.String()
-			size := element.Value.(*mountRecentEntry[eris.Reference, int64]).value
+		for _, element := range c.blocks.entries {
+			entry := element.Value.(*mountRecentEntry[eris.Reference, int64])
+			name, size := entry.name(), entry.value
 			dir.children[name] = &node{name: name, kind: Regular, size: size, sizeKnown: true}
-			dir.children[name[:3]] = directory(name[:3])
+			addPrefix(name[:3])
 		}
-	case mountUpper(full) == "FS":
-		for cap, element := range c.capabilities.entries {
-			if element.Value.(*mountRecentEntry[eris.Capability, mountCapabilityInfo]).value.image {
-				name := cap.String()
-				child := directory(name)
+	case isMountFS(full):
+		for _, element := range c.capabilities.entries {
+			entry := element.Value.(*mountRecentEntry[eris.Capability, mountCapabilityInfo])
+			if entry.value.image {
+				name := entry.name()
+				child := &node{name: name, kind: directoryType}
 				// A *Store uses standard ERIS-FS directory metadata. Other
 				// backends supply their own when the caller requests Info.
 				if m.content == nil {
 					child.listedImage = m
-					child.capability = cap
+					child.capability = entry.key
 				}
 				dir.children[name] = child
 			}
 		}
 	default: // A validated volume prefix, with one to three components.
 		prefix := strings.ReplaceAll(mountUpper(full), "/", "")
-		for ref, element := range c.blocks.entries {
-			hash := ref.String()
+		for _, element := range c.blocks.entries {
+			entry := element.Value.(*mountRecentEntry[eris.Reference, int64])
+			hash := entry.name()
 			if !strings.HasPrefix(hash, prefix) {
 				continue
 			}
 			rest := hash[len(prefix):]
 			if len(prefix) < 9 {
-				dir.children[rest[:3]] = directory(rest[:3])
+				addPrefix(rest[:3])
 			} else {
-				size := element.Value.(*mountRecentEntry[eris.Reference, int64]).value
+				size := entry.value
 				dir.children[rest] = &node{name: rest, kind: Regular, size: size, sizeKnown: true}
 			}
 		}

@@ -110,17 +110,19 @@ type Index struct {
 // Validate checks all entries and path relationships. It permits Size -1 on
 // uncompressed files read from v1; MarshalBinary requires known file sizes.
 func (index Index) Validate() error {
-	paths := make([][]string, len(index.Entries))
-	for i, entry := range index.Entries {
+	for _, entry := range index.Entries {
 		if err := validateEntry(entry); err != nil {
 			return err
 		}
-		paths[i] = entry.Path
 	}
-	return checkPathConflicts(paths)
+	return index.checkPathConflicts()
 }
 
-func checkPathConflicts(paths [][]string) error {
+func (index Index) checkPathConflicts() error {
+	paths := make([][]string, len(index.Entries))
+	for i := range index.Entries {
+		paths[i] = index.Entries[i].Path
+	}
 	slices.SortFunc(paths, slices.Compare[[]string])
 	for i := 1; i < len(paths); i++ {
 		previous, current := paths[i-1], paths[i]

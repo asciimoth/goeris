@@ -396,3 +396,33 @@ func TestMixedSubdirectoryReuse(t *testing.T) {
 		t.Fatalf("nested Sub: %q, %v", content, err)
 	}
 }
+
+func TestDecodePathConflicts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version byte
+		keys    [][]byte
+		wantErr bool
+	}{
+		{"v1 text and array alias", 1, [][]byte{{0x61, 'a'}, {0x81, 0x61, 'a'}}, true},
+		{"v2 nonadjacent ancestor", 2, [][]byte{{0x81, 0x61, 'a'}, {0x81, 0x61, 'b'}, {0x82, 0x61, 'a', 0x61, 'c'}}, true},
+		{"v2 mixed depths", 2, [][]byte{{0x81, 0x61, 'a'}, {0x82, 0x61, 'b', 0x61, 'a'}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := append([]byte(MagicPrefix), 0x82, tc.version)
+			wire = cborwire.AppendHead(wire, 5, uint64(len(tc.keys)))
+			for _, key := range tc.keys {
+				wire = append(wire, key...)
+				wire = append(wire, 0x82, byte(Symlink), 0x81, 0x61, 'x')
+			}
+			index, err := ParseIndex(wire)
+			if tc.wantErr {
+				if !errors.Is(err, ErrInvalidIndex) {
+					t.Fatalf("ParseIndex = %v", err)
+				}
+			} else if err != nil || len(index.Entries) != len(tc.keys) {
+				t.Fatalf("ParseIndex = %v, %v", index, err)
+			}
+		})
+	}
+}

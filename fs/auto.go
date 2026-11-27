@@ -84,12 +84,15 @@ func autoProbeSize(sample []byte) int {
 		length := 0
 		if position+4 <= len(sample) {
 			key := binary.LittleEndian.Uint32(sample[position:])
-			previous := latest[autoProbeHash(key)]
+			slot := autoProbeHash(key)
+			previous := latest[slot]
+			latest[slot] = uint16(position + 1)
 			if previous != 0 {
 				candidate := int(previous) - 1
 				if binary.LittleEndian.Uint32(sample[candidate:]) == key {
 					length = 4
-					for length < min(131, len(sample)-position) && sample[candidate+length] == sample[position+length] {
+					limit := min(131, len(sample)-position)
+					for length < limit && sample[candidate+length] == sample[position+length] {
 						length++
 					}
 				}
@@ -101,6 +104,13 @@ func autoProbeSize(sample []byte) int {
 				literals = 0
 			}
 			encoded += 3
+			// The first position is already in the table. Insert the remaining
+			// four-byte keys inside this match for the next lookup.
+			end := position + length
+			for i := position + 1; i < min(end, len(sample)-3); i++ {
+				key := binary.LittleEndian.Uint32(sample[i:])
+				latest[autoProbeHash(key)] = uint16(i + 1)
+			}
 		} else {
 			length = 1
 			literals++
@@ -109,12 +119,7 @@ func autoProbeSize(sample []byte) int {
 				literals = 0
 			}
 		}
-		for end := position + length; position < end; position++ {
-			if position+4 <= len(sample) {
-				key := binary.LittleEndian.Uint32(sample[position:])
-				latest[autoProbeHash(key)] = uint16(position + 1)
-			}
-		}
+		position += length
 	}
 	if literals != 0 {
 		encoded += literals + 1
