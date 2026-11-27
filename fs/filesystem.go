@@ -36,7 +36,9 @@ type FS struct {
 type node struct {
 	// block is verified encrypted content for a Mount raw-block file only.
 	// Image nodes leave it nil and read through their capability instead.
-	block       []byte
+	block []byte
+	// listedImage supplies root metadata for a virtual fs/C directory entry.
+	listedImage *Mount
 	mu          sync.Mutex
 	store       *Store
 	name        string
@@ -58,7 +60,7 @@ type node struct {
 //
 // For repeated operations, use [Store.OpenFS].
 func OpenFS(ctx context.Context, capability eris.Capability, content eris.CapabilityStore, options eris.BlockOptions) (*FS, error) {
-	return NewStore(content, options).OpenFS(ctx, capability)
+	return OpenFSWithLimit(ctx, capability, content, DefaultMaxIndexSize, options)
 }
 
 // OpenFSWithLimit opens an image whose top-level and nested decoded indexes
@@ -67,16 +69,24 @@ func OpenFS(ctx context.Context, capability eris.Capability, content eris.Capabi
 //
 // For repeated operations, use [Store.OpenFSWithLimit].
 func OpenFSWithLimit(ctx context.Context, capability eris.Capability, content eris.CapabilityStore, limit int64, options eris.BlockOptions) (*FS, error) {
-	return NewStore(content, options).OpenFSWithLimit(ctx, capability, limit)
+	return NewStore(content, options).openFS(ctx, capability, limit)
 }
 
 // OpenFS reads the root index. Later operations use their own contexts.
-func (s *Store) OpenFS(ctx context.Context, capability eris.Capability) (*FS, error) {
+func (s *Store) OpenFS(ctx context.Context, capability eris.Capability) (FileSystem, error) {
 	return s.OpenFSWithLimit(ctx, capability, DefaultMaxIndexSize)
 }
 
 // OpenFSWithLimit applies limit to the root index and each nested index.
-func (s *Store) OpenFSWithLimit(ctx context.Context, capability eris.Capability, limit int64) (*FS, error) {
+func (s *Store) OpenFSWithLimit(ctx context.Context, capability eris.Capability, limit int64) (FileSystem, error) {
+	image, err := s.openFS(ctx, capability, limit)
+	if err != nil {
+		return nil, err
+	}
+	return image, nil
+}
+
+func (s *Store) openFS(ctx context.Context, capability eris.Capability, limit int64) (*FS, error) {
 	index, err := s.DecodeIndexWithLimit(ctx, capability, limit)
 	if err != nil {
 		return nil, err
@@ -419,7 +429,7 @@ func (fileSystem *FS) ReadLink(ctx context.Context, path string) (string, error)
 
 // Sub selects a directory. Links in the result can resolve to paths outside
 // the selected directory but remain inside the same image.
-func (fileSystem *FS) Sub(ctx context.Context, name string) (*FS, error) {
+func (fileSystem *FS) Sub(ctx context.Context, name string) (FileSystem, error) {
 	item, err := fileSystem.find(ctx, name, true)
 	if err != nil {
 		return nil, pathError("sub", name, err)
@@ -481,6 +491,13 @@ func (node *node) recordSize(size int64) error {
 }
 
 func (node *node) info(ctx context.Context) (stdfs.FileInfo, error) {
+	if node.listedImage != nil {
+		view, err := node.listedImage.openImage(ctx, node.capability)
+		if err != nil {
+			return nil, err
+		}
+		return namedImageRoot{FileSystem: view, name: node.name}.Stat(ctx, ".")
+	}
 	if node.Size() < 0 {
 		reader, err := node.openRegularReader(ctx)
 		if err != nil {

@@ -35,7 +35,7 @@ func TestTreeVectors(t *testing.T) {
 		{"file", "", "auto", "urn:eris:BIAOWCYFF3SO3ZVEXC7WGJIL5RWP4LWFMXKK6D2NIUT75LKYCOJCGDCTP2MWYXAUNJG5CPAZ2A5ZKQR4WFH5H6KYHSUUECFBWUJC7C2PIM", random[:]},
 	} {
 		o := Options{Kind: "erisfs", Compression: tc.profile}
-		tree, err := o.NewTree(eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}), eris.BlockOptions{})
+		tree, err := o.NewTree(erisfs.NewStore(eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}), eris.BlockOptions{}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,15 +63,18 @@ func TestTreeBoundaries(t *testing.T) {
 		{Options{Kind: "blob"}, "erisfs.use"},
 		{Options{Kind: "erisfs", Compression: "lzip-v1"}, "erisfs.compression"},
 	} {
-		if _, err := tc.options.NewTree(store, eris.BlockOptions{}); !errors.Is(err, Failure{"unsupported-option", tc.key}) {
+		if _, err := tc.options.NewTree(erisfs.NewStore(store, eris.BlockOptions{})); !errors.Is(err, Failure{"unsupported-option", tc.key}) {
 			t.Fatalf("NewTree(%+v): %v", tc.options, err)
 		}
 	}
 	o := Options{Kind: "erisfs", Compression: "auto"}
-	if _, err := o.NewTree(nil, eris.BlockOptions{}); !errors.Is(err, erisfs.ErrInvalidEntry) {
+	if _, err := o.NewTree(erisfs.NewMountStore("")); !errors.Is(err, eris.ErrReadOnly) {
+		t.Fatal(err)
+	}
+	if _, err := o.NewTree(nil); !errors.Is(err, erisfs.ErrInvalidEntry) {
 		t.Fatalf("NewTree with nil store: %v", err)
 	}
-	tree, err := o.NewTree(store, eris.BlockOptions{})
+	tree, err := o.NewTree(erisfs.NewStore(store, eris.BlockOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +106,7 @@ func TestTreeChecksPathBeforeReading(t *testing.T) {
 	for _, profile := range []string{"none", "auto"} {
 		t.Run(profile, func(t *testing.T) {
 			options := Options{Kind: "erisfs", Compression: profile}
-			tree, err := options.NewTree(eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}), eris.BlockOptions{})
+			tree, err := options.NewTree(erisfs.NewStore(eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}), eris.BlockOptions{}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -126,7 +129,7 @@ func TestCompressedFileRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
-	tree, err := options.NewTree(store, eris.BlockOptions{})
+	tree, err := options.NewTree(erisfs.NewStore(store, eris.BlockOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +163,7 @@ func TestTreeConvergenceSecret(t *testing.T) {
 	}
 	blocks := eris.BlockOptions{}
 	store := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
-	tree, err := options.NewTree(store, blocks)
+	tree, err := options.NewTree(erisfs.NewStore(store, blocks))
 	if err != nil {
 		t.Fatal(err)
 	}

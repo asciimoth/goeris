@@ -32,7 +32,7 @@ func TestInvalidCapabilityFromStore(t *testing.T) {
 			requests++
 			return response(200, "hello"), nil
 		}, &locks)
-		f.config.Store = invalidCapabilityStore{f.config.Store}
+		f.setStore(invalidCapabilityStore{f.config.Store})
 		got := f.Fetch(t.Context(), source(t, description+"alt https://b.test/data\n"+fields))
 		if got.Status != "fail" || got.Failure.Code != "store" || requests != 1 || len(locks.writes) != 0 {
 			t.Errorf("fields %q: got %+v, requests %d, lock writes %d", fields, got, requests, len(locks.writes))
@@ -302,14 +302,14 @@ func TestURLFailedFetchDoesNotLock(t *testing.T) {
 			case "invalid-source":
 				fields += "eris.secret invalid\n"
 			case "store":
-				f.config.Store = eris.NewBlockCapabilityStore(brokenStore{})
+				f.setStore(eris.NewBlockCapabilityStore(brokenStore{}))
 			case "internal":
 				// Cleanup can fail after all blocks have been written.
 				f.config.TempStorage = tempStorageFunc(func(context.Context) (fetch.TempData, error) {
 					return &testTempData{closeErr: errors.New("close failed")}, nil
 				})
 			case "cancelled":
-				f.config.Store = eris.NewBlockCapabilityStore(cancellingStore{cancel: cancel})
+				f.setStore(eris.NewBlockCapabilityStore(cancellingStore{cancel: cancel}))
 			}
 			got := f.Fetch(ctx, source(t, description+fields))
 			if got.Status != "fail" || got.Failure.Code != code || len(db.writes) != 0 {

@@ -7,10 +7,12 @@ import (
 	"errors"
 	"io"
 	stdfs "io/fs"
+	"math"
 	"reflect"
 	"testing"
 
 	"github.com/asciimoth/goeris"
+	"github.com/ulikunitz/xz/lzma"
 )
 
 type smallChunkReader struct {
@@ -179,5 +181,37 @@ func TestCompressedFileErrors(t *testing.T) {
 	}
 	if n, err := stripper.Write([]byte("body")); n != 4 || err != nil || body.String() != "body" {
 		t.Fatalf("body write: %d bytes, %v", n, err)
+	}
+}
+
+func TestLzipMemberBounds(t *testing.T) {
+	for _, tc := range []struct {
+		body lzipBodyWriter
+		dict int
+		want error
+	}{
+		{lzipBodyWriter{output: io.Discard}, -1, nil},
+		{lzipBodyWriter{output: io.Discard, discard: 1024}, 4096, ErrInvalidCompression},
+		{lzipBodyWriter{output: io.Discard, written: math.MaxInt64 - 25, discard: lzma.HeaderLen}, 4096, ErrInvalidCompression},
+	} {
+		_, err := tc.body.encode(t.Context(), bytes.NewReader(nil), lzma.WriterConfig{DictCap: tc.dict})
+		if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestLzipBodySizeLimit(t *testing.T) {
+	var output bytes.Buffer
+	body := lzipBodyWriter{output: &output, written: math.MaxInt64 - 27}
+	if n, err := body.Write([]byte("x")); err != nil || n != 1 {
+		t.Fatalf("last valid byte: %d, %v", n, err)
+	}
+	// This chunk would also wrap the signed byte count.
+	if n, err := body.Write(make([]byte, 32)); !errors.Is(err, ErrInvalidCompression) || n != 0 {
+		t.Fatalf("oversized write: %d, %v", n, err)
+	}
+	if output.String() != "x" || body.written != math.MaxInt64-26 {
+		t.Fatal("oversized write changed the output or byte count")
 	}
 }

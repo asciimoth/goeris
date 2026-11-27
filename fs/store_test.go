@@ -183,7 +183,10 @@ func TestStoreFromMountedContent(t *testing.T) {
 	if _, err := file.Stat(); !errors.Is(err, ErrClosed) {
 		t.Fatal(err)
 	}
-	builder := images.NewBuilder(eris.Secret{})
+	builder, err := images.NewBuilder(eris.Secret{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := builder.AddFile(ctx, "x", strings.NewReader("content"), false); !errors.Is(err, eris.ErrReadOnly) {
 		t.Fatal(err)
 	}
@@ -237,7 +240,10 @@ func TestStoreReaderLifetime(t *testing.T) {
 	if backend.opened != 1 || backend.closed != 1 {
 		t.Fatalf("legacy size lookup opened %d readers and closed %d", backend.opened, backend.closed)
 	}
-	builder := images.NewBuilder(eris.Secret{})
+	builder, err := images.NewBuilder(eris.Secret{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := builder.AddCompressedFile(ctx, "packed", strings.NewReader("payload"), false); err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +306,10 @@ func TestStoreErrors(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(ctx)
 	cancel()
-	builder := NewStore(eris.NewBlockCapabilityStore(eris.BlockSet{}), eris.BlockOptions{}).NewBuilder(eris.Secret{})
+	builder, err := NewStore(eris.NewBlockCapabilityStore(eris.BlockSet{}), eris.BlockOptions{}).NewBuilder(eris.Secret{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, add := range []func(context.Context, string, io.Reader, bool) error{builder.AddAutoFile, builder.AddCompressedFile} {
 		if err := add(ctx, "file", strings.NewReader(""), false); !errors.Is(err, context.Canceled) {
 			t.Fatal(err)

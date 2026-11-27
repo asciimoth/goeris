@@ -14,7 +14,7 @@ import (
 )
 
 // Mount serves the eris-go path layout as a read-only io/fs filesystem.
-// An image store supplies decoded content at C and image trees at fs/C.
+// An ImageStore supplies image trees at fs/C. A *Store also serves decoded content at C.
 // C can be a full capability URN, unprefixed base32, or hexadecimal. A block
 // source supplies encrypted blocks at their flat hash and volume.BlockPath.
 // Each component is optional. Paths for an absent component match fs.ErrNotExist.
@@ -23,9 +23,9 @@ import (
 // is available. [Mount.WithListingCache] enables bounded listings of recently
 // accessed capabilities and blocks. Hashes, capabilities, and the reserved fs
 // component accept ASCII case variants. Image paths are case-sensitive.
-// Links follow the same rules as [FS]. Modification times are zero.
+// The image backend supplies link handling and metadata within each tree.
 //
-// Each operation that enters fs/C reads its index. Use [Mount.Sub] to retain
+// Each operation that enters fs/C opens the image. Use [Mount.Sub] to retain
 // the image for repeated access. Mount retains its context for all operations
 // and open files. Image operations use the image store's options. Raw-block
 // reads use the options supplied to the mount constructor.
@@ -35,10 +35,11 @@ import (
 // A FUSE or 9P adapter can serve the mount through its io/fs interfaces.
 type Mount struct {
 	ctx        context.Context
-	images     *Store
+	images     ImageStore
+	content    *Store // supplies decoded files at C
 	source     eris.BlockSource
 	options    eris.BlockOptions
-	indexLimit int64
+	indexLimit int64  // Zero uses the image backend's default.
 	prefix     string // A Sub view of a virtual directory; empty at the mount root.
 	listings   *mountListingCache
 }
@@ -56,15 +57,19 @@ func NewMount(ctx context.Context, source eris.BlockSource, options eris.BlockOp
 	return NewMountWithStore(ctx, images, source, options)
 }
 
-// NewMountWithStore exposes decoded content and fs/C trees from images and
+// NewMountWithStore exposes fs/C trees from images and
 // raw hash paths from source. Either component can be nil. Missing components
 // omit their paths from listings and lookups. With both nil, only "." exists.
-// Options apply to raw blocks. Image operations use the Store's own options.
-func NewMountWithStore(ctx context.Context, images *Store, source eris.BlockSource, options eris.BlockOptions) *Mount {
-	if images != nil && images.content == nil {
+// A *Store also exposes decoded capability content at C. Options apply to raw
+// blocks. Image operations use the image backend's own settings.
+func NewMountWithStore(ctx context.Context, images ImageStore, source eris.BlockSource, options eris.BlockOptions) *Mount {
+	// A capability-backed image store also supplies the legacy C namespace.
+	content, ok := images.(*Store)
+	if ok && (content == nil || content.content == nil) {
 		images = nil
+		content = nil
 	}
-	return &Mount{ctx: ctx, images: images, source: source, options: options, indexLimit: DefaultMaxIndexSize}
+	return &Mount{ctx: ctx, images: images, content: content, source: source, options: options}
 }
 
 // NewMountWithLimit is NewMount with a limit for each decoded index, including
@@ -77,7 +82,7 @@ func NewMountWithLimit(ctx context.Context, source eris.BlockSource, limit int64
 }
 
 // NewMountWithStoreAndLimit sets a positive limit for each decoded index.
-func NewMountWithStoreAndLimit(ctx context.Context, images *Store, source eris.BlockSource, limit int64, options eris.BlockOptions) (*Mount, error) {
+func NewMountWithStoreAndLimit(ctx context.Context, images ImageStore, source eris.BlockSource, limit int64, options eris.BlockOptions) (*Mount, error) {
 	return NewMountWithStore(ctx, images, source, options).withIndexLimit(limit)
 }
 
@@ -92,7 +97,7 @@ func (mount *Mount) withIndexLimit(limit int64) (*Mount, error) {
 
 // resolve selects an image and a path within it. Virtual directories and
 // content files use the same tree lookup and metadata as FS.
-func (m *Mount) resolve(name string) (*FS, string, error) {
+func (m *Mount) resolve(name string) (FileSystem, string, error) {
 	if m == nil || m.ctx == nil || !stdfs.ValidPath(name) {
 		return nil, "", stdfs.ErrInvalid
 	}
@@ -100,11 +105,11 @@ func (m *Mount) resolve(name string) (*FS, string, error) {
 		return nil, "", err
 	}
 	full := m.fullPath(name)
-	root := buildTree(Index{}, m.images, ".", m.indexLimit)
+	root := buildTree(Index{}, m.content, ".", m.indexLimit)
 	image := &FS{root: root, prefix: "."}
 	if full == "." {
 		if m.images != nil {
-			root.children["fs"] = buildTree(Index{}, m.images, "fs", m.indexLimit)
+			root.children["fs"] = buildTree(Index{}, m.content, "fs", m.indexLimit)
 		}
 		m.addListings(root, full)
 		return image, ".", nil
@@ -124,17 +129,17 @@ func (m *Mount) resolve(name string) (*FS, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		image, err := m.images.OpenFSWithLimit(m.ctx, capability, m.indexLimit)
+		view, err := m.openImage(m.ctx, capability)
 		if err != nil {
 			return nil, "", err
 		}
 		m.rememberCapability(capability, -1, true)
 		// The image root has the name used by the caller, including aliases.
-		image.root.name = capName
 		if !more {
 			inner = "."
+			view = namedImageRoot{FileSystem: view, name: capName}
 		}
-		return image, inner, nil
+		return view, inner, nil
 	}
 	if ref, directory, ok := mountBlockPath(full); ok && m.source != nil {
 		base := path.Base(full)
@@ -157,7 +162,7 @@ func (m *Mount) resolve(name string) (*FS, string, error) {
 		}
 		return image, base, nil
 	}
-	if tree || m.images == nil { // Decoded content is always a file, even when it is an index.
+	if tree || m.content == nil { // Decoded content is always a file, even when it is an index.
 		return nil, "", stdfs.ErrNotExist
 	}
 	capability, err := mountCapability(first)
@@ -165,10 +170,17 @@ func (m *Mount) resolve(name string) (*FS, string, error) {
 		return nil, "", err
 	}
 	root.children[first] = &node{
-		name: first, kind: Regular, store: m.images,
+		name: first, kind: Regular, store: m.content,
 		capability: capability,
 	}
 	return image, first, nil
+}
+
+func (m *Mount) openImage(ctx context.Context, cap eris.Capability) (FileSystem, error) {
+	if m.indexLimit > 0 {
+		return m.images.OpenFSWithLimit(ctx, cap, m.indexLimit)
+	}
+	return m.images.OpenFS(ctx, cap)
 }
 
 // fullPath preserves caller spelling for metadata and never cleans image paths.
@@ -224,8 +236,8 @@ func mountError(op, name string, err error) error {
 	return pathError(op, name, err)
 }
 
-// Open opens a file or directory. Uncompressed files also implement
-// ReadSeekCloser. Compressed image files support sequential reads only.
+// Open opens a file or directory. The image backend determines whether
+// a compressed file also supports random access.
 func (m *Mount) Open(name string) (stdfs.File, error) {
 	image, inner, err := m.resolve(name)
 	if err != nil {
@@ -233,13 +245,13 @@ func (m *Mount) Open(name string) (stdfs.File, error) {
 	}
 	file, err := image.Open(m.ctx, inner)
 	if err == nil {
-		m.rememberContent(name, image, inner)
+		m.rememberContent(name, file.Stat)
 	}
 	return file, mountError("open", name, err)
 }
 
-// OpenFile opens an uncompressed file for Read, ReadAt, and Seek.
-// Directories return fs.ErrInvalid; compressed files return ErrNotSeekable.
+// OpenFile opens a regular file for Read, ReadAt, and Seek. A capability-
+// backed image returns ErrNotSeekable for compressed files.
 func (m *Mount) OpenFile(name string) (ReadSeekCloser, error) {
 	image, inner, err := m.resolve(name)
 	if err != nil {
@@ -247,7 +259,7 @@ func (m *Mount) OpenFile(name string) (ReadSeekCloser, error) {
 	}
 	file, err := image.OpenFile(m.ctx, inner)
 	if err == nil {
-		m.rememberContent(name, image, inner)
+		m.rememberContent(name, file.Stat)
 	}
 	return file, mountError("open", name, err)
 }
@@ -255,12 +267,24 @@ func (m *Mount) OpenFile(name string) (ReadSeekCloser, error) {
 // ReadFile reads a complete file. It has no content size limit. Use Open with
 // io.LimitReader when the caller needs a limit on the output size.
 func (m *Mount) ReadFile(name string) ([]byte, error) {
-	file, err := m.Open(name)
+	// At C the listing records a successful open even if a later read fails.
+	// At fs/C the backend must receive the complete read so it controls fallback.
+	if m != nil && m.listings != nil {
+		if _, err := mountCapability(m.fullPath(name)); err == nil {
+			file, err := m.Open(name)
+			if err != nil {
+				return nil, mountError("readfile", name, err)
+			}
+			defer func() { _ = file.Close() }()
+			data, err := io.ReadAll(file)
+			return data, mountError("readfile", name, err)
+		}
+	}
+	image, inner, err := m.resolve(name)
 	if err != nil {
 		return nil, mountError("readfile", name, err)
 	}
-	defer func() { _ = file.Close() }()
-	data, err := io.ReadAll(file)
+	data, err := image.ReadFile(m.ctx, inner)
 	return data, mountError("readfile", name, err)
 }
 
@@ -282,7 +306,7 @@ func (m *Mount) Stat(name string) (stdfs.FileInfo, error) {
 	}
 	info, err := image.Stat(m.ctx, inner)
 	if err == nil {
-		m.rememberContent(name, image, inner)
+		m.rememberContent(name, func() (stdfs.FileInfo, error) { return info, nil })
 	}
 	return info, mountError("stat", name, err)
 }
@@ -295,7 +319,7 @@ func (m *Mount) Lstat(name string) (stdfs.FileInfo, error) {
 	}
 	info, err := image.Lstat(m.ctx, inner)
 	if err == nil {
-		m.rememberContent(name, image, inner)
+		m.rememberContent(name, func() (stdfs.FileInfo, error) { return info, nil })
 	}
 	return info, mountError("lstat", name, err)
 }
@@ -343,3 +367,69 @@ var (
 	_ stdfs.StatFS     = (*Mount)(nil)
 	_ stdfs.SubFS      = (*Mount)(nil)
 )
+
+// namedImageRoot gives the image directory the capability spelling used in
+// the mount lookup. The backend may share its root with other callers.
+type namedImageRoot struct {
+	FileSystem
+	name string
+}
+type namedInfo struct {
+	stdfs.FileInfo
+	name string
+}
+
+func (i namedInfo) Name() string { return i.name }
+func (m namedImageRoot) Stat(ctx context.Context, p string) (stdfs.FileInfo, error) {
+	i, err := m.FileSystem.Stat(ctx, p)
+	if err == nil && p == "." {
+		return namedInfo{i, m.name}, nil
+	}
+	return i, err
+}
+func (m namedImageRoot) Lstat(ctx context.Context, p string) (stdfs.FileInfo, error) {
+	info, err := m.FileSystem.Lstat(ctx, p)
+	if err == nil && p == "." {
+		return namedInfo{info, m.name}, nil
+	}
+	return info, err
+}
+func (m namedImageRoot) Open(ctx context.Context, p string) (stdfs.File, error) {
+	if p != "." {
+		return m.FileSystem.Open(ctx, p)
+	}
+	file, err := m.FileSystem.Open(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	return namedDirectory{File: file, name: m.name}, nil
+}
+func (m namedImageRoot) Sub(ctx context.Context, p string) (FileSystem, error) {
+	sub, err := m.FileSystem.Sub(ctx, p)
+	if err == nil && p == "." {
+		return namedImageRoot{FileSystem: sub, name: m.name}, nil
+	}
+	return sub, err
+}
+
+// Preserve the backend's directory handle and metadata, including Close errors.
+type namedDirectory struct {
+	stdfs.File
+	name string
+}
+
+func (d namedDirectory) Stat() (stdfs.FileInfo, error) {
+	info, err := d.File.Stat()
+	if err != nil {
+		return nil, err
+	}
+	return namedInfo{info, d.name}, nil
+}
+
+func (d namedDirectory) ReadDir(n int) ([]stdfs.DirEntry, error) {
+	directory, ok := d.File.(stdfs.ReadDirFile)
+	if !ok {
+		return nil, errors.ErrUnsupported
+	}
+	return directory.ReadDir(n)
+}

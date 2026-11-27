@@ -14,7 +14,10 @@ import (
 func ExampleBuilder() {
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
-	builder := images.NewBuilder(eris.Secret{})
+	builder, err := images.NewBuilder(eris.Secret{})
+	if err != nil {
+		panic(err)
+	}
 	if err := builder.AddFile(context.Background(), "docs/readme", strings.NewReader("hello"), false); err != nil {
 		panic(err)
 	}
@@ -46,7 +49,10 @@ func ExampleBuilder() {
 func ExampleFS_OpenFile() {
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
-	builder := images.NewBuilder(eris.Secret{})
+	builder, err := images.NewBuilder(eris.Secret{})
+	if err != nil {
+		panic(err)
+	}
 	if err := builder.AddFile(context.Background(), "file", strings.NewReader("known length"), false); err != nil {
 		panic(err)
 	}
@@ -78,7 +84,10 @@ func ExampleFS_OpenFile() {
 func ExampleBuilder_AddAutoFile() {
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
-	builder := images.NewBuilder(eris.Secret{})
+	builder, err := images.NewBuilder(eris.Secret{})
+	if err != nil {
+		panic(err)
+	}
 	content := strings.Repeat("hello\n", 1024)
 	if err := builder.AddAutoFile(context.Background(), "notes", strings.NewReader(content), false); err != nil {
 		panic(err)
@@ -92,7 +101,10 @@ func ExampleNewIOFS() {
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
-	builder := images.NewBuilder(eris.Secret{})
+	builder, err := images.NewBuilder(eris.Secret{})
+	if err != nil {
+		panic(err)
+	}
 	if err := builder.AddFile(ctx, "hello", strings.NewReader("hello"), false); err != nil {
 		panic(err)
 	}
@@ -117,7 +129,10 @@ func ExampleNewMountWithStore() {
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
-	builder := images.NewBuilder(eris.Secret{})
+	builder, err := images.NewBuilder(eris.Secret{})
+	if err != nil {
+		panic(err)
+	}
 	if err := builder.AddFile(ctx, "hello.txt", strings.NewReader("Hello, ERIS!\n"), false); err != nil {
 		panic(err)
 	}

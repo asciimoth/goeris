@@ -14,13 +14,13 @@ import (
 // Tree must be sequential. For a blob, use [eris.CapabilityStore.EncodeContentRecommended]
 // with the secret from Options.
 type Tree struct {
-	builder         *erisfs.Builder
+	builder         erisfs.ImageBuilder
 	autoCompression bool
 }
 
 // NewTree applies the validated output settings to every file and the index.
 // The store must acknowledge all writes before the handler reports success.
-func (o Options) NewTree(store eris.CapabilityStore, options eris.BlockOptions) (*Tree, error) {
+func (o Options) NewTree(store erisfs.ImageStore) (*Tree, error) {
 	if o.Kind != "erisfs" {
 		return nil, Failure{"unsupported-option", "erisfs.use"}
 	}
@@ -30,7 +30,11 @@ func (o Options) NewTree(store eris.CapabilityStore, options eris.BlockOptions) 
 	if store == nil {
 		return nil, erisfs.ErrInvalidEntry
 	}
-	return &Tree{builder: erisfs.NewBuilder(store, o.Secret, options), autoCompression: o.Compression == "auto"}, nil
+	builder, err := store.NewBuilder(o.Secret)
+	if err != nil {
+		return nil, err
+	}
+	return &Tree{builder: builder, autoCompression: o.Compression == "auto"}, nil
 }
 
 // AddFile stores the complete stream. In auto mode it applies ERIS-FS-AUTO-1.

@@ -37,13 +37,16 @@ type builderPath struct {
 //
 // For repeated operations, use [Store.NewBuilder].
 func NewBuilder(content eris.CapabilityStore, secret eris.Secret, options eris.BlockOptions) *Builder {
-	return NewStore(content, options).NewBuilder(secret)
+	return &Builder{store: Store{content: content, options: options}, secret: secret}
 }
 
 // NewBuilder starts a v2 image. File writes preserve the caller's Root flag.
 // Finish marks the image index root.
-func (s *Store) NewBuilder(secret eris.Secret) *Builder {
-	return &Builder{store: *s, secret: secret}
+func (s *Store) NewBuilder(secret eris.Secret) (ImageBuilder, error) {
+	if s.content == nil {
+		return nil, ErrInvalidEntry
+	}
+	return &Builder{store: *s, secret: secret}, nil
 }
 
 // CheckPath reports whether a new entry can use path in the current index.

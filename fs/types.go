@@ -65,7 +65,9 @@ type FileSystem interface {
 	Stat(ctx context.Context, name string) (stdfs.FileInfo, error)
 	Lstat(ctx context.Context, name string) (stdfs.FileInfo, error)
 	ReadLink(ctx context.Context, name string) (string, error)
-	Sub(ctx context.Context, name string) (*FS, error)
+	// ResolvePath returns an absolute host path. A backend can return ErrNoHostPath.
+	ResolvePath(ctx context.Context, name string) (string, error)
+	Sub(ctx context.Context, name string) (FileSystem, error)
 }
 
 // Entry describes one item in an Index. Path contains separate path
@@ -164,8 +166,8 @@ func validPathComponent(component string) bool {
 	return component != "." && !strings.Contains(component, "/") && stdfs.ValidPath(component)
 }
 
-// ReadSeekCloser is an uncompressed file opened from an ERIS-FS image. ReadAt and
-// Seek provide efficient random access to ERIS leaf blocks.
+// ReadSeekCloser is a decoded file that supports random access. A host mount
+// can provide this interface for content stored in compressed form.
 type ReadSeekCloser interface {
 	io.Reader
 	io.ReaderAt

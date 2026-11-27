@@ -12,6 +12,7 @@ import (
 	eris "github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/fetch"
 	"github.com/asciimoth/goeris/fetch/internal/sourcehash"
+	erisfs "github.com/asciimoth/goeris/fs"
 	"github.com/asciimoth/goeris/internal/streamio"
 )
 
@@ -24,7 +25,9 @@ import (
 // Verbose enables diagnostic messages that contain no source URLs or secrets.
 type Config struct {
 	Client *http.Client
-	// Store writes downloaded blobs, files, and image indexes.
+	// Images builds tree results. Nil uses Store with default block options.
+	Images erisfs.ImageStore
+	// Store writes blob results.
 	Store    eris.CapabilityStore
 	Progress Progress
 	Log      func(string)
@@ -48,6 +51,9 @@ type Fetcher struct{ config Config }
 func New(c Config) (*Fetcher, error) {
 	if c.Client == nil || c.Store == nil || c.MaxBytes < 0 {
 		return nil, errors.New("url fetcher requires a client, a capability store and a nonnegative byte limit")
+	}
+	if c.Images == nil {
+		c.Images = erisfs.NewStore(c.Store, eris.BlockOptions{})
 	}
 	client := c.Client
 	redirect := client.CheckRedirect
@@ -281,7 +287,7 @@ func (f *Fetcher) encode(ctx context.Context, s fetch.Source, o fetch.Options, r
 	if o.Kind == "blob" {
 		return f.config.Store.EncodeContentRecommended(ctx, r, o.Secret, eris.BlockOptions{})
 	}
-	tree, err := o.NewTree(f.config.Store, eris.BlockOptions{})
+	tree, err := o.NewTree(f.config.Images)
 	if err != nil {
 		return eris.Capability{}, err
 	}

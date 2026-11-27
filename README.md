@@ -34,17 +34,20 @@ configuration for the [ERIS Fetch Protocol v1](specs/eris-fetchers-v1.md). Use
 `fetch.ParseSource` and `Source.Validate` to check a request on the fetcher’s
 machine. `Source.ID` returns the prehashed lock key. `fetch.LookupRoute` finds
 the first matching route in the configured file order. Handlers can use
-`Options.NewTree` to build a flat ERIS-FS result with the selected compression
-profile. The `fetch/url` package retrieves HTTP and HTTPS sources and writes
-blob or tree results to a caller-provided capability store. It holds each
-download in memory before checksum verification and encoding. Set
-`url.Config.TempStorage` to `fetch.TempDir(dir)` to use temporary files, or
-supply a custom storage implementation. The fetcher releases the temporary data
-after each candidate. Set `MaxBytes` to stop the fetch if a candidate exceeds
-the byte limit. The HTTP client timeout applies to each candidate, and a context
-deadline applies to the entire fetch. The caller supplies the HTTP client and
-its destination policy. Set `url.Config.Progress` to receive download updates,
-or use `url.NodeProgress` to display them on a Zig progress node.
+`Options.NewTree(images)` to build a flat ERIS-FS result with the selected
+compression profile. The `fetch/url` package retrieves HTTP and HTTPS sources.
+It writes blobs to `url.Config.Store`. Trees use the same store by default. Set
+`url.Config.Images` to build trees in a separate image store.
+
+The fetcher holds each download in memory before checksum verification and
+encoding. Set `url.Config.TempStorage` to `fetch.TempDir(dir)` to use temporary
+files, or supply a custom storage implementation. The fetcher releases the
+temporary data after each candidate. Set `MaxBytes` to stop the fetch if a
+candidate exceeds the byte limit. The HTTP client timeout applies to each
+candidate, and a context deadline applies to the entire fetch. The caller
+supplies the HTTP client and its destination policy. Set `url.Config.Progress`
+to receive download updates, or use `url.NodeProgress` to display them on a Zig
+progress node.
 
 Go's HTTP client can reject percent-encoded ASCII host characters in source URLs
 and redirect targets.
@@ -108,11 +111,12 @@ with version 1 read support:
   checks.
 
 Use `fs.NewMountWithStore(ctx, images, source, options)` to build a mount
-adapter. Supply an ERIS-FS `*fs.Store` for decoded content and image trees, and
-an `eris.BlockSource` for raw blocks. Either component can be nil. Paths for an
-absent component return `io/fs.ErrNotExist`. With both nil, the mount exposes an
-empty root directory. The mount implements the standard `io/fs` interfaces with
-the [eris-go mount layout](specs/eris-go-fuse-layout.md): `<capability>` returns
+adapter. Supply an `fs.ImageStore` for image trees and an `eris.BlockSource` for
+raw blocks. A capability-backed `*fs.Store` also supplies decoded content.
+Either component can be nil. Paths for an absent component return
+`io/fs.ErrNotExist`. With both nil, the mount exposes an empty root directory.
+The mount implements the standard `io/fs` interfaces with the
+[eris-go mount layout](specs/eris-go-fuse-layout.md): `<capability>` returns
 decoded content, and `fs/<capability>/...` exposes an ERIS-FS tree. Full URNs,
 unprefixed base32, and hexadecimal capabilities are accepted. With an image
 store, the default root lists only `fs`; capability names resolve on demand and
@@ -122,13 +126,13 @@ adapters. `Sub` retains an image for repeated access. The caller supplies the
 mount mechanism.
 
 `NewMountWithStoreAndLimit` sets the decoded size limit for each index,
-including nested indexes. The default is 64 MiB. This does not limit file
-content. Image reads use the image store’s options. Raw-block reads use the
-options supplied to the mount constructor. Both use the mount context. Image
-links resolve only within their image; `ReadLink` returns the original target
-for safe links and rejects escaping targets. Missing blocks match both
-`io/fs.ErrNotExist` and `eris.ErrMissingBlock` in errors returned by `Mount`
-methods.
+including nested indexes. A capability-backed store uses 64 MiB by default. A
+host mount controls its own index limits. Image reads use the image store’s
+options. Raw-block reads use the options supplied to the mount constructor. Both
+use the mount context. Image links resolve only within their image; `ReadLink`
+returns the original target for safe links and rejects escaping targets. Missing
+blocks match both `io/fs.ErrNotExist` and `eris.ErrMissingBlock` in errors
+returned by `Mount` methods.
 
 For a base32 block hash `H`, the mount also exposes the complete encrypted block
 at `H[:3]/H[3:6]/H[6:9]/H[9:]`, as specified by `volume.BlockPath`, and at the
@@ -148,42 +152,58 @@ mount, err := fs.NewMountWithStore(ctx, images, source, options).WithListingCach
 The two limits count capabilities and raw blocks separately. Zero disables a
 category; negative limits return `io/fs.ErrInvalid`. The returned mount starts
 with an empty cache and leaves the original mount unchanged. Each category
-evicts its least recently used entry. Successful content opens or stats, index
-loads, and verified raw-block loads refresh recency. Listing virtual directories
+evicts its least recently used entry. Successful content opens or stats, image
+opens, and verified raw-block loads refresh recency. Listing virtual directories
 (the root, `fs`, and volume prefixes) or reading entry metadata does not.
-Reading a directory inside `fs/C` loads its index and refreshes `C`. Aliases
+Reading a directory inside `fs/C` opens the image and refreshes `C`. Aliases
 share one canonical entry.
 
-The root lists remembered capability URNs, flat hashes, and volume prefixes. The
-`fs` directory lists only capabilities successfully loaded as images. Prefix
-directories list the next components of remembered block paths. Internal decoder
-block reads and file capabilities found inside an image do not populate these
-listings. The cache holds identifiers and metadata, not content; it does not
-serve reads or guarantee source availability. Virtual `Sub` views share the
-cache. Open directories keep a snapshot of their listing across later evictions.
+With a capability-backed `*fs.Store`, the root lists remembered capability URNs.
+With a block source, it lists flat hashes and volume prefixes. The `fs`
+directory lists capabilities successfully opened as images. Prefix directories
+list the next components of remembered block paths. Internal decoder block reads
+and file capabilities found inside an image do not populate these listings. The
+cache holds identifiers and metadata, not content; it does not serve reads or
+guarantee source availability. Virtual `Sub` views share the cache. Open
+directories keep a snapshot of their listing across later evictions.
 
 Capability URNs contain decryption keys. If you enable capability listings,
 restrict access to the mount when those keys must stay private.
 
-For an open image, `image.ResolvePath(ctx, "docs/readme.txt")` asks its
-capability store for the host path to the file's content. The host file can have
-a different name and mode. If `errors.Is(err, fs.ErrNoHostPath)` is true, a
-mounted ERIS-FS tree can still provide a path. This applies to directories,
-compressed files, and stores that do not support host paths.
+Pass an `fs.ImageStore` to code that builds or opens images. Use
+`fs.NewStore(content, options)` for a capability store or
+`fs.NewMountStore("/eris/fs")` for a mounted tree. An empty mount path selects
+`ERIS_FS_MNT`, then `ERIS_MNT` with `/fs` appended. If both are empty, the
+backend tries `/n/eris/fs` and `/eris/fs` in order.
 
-Use `fs.ResolveRoot(capability)` to find a mounted ERIS-FS root directory, or
-`fs.ResolvePath(capability, "docs/readme.txt")` to find a file or subdirectory
-inside it. Entry names use `io/fs` path rules; `"."` selects the root. Both
-functions return an absolute host path, or `""` if no matching path is found.
-They check file metadata and trust the mount to interpret and verify the image.
+```go
+images := erisfs.NewCombinedStore(erisfs.NewStore(content, options), erisfs.NewMountStore(""))
+image, err := images.OpenFS(ctx, capability)
+if err != nil {
+    return err
+}
+hostPath, err := image.ResolvePath(ctx, "docs/readme.txt")
+```
 
-The optional mount argument points to the directory that contains capability
-trees. For an eris-go mount at `/eris`, pass `/eris/fs`, for example
-`fs.ResolvePath(capability, "docs", "/eris/fs")`. An omitted or empty argument
-uses the first nonempty setting: `ERIS_FS_MNT` as is, then `ERIS_MNT` with `/fs`
-appended. If both variables are empty or unset, the functions try `/n/eris/fs`,
-then `/eris/fs`. An explicit path or a nonempty environment setting limits the
-search to that mount, even when the requested content is missing there.
+To migrate from `fs.ResolveRoot` or `fs.ResolvePath`, open the image with
+`fs.NewMountStore(mountDir).OpenFS(ctx, capability)`. Call
+`image.ResolvePath(ctx, name)` and check its error. Use `"."` for the root.
+
+`ResolvePath` returns an absolute host path. A capability-backed image can
+resolve an uncompressed file if its content store supports host paths. A mounted
+image can also resolve directories and decoded compressed files. Use a trusted,
+immutable mount that verifies content and preserves case-sensitive names. Its
+write operations return `eris.ErrReadOnly`. Mounted trees report
+`errors.ErrUnsupported` for raw-index reads and for positive explicit index
+limits. A mounted prefetch asks the host for file metadata throughout the
+selected tree.
+
+The chain tries each complete operation in order. A builder, open file or
+subdirectory stays with the backend that returned it. Cancellation stops
+fallback and returns the context error. A failed index write that changes its
+input also stops fallback. If every backend fails, the chain returns the last
+error. Prefetch visits all backends and succeeds if any accepts the hint. Use
+`fs.NewCombinedFileSystem` to chain images already open.
 
 The `dns` package implements [ERIS DNSLink records](specs/eer/dnslink/index.md):
 
@@ -727,7 +747,10 @@ Build and open an ERIS-FS image without host file-system access:
 ```go
 blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
-builder := images.NewBuilder(eris.Secret{})
+builder, err := images.NewBuilder(eris.Secret{})
+if err != nil {
+	return err
+}
 if err := builder.AddFile(ctx, "docs/readme", strings.NewReader("hello"), false); err != nil {
 	return err
 }

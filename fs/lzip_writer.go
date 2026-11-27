@@ -24,7 +24,7 @@ func writeLzip(ctx context.Context, output io.Writer, content io.Reader) (int64,
 	// pb=2 and an end marker. The matcher and lookahead are part of this
 	// library's encoding profile; changing either can change capabilities.
 	// Fixed fixtures in lzip-conformance-v1.json guard dependency updates too.
-	compressor, err := (lzma.WriterConfig{
+	return body.encode(ctx, content, lzma.WriterConfig{
 		Properties: &lzma.Properties{LC: 3, LP: 0, PB: 2},
 		DictCap:    LzipDictionarySize,
 		BufSize:    4096,
@@ -33,7 +33,12 @@ func writeLzip(ctx context.Context, output io.Writer, content io.Reader) (int64,
 		// Keep the size unknown even when the input reader exposes its length.
 		SizeInHeader: false,
 		Size:         0,
-	}).NewWriter(body)
+	})
+}
+
+// encode writes the compressed body and its trailer after the Lzip header.
+func (body *lzipBodyWriter) encode(ctx context.Context, content io.Reader, config lzma.WriterConfig) (int64, error) {
+	compressor, err := config.NewWriter(body)
 	if err != nil {
 		return 0, err
 	}
@@ -57,14 +62,14 @@ func writeLzip(ctx context.Context, output io.Writer, content io.Reader) (int64,
 	if err := compressor.Close(); err != nil {
 		return 0, err
 	}
-	if body.discard != 0 || body.written > math.MaxInt64-26 {
+	if body.discard != 0 {
 		return 0, ErrInvalidCompression
 	}
 	var trailer [20]byte
 	binary.LittleEndian.PutUint32(trailer[:4], checksum.Sum32())
 	binary.LittleEndian.PutUint64(trailer[4:12], uint64(counted.size))
 	binary.LittleEndian.PutUint64(trailer[12:], uint64(6+body.written+int64(len(trailer))))
-	if err := writeAll(output, trailer[:]); err != nil {
+	if err := writeAll(body.output, trailer[:]); err != nil {
 		return 0, err
 	}
 	return counted.size, nil
@@ -82,6 +87,10 @@ func (writer *lzipBodyWriter) Write(data []byte) (int, error) {
 	data = data[dropped:]
 	if len(data) == 0 {
 		return dropped, nil
+	}
+	// Reserve six bytes for the header and twenty for the trailer.
+	if int64(len(data)) > math.MaxInt64-26-writer.written {
+		return dropped, ErrInvalidCompression
 	}
 	n, err := writer.output.Write(data)
 	writer.written += int64(n)

@@ -22,7 +22,7 @@
 // [ChooseCompression] exposes the same decision before encoding.
 //
 // [NewMountWithStore] exposes the [eris-go mount layout] through io/fs.
-// Supply an image store to expose decoded content at C and an image tree at
+// Supply a *Store for decoded content at C, or any ImageStore for a tree at
 // fs/C. C can be a full capability URN, unprefixed base32, or hexadecimal.
 // The root lists fs when an image store is available. Capabilities resolve
 // on demand. [NewMountWithStoreAndLimit] limits each decoded index.
@@ -40,12 +40,14 @@
 // The cache holds identifiers and metadata. Virtual Sub views share this
 // cache. An open directory retains its snapshot through later evictions.
 //
-// ResolveRoot and ResolvePath find absolute host paths on compatible ERIS-FS
-// mounts. Supply the directory that contains capability trees, such as /eris/fs.
-// Without an explicit path, they use ERIS_FS_MNT, then ERIS_MNT with /fs
-// appended, selecting the first nonempty setting. If both are empty or unset, they
-// search /n/eris/fs and /eris/fs in order. A configured mount limits the search
-// to that mount. Both functions return "" when no matching path is found.
+// [ImageStore] supplies builders and read-only [FileSystem] views.
+// [NewMountStore] opens decoded trees on a host mount. The view's ResolvePath method
+// handles files and directories, including files decompressed by the mount.
+// An empty mount directory uses ERIS_FS_MNT, then ERIS_MNT with /fs appended,
+// then the default directories /n/eris/fs and /eris/fs.
+// [NewCombinedStore] tries stores in order. Builders and open files retain
+// their selected backend. [NewCombinedFileSystem] combines open image views.
+// Prefetch visits every member of a combined view.
 //
 // # Deterministic encoding
 //
@@ -70,7 +72,7 @@
 //
 // The image APIs operate on io.Reader values and an ERIS capability store.
 // The store controls content I/O.
-// ResolveRoot and ResolvePath read environment variables and host file metadata.
+// A MountStore reads host file metadata and content.
 // Encoding returns io.ErrNoProgress after 100 consecutive empty reads from
 // an input. Temporary empty reads below this limit do not change the output.
 // Encoding stops at the first io.EOF, including EOF returned with data.
@@ -94,10 +96,10 @@
 // I/O budget or a deadline must enforce it in their store and return an error
 // when it is reached. MaxLzipDictionarySize limits each decoder's dictionary.
 //
-// Image paths use io/fs rules. Backslashes and names that are special on a host
-// operating system are not converted or filtered by the image APIs. ResolvePath
-// converts io/fs names to native paths and rejects names that cannot be
-// represented on the host. ReadLink rejects targets that can leave the image
+// Image paths use io/fs rules. A capability-backed image treats backslashes
+// and host-specific names literally. A mounted image converts io/fs names to
+// native paths and rejects names the host cannot represent.
+// ReadLink rejects targets that can leave the image
 // or contain a backslash, colon, or NUL byte. Applications that extract an
 // image must still check native paths before writing them. Open follows links
 // only inside the image, but Sub does not confine links to the selected

@@ -15,18 +15,18 @@ import (
 // constructors disable both categories. This method performs no I/O.
 //
 // A capability is remembered after a successful Open, OpenFile, Stat, or Lstat
-// at C, or after loading an index at fs/C. A raw block is remembered after a
+// at C, or after opening an image at fs/C. A raw block is remembered after a
 // successful load and verification at either hash path. A later read or path
 // lookup can still fail. Blocks fetched internally to decode content and file
 // capabilities found inside an image are not added to these listings.
 //
-// The root lists remembered capabilities as canonical URNs, raw blocks as flat
-// uppercase hashes, and their first volume prefixes. The fs directory lists
-// only capabilities that have been loaded as valid indexes. Volume prefix
+// With a capability-backed *Store, the root lists remembered capabilities
+// as canonical URNs. With a block source, it lists flat uppercase hashes and
+// their first volume prefixes. The fs directory lists opened images. Volume prefix
 // directories list the next component of remembered raw-block paths. Aliases
 // share one entry. Successful access refreshes recency. Listing virtual
 // directories (the root, fs, and volume prefixes) or reading DirEntry.Info does
-// not. Reading a directory inside fs/C loads its index and refreshes C. Each
+// not. Reading a directory inside fs/C opens the image and refreshes C. Each
 // category evicts its least recently used entry independently. Failed loads do
 // not add entries or change recency.
 // Capability URNs contain decryption keys. Anyone who can list these virtual
@@ -35,9 +35,9 @@ import (
 // The cache retains identifiers and metadata, never file content or indexes.
 // It does not serve reads or guarantee continued source availability. Virtual
 // directory listings need no block I/O. DirEntry.Info can read storage for a
-// capability whose decoded size is not yet known. Open directories retain a snapshot of
-// their entries, even after eviction. Retained handles and returned listings
-// are not counted in the cache limits.
+// capability whose decoded size is not yet known, or ask an image backend for
+// its root metadata. Open directories retain a snapshot of their entries, even
+// after eviction. Cache limits exclude retained handles and returned listings.
 //
 // Virtual-directory Sub views share this cache and its limits. A separate call
 // to WithListingCache creates a separate cache, including when called on a Sub
@@ -121,7 +121,7 @@ func (m *Mount) rememberCapability(cap eris.Capability, size int64, image bool) 
 
 // rememberContent runs only after successful opens or metadata operations.
 // The resolved node already has a size, so recording it requires no extra I/O.
-func (m *Mount) rememberContent(name string, image *FS, inner string) {
+func (m *Mount) rememberContent(name string, stat func() (stdfs.FileInfo, error)) {
 	if m.listings == nil {
 		return
 	}
@@ -129,7 +129,9 @@ func (m *Mount) rememberContent(name string, image *FS, inner string) {
 	if err != nil {
 		return
 	}
-	m.rememberCapability(cap, image.root.children[inner].Size(), false)
+	if info, err := stat(); err == nil {
+		m.rememberCapability(cap, info.Size(), false)
+	}
 }
 
 func (m *Mount) rememberBlock(ref eris.Reference, size int64) {
@@ -152,15 +154,17 @@ func (m *Mount) addListings(dir *node, full string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	directory := func(name string) *node {
-		return buildTree(Index{}, m.images, name, m.indexLimit)
+		return buildTree(Index{}, m.content, name, m.indexLimit)
 	}
 	switch {
 	case full == ".":
-		for cap, element := range c.capabilities.entries {
-			info := element.Value.(mountRecentEntry[eris.Capability, mountCapabilityInfo]).value
-			name := cap.String()
-			dir.children[name] = &node{name: name, kind: Regular, capability: cap,
-				store: m.images, size: info.size, sizeKnown: info.size >= 0}
+		if m.content != nil {
+			for cap, element := range c.capabilities.entries {
+				info := element.Value.(mountRecentEntry[eris.Capability, mountCapabilityInfo]).value
+				name := cap.String()
+				dir.children[name] = &node{name: name, kind: Regular, capability: cap,
+					store: m.content, size: info.size, sizeKnown: info.size >= 0}
+			}
 		}
 		for ref, element := range c.blocks.entries {
 			name := ref.String()
@@ -172,7 +176,14 @@ func (m *Mount) addListings(dir *node, full string) {
 		for cap, element := range c.capabilities.entries {
 			if element.Value.(mountRecentEntry[eris.Capability, mountCapabilityInfo]).value.image {
 				name := cap.String()
-				dir.children[name] = directory(name)
+				child := directory(name)
+				// A *Store uses standard ERIS-FS directory metadata. Other
+				// backends supply their own when the caller requests Info.
+				if m.content == nil {
+					child.listedImage = m
+					child.capability = cap
+				}
+				dir.children[name] = child
 			}
 		}
 	default: // A validated volume prefix, with one to three components.

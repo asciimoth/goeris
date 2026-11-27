@@ -58,7 +58,10 @@ link, and `Finish`. No extra deterministic mode is needed:
 ```go
 blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
-builder := images.NewBuilder(eris.Secret{})
+builder, err := images.NewBuilder(eris.Secret{})
+if err != nil {
+	return err
+}
 if err := builder.AddFile(ctx, "docs/readme", strings.NewReader("hello\n"), false); err != nil {
 	return err
 }

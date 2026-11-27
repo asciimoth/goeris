@@ -135,12 +135,12 @@ three uppercase Base32 characters, `fs` is lowercase, and a complete capability
 has a different length from the 52-character flat block name. The paths under
 `M/fs/C/` belong to the decoded ERIS-FS tree and do not affect raw-block lookup.
 
-In `goeris/fs.Mount`, the image store supplies `M/C` and `M/fs/C`. A separate
-`BlockSource` supplies both the canonical volume path and the flat path `M/H`.
-Either component can be nil. Lookups for its paths then return
-`io/fs.ErrNotExist`. With a block source, the three prefix directories resolve
-on demand and have empty listings by default. Reads verify the block size and
-hash.
+In `goeris/fs.Mount`, an `ImageStore` supplies `M/fs/C`. A capability-backed
+`Store` also supplies `M/C`. A separate `BlockSource` supplies both the
+canonical volume path and the flat path `M/H`. Either component can be nil.
+Lookups for its paths then return `io/fs.ErrNotExist`. With a block source, the
+three prefix directories resolve on demand and have empty listings by default.
+Reads verify the block size and hash.
 
 Mount also accepts ASCII case variants of block hashes, capability names, and
 the reserved `fs` component. These aliases do not conflict: a prefix has three
@@ -160,15 +160,15 @@ adapter can interpret them as a host path.
 Callers can explicitly enable recent listings with
 `Mount.WithListingCache(capabilityLimit, blockLimit)`. Both categories are
 disabled by default. Each has a separate entry limit and least-recently-used
-eviction. Canonical URNs appear at the root after successful content opens,
-metadata queries, or index loads. Only capabilities loaded as valid indexes
-appear under `fs`. Verified raw-block loads add both flat hash entries and their
-volume paths. Alias names share one cache entry. The cache holds only
-identifiers and metadata; direct reads still use the block source. Listing
-virtual directories (the root, `fs`, and volume prefixes) does not refresh
-recency. Reading a directory inside `fs/C` loads its index and refreshes `C`. An
-open directory retains a snapshot after eviction; closing it releases that
-snapshot.
+eviction. With a capability-backed `Store`, canonical URNs appear at the root
+after successful content opens, metadata queries, or image opens. Each image
+store lists successfully opened image capabilities under `fs`. Verified
+raw-block loads add both flat hash entries and their volume paths. Alias names
+share one cache entry. The cache holds only identifiers and metadata. Direct
+reads use the configured backend. Listing virtual directories (the root, `fs`,
+and volume prefixes) does not refresh recency. Reading a directory inside `fs/C`
+opens the image and refreshes `C`. An open directory retains a snapshot after
+eviction; closing it releases that snapshot.
 
 Capability URNs contain decryption keys. Enabling capability listings exposes
 these keys to callers who can list the mount directories.

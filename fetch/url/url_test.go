@@ -35,6 +35,12 @@ type testFetcher struct {
 	blocks eris.BlockSet
 }
 
+// Replace both dependencies when a test injects a capability-store failure.
+func (f *testFetcher) setStore(store eris.CapabilityStore) {
+	f.config.Store = store
+	f.config.Images = erisfs.NewStore(store, eris.BlockOptions{})
+}
+
 func setup(t testing.TB, rt transport) *testFetcher {
 	t.Helper()
 	return setupWithLocks(t, rt, nil)
@@ -657,7 +663,7 @@ func TestFailures(t *testing.T) {
 	}
 	for _, fields := range []string{"", "name a"} {
 		calls = 0
-		f.config.Store = eris.NewBlockCapabilityStore(brokenStore{})
+		f.setStore(eris.NewBlockCapabilityStore(brokenStore{}))
 		desc := description + "alt https://b.test/next\n" + fields
 		if got := f.Fetch(t.Context(), source(t, desc)); got.Failure.Code != "store" || calls != 1 {
 			t.Fatalf("got %+v after %d attempts", got, calls)
@@ -967,7 +973,7 @@ func TestInterruptedStore(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	handler := setup(t, func(*http.Request) (*http.Response, error) { return response(200, ""), nil })
-	handler.config.Store = eris.NewBlockCapabilityStore(cancellingStore{cancel: cancel})
+	handler.setStore(eris.NewBlockCapabilityStore(cancellingStore{cancel: cancel}))
 	if got := handler.Fetch(ctx, source(t, description)); got.Failure.Code != "cancelled" {
 		t.Fatal(got)
 	}
@@ -1124,4 +1130,51 @@ func FuzzDownloadProgress(f *testing.F) {
 			t.Fatalf("%d of %d bytes: got %+v, want %d%%", size, length, got, want)
 		}
 	})
+}
+
+func TestReadOnlyImageStore(t *testing.T) {
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	handler, err := New(Config{
+		Client: &http.Client{Transport: transport(func(*http.Request) (*http.Response, error) { return response(200, "hello"), nil })},
+		Store:  eris.NewBlockCapabilityStore(blocks),
+		Images: erisfs.NewMountStore(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := handler.Fetch(t.Context(), source(t, description+"name hello\n"))
+	if got.Failure.Code != "store" || len(blocks.Blocks) != 0 {
+		t.Fatal(got)
+	}
+	got = handler.Fetch(t.Context(), source(t, description))
+	if got.Status != "ok" || got.Kind != "blob" {
+		t.Fatal(got)
+	}
+}
+
+func TestSeparateImageStore(t *testing.T) {
+	ctx := t.Context()
+	blobs := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	treeBlocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	images := erisfs.NewStore(eris.NewBlockCapabilityStore(treeBlocks), eris.BlockOptions{})
+	handler, err := New(Config{
+		Client: &http.Client{Transport: transport(func(*http.Request) (*http.Response, error) { return response(200, "hello"), nil })},
+		Store:  eris.NewBlockCapabilityStore(blobs),
+		Images: images,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := handler.Fetch(ctx, source(t, description+"name greeting.txt\n"))
+	if result.Status != "ok" || result.Kind != "erisfs" || len(blobs.Blocks) != 0 {
+		t.Fatalf("tree result = %+v, blocks in blob store = %d", result, len(blobs.Blocks))
+	}
+	tree, err := images.OpenFS(ctx, result.Cap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := tree.ReadFile(ctx, "greeting.txt")
+	if err != nil || string(data) != "hello" {
+		t.Fatalf("fetched tree file = %q, %v", data, err)
+	}
 }
