@@ -186,6 +186,40 @@ func TestFSWithERISFSBase(t *testing.T) {
 	}
 }
 
+func TestSubPreservesERISFSReadLinkBoundary(t *testing.T) {
+	ctx := t.Context()
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
+	builder := erisfs.NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
+	for name, target := range map[string]string{"dir/parent": "..", "dir/self": "."} {
+		if err := builder.AddSymlink(name, target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root, err := builder.Finish(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := erisfs.OpenFS(ctx, root, store, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := link.NewIOFS(ctx, newLinkFS(t, erisfs.NewIOFS(ctx, image), blocks))
+	if target, err := fs.ReadLink(view, "dir/parent"); err != nil || target != ".." {
+		t.Fatalf("image ReadLink = %q, %v", target, err)
+	}
+	sub, err := fs.Sub(view, "dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target, err := fs.ReadLink(sub, "parent"); target != "" || !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("subdirectory parent link = %q, %v", target, err)
+	}
+	if target, err := fs.ReadLink(sub, "self"); err != nil || target != "." {
+		t.Errorf("subdirectory local link = %q, %v", target, err)
+	}
+}
+
 func TestFSWithERISFSBaseErrors(t *testing.T) {
 	encoded, targets := encodeFSLink(t, []byte("target content"))
 	for _, test := range []struct {

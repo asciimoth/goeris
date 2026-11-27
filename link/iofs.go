@@ -25,10 +25,25 @@ func (f *IOFS) Stat(name string) (fs.FileInfo, error)      { return f.fs.Stat(f.
 func (f *IOFS) Lstat(name string) (fs.FileInfo, error)     { return f.fs.Lstat(f.ctx, name) }
 func (f *IOFS) ReadLink(name string) (string, error)       { return f.fs.ReadLink(f.ctx, name) }
 
+// Sub keeps the base file system's link policy for the selected directory.
+func (f *IOFS) Sub(dir string) (fs.FS, error) {
+	if err := f.fs.checkPath(dir); err != nil {
+		return nil, linkPathError("sub", dir, err)
+	}
+	base, err := fs.Sub(f.fs.base, dir)
+	if err != nil {
+		return nil, linkPathError("sub", dir, err)
+	}
+	sub := *f.fs
+	sub.base = base
+	return NewIOFS(f.ctx, &sub), nil
+}
+
 var (
 	_ fs.FS         = (*IOFS)(nil)
 	_ fs.ReadFileFS = (*IOFS)(nil)
 	_ fs.ReadDirFS  = (*IOFS)(nil)
 	_ fs.ReadLinkFS = (*IOFS)(nil)
 	_ fs.StatFS     = (*IOFS)(nil)
+	_ fs.SubFS      = (*IOFS)(nil)
 )
