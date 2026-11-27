@@ -17,9 +17,9 @@ import (
 )
 
 // MountStore reads the decoded trees of a trusted, immutable ERIS-FS mount.
-// The mount handles verification and decompression. It exposes neither the raw
-// index bytes nor the limits used to decode them. Each link must stay within
-// its containing directory because the mount does not identify nested indexes.
+// The mount handles verification and decompression. On a standard mount,
+// decoded indexes identify which directories are nested images. Without
+// that information, each link must stay within its containing directory.
 type MountStore struct{ mount string }
 
 // NewMountStore selects the directory containing the capability trees, e.g.
@@ -64,7 +64,7 @@ func openMountedTrees(ctx context.Context, cap eris.Capability, roots []string) 
 		if _, err := mountedRootInfo(name); err != nil {
 			return nil, err
 		}
-		return &mountedImage{root: name, prefix: "."}, nil
+		return &mountedImage{root: name, prefix: ".", capability: cap}, nil
 	})
 }
 
@@ -97,7 +97,10 @@ func (s *MountStore) EncodeIndex(context.Context, Index, eris.Secret) (eris.Capa
 // NewBuilder returns eris.ErrReadOnly before any input is consumed.
 func (s *MountStore) NewBuilder(eris.Secret) (ImageBuilder, error) { return nil, eris.ErrReadOnly }
 
-type mountedImage struct{ root, prefix string }
+type mountedImage struct {
+	root, prefix string
+	capability   eris.Capability
+}
 
 func mountedRootInfo(name string) (stdfs.FileInfo, error) {
 	info, err := os.Lstat(name)
@@ -158,10 +161,11 @@ func mountedChildPath(dir, component string) (string, error) {
 	return filepath.Join(dir, local), nil
 }
 
-// An expanded tree has no markers for nested indexes. Each directory can be
-// an image root. Resolve each link within the directory that contains it.
-func resolveMountedLinks(ctx context.Context, r *os.Root, p string, mode imagepath.Mode) (string, string, error) {
-	return imagepath.Resolve(".", filepath.ToSlash(p), mode, func(dir, component string) (string, imagepath.Kind, string, error) {
+func (m *mountedImage) resolveLinks(ctx context.Context, r *os.Root, start, p string, mode imagepath.Mode) (string, string, error) {
+	boundaries := mountedBoundaries{image: m, tree: r}
+	defer boundaries.close()
+	viewDepth := mountedDepth(start)
+	child := func(dir, component string) (string, imagepath.Kind, string, error) {
 		if err := ctx.Err(); err != nil {
 			return "", 0, "", err
 		}
@@ -188,15 +192,22 @@ func resolveMountedLinks(ctx context.Context, r *os.Root, p string, mode imagepa
 			return "", 0, "", stdfs.ErrInvalid
 		}
 		if info.IsDir() {
-			return next, imagepath.ImageRoot, "", nil
+			return next, imagepath.Directory, "", nil
 		}
 		return next, imagepath.File, "", nil
+	}
+	resolved, target, err := imagepath.ResolveWithLinkRoot(start, filepath.ToSlash(p), mode, child, func(dir string) int {
+		return max(0, boundaries.depth(ctx, dir)-viewDepth)
 	})
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	return resolved, target, err
 }
 
 func mountedCall[T any](ctx context.Context, m *mountedImage, op, name string, call func(*os.Root, string) (T, error)) (T, error) {
 	return withMountedRoot(ctx, m, op, name, func(r *os.Root, p string) (T, error) {
-		resolved, _, err := resolveMountedLinks(ctx, r, p, imagepath.Follow)
+		resolved, _, err := m.resolveLinks(ctx, r, ".", p, imagepath.Follow)
 		if err != nil {
 			var zero T
 			return zero, err
@@ -214,7 +225,7 @@ func (m *mountedImage) Lstat(ctx context.Context, name string) (stdfs.FileInfo, 
 		return mountedCall(ctx, m, "lstat", name, (*os.Root).Stat)
 	}
 	return withMountedRoot(ctx, m, "lstat", name, func(r *os.Root, p string) (stdfs.FileInfo, error) {
-		dir, _, err := resolveMountedLinks(ctx, r, filepath.Dir(p), imagepath.Follow)
+		dir, _, err := m.resolveLinks(ctx, r, ".", filepath.Dir(p), imagepath.Follow)
 		if err != nil {
 			return nil, err
 		}
@@ -227,14 +238,16 @@ func (m *mountedImage) Lstat(ctx context.Context, name string) (stdfs.FileInfo, 
 }
 
 func (m *mountedImage) ReadLink(ctx context.Context, name string) (string, error) {
-	return withMountedRoot(ctx, m, "readlink", name, func(r *os.Root, p string) (string, error) {
+	return withMountedRoot(ctx, m, "readlink", name, func(r *os.Root, _ string) (string, error) {
 		if name == "." {
 			return "", stdfs.ErrInvalid
 		}
 		if err := imagepath.CheckNative(name); err != nil {
 			return "", err
 		}
-		_, target, err := resolveMountedLinks(ctx, r, p, imagepath.Export)
+		// Export can expose the Sub directory as a separate mount. Resolve
+		// from that directory so its root is an additional boundary.
+		_, target, err := m.resolveLinks(ctx, r, m.prefix, name, imagepath.Export)
 		return target, err
 	})
 }
@@ -261,7 +274,9 @@ func (m *mountedImage) Sub(ctx context.Context, name string) (FileSystem, error)
 		if !info.IsDir() {
 			return nil, stdfs.ErrInvalid
 		}
-		return &mountedImage{root: m.root, prefix: p}, nil
+		view := *m
+		view.prefix = p
+		return &view, nil
 	})
 }
 

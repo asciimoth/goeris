@@ -101,12 +101,11 @@
 // native paths and rejects names the host cannot represent.
 // A link in a decoded index can reach entries in that image, including nested
 // entries. A link in a nested index cannot climb into its parent image.
-// A host mount supplies an expanded tree without nested index markers.
-// MountStore therefore treats each directory as a possible image root.
-// A mounted link can descend into a directory and return, but it cannot
-// climb above the directory that contains the link. ResolvePath returns the
-// resolved host path. Use a capability-backed image for links that need the
-// boundaries recorded in the index.
+// On a standard ERIS mount, MountStore reads decoded indexes to identify
+// nested image roots when a link steps to a parent directory. If an index is
+// unavailable, each directory it would describe is a possible image root.
+// Links there can descend into a directory and return to the directory that
+// contains the link. ResolvePath returns the resolved host path.
 // ReadLink checks each target in the chain before exporting the link. It rejects
 // targets that can leave the view when a client cleans the path, and parent
 // steps that would remove a directory link and select a different parent. In both the

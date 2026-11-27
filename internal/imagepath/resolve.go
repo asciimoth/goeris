@@ -35,6 +35,12 @@ const (
 // Resolve walks slash-separated components in order. The child lookup
 // returns ErrMissingEntry for a missing entry and preserves backend failures.
 func Resolve[T comparable](root T, name string, mode Mode, child func(T, string) (T, Kind, string, error)) (T, string, error) {
+	return ResolveWithLinkRoot(root, name, mode, child, nil)
+}
+
+// ResolveWithLinkRoot can obtain boundary information on demand. linkRoot
+// returns the depth of the innermost image root for the given directory.
+func ResolveWithLinkRoot[T comparable](root T, name string, mode Mode, child func(T, string) (T, Kind, string, error), linkRoot func(T) int) (T, string, error) {
 	// Keep one unprocessed string per followed link. Splitting and copying
 	// all target components can multiply memory use when a link points to
 	// itself followed by a long suffix, even with the 40-link limit.
@@ -146,13 +152,22 @@ func Resolve[T comparable](root T, name string, mode Mode, child func(T, string)
 		if strings.HasPrefix(target, "/") {
 			return zero, "", stdfs.ErrNotExist
 		}
+		boundary := current.root
+		if linkRoot != nil {
+			for part := range strings.SplitSeq(target, "/") {
+				if part == ".." {
+					boundary = linkRoot(current.value)
+					break
+				}
+			}
+		}
 		if mode == Export {
 			// Cleaning the rest of this target could erase this directory
 			// link and make the client continue in a different directory.
 			if more {
 				pending[last].via = &directoryLink{current.value, exportFloor}
 			}
-			if climbsAbove(target, len(ancestors)-1-max(current.root, exportFloor)) {
+			if climbsAbove(target, len(ancestors)-1-max(boundary, exportFloor)) {
 				return zero, "", stdfs.ErrNotExist
 			}
 			if err := CheckNative(target); err != nil {
@@ -163,7 +178,7 @@ func Resolve[T comparable](root T, name string, mode Mode, child func(T, string)
 		// Cleaning the text first can select a different file through a link.
 		// Each nested index is an image. Its links have the same boundary
 		// here as when the index is opened by its own capability.
-		pending = append(pending, linkPath{path: target, root: current.root})
+		pending = append(pending, linkPath{path: target, root: boundary})
 	}
 	if mode == Canonical {
 		resolved := "."

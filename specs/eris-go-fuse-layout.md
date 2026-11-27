@@ -166,13 +166,16 @@ backslash, a colon, a NUL byte, or a name ending in a dot or space prevents
 export. The components `.` and `..` retain their usual meaning.
 
 When backends serve the same capability, a client can read a link from one
-backend and look up its target in another. In this case, `ReadLink` rejects `..`
-after a named component. For leading `..` steps, it checks the link's parent
-directories in each backend. A directory alias in that path prevents export.
-Each directory that a parent step leaves must be an ordinary directory in every
-backend that supplies it. A nested image root or a directory with an unknown
-boundary fails this check. A host mount treats each directory as a possible
-image root because it has no nested index markers.
+backend and look up its target in another. If the backends can establish that
+they serve the same indexed directory and agree on the export, `ReadLink` can
+use that index's policy. Otherwise it checks parent steps and the directories
+they remove in each backend. A directory alias or an unknown boundary prevents
+export when those checks cannot establish a safe parent step.
+
+A host mount has no nested index markers in its expanded tree. For parent steps,
+`MountStore` reads the necessary decoded indexes at `M/C`. If an index is
+unavailable, it treats each directory that index would describe as a possible
+image root.
 
 A view that combines independently opened images rejects link export. Use `Sub`
 to select a directory from one backend and apply its link policy.

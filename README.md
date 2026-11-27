@@ -204,13 +204,12 @@ To migrate from `fs.ResolveRoot` or `fs.ResolvePath`, open the image with
 resolve an uncompressed file if its content store supports host paths. A mounted
 image can also resolve directories and decoded compressed files. Use a trusted,
 immutable mount that verifies content and preserves case-sensitive names. Each
-capability entry must be a directory. The expanded tree has no nested index
-markers, so `MountStore` confines each link to the directory that contains it.
-For links to siblings of that directory, use a capability-backed image, which
-knows the index boundaries. On a standard ERIS mount, use
-`erisfs.NewStore(eris.NewMountCapabilityStore("/eris"), options)` to read the
-indexes from the mount. Mounted `ResolvePath` returns the resolved path.
-MountStore write operations return `eris.ErrReadOnly`. Mounted trees report
+capability entry must be a directory. On a standard ERIS mount, `MountStore`
+uses the decoded indexes alongside `fs` to distinguish ordinary directories from
+nested images. A relative link can step to a parent directory within its own
+index. When the index is unavailable, the link stays within its containing
+directory. Mounted `ResolvePath` returns the resolved path. MountStore write
+operations return `eris.ErrReadOnly`. Mounted trees report
 `errors.ErrUnsupported` for raw-index reads and for positive explicit index
 limits. A mounted prefetch asks the host for file metadata throughout the
 selected tree.

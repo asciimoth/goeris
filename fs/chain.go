@@ -330,12 +330,49 @@ func (s *CombinedFileSystem) ReadLink(ctx context.Context, name string) (string,
 	for part := range strings.SplitSeq(target, "/") {
 		if part == ".." {
 			if err := s.checkTargetParents(ctx, name, target); err != nil {
-				return "", pathError("readlink", name, err)
+				// Equivalent indexed views have the same aliases and image
+				// boundaries. In that case the selected backend's export
+				// check already covers the lookup through any of them.
+				if !errors.Is(err, stdfs.ErrNotExist) || s.indexedLinkLocation(ctx, name, target).dir == "" {
+					if ctx.Err() != nil {
+						return "", pathError("readlink", name, ctx.Err())
+					}
+					return "", pathError("readlink", name, err)
+				}
 			}
 			break
 		}
 	}
 	return target, nil
+}
+
+func (s *CombinedFileSystem) indexedLinkLocation(ctx context.Context, name, target string) imageLocation {
+	var shared imageLocation
+	for i, open := range s.linkImages {
+		image, err := open(ctx)
+		if err != nil {
+			return imageLocation{}
+		}
+		var location imageLocation
+		if combined, ok := image.(*CombinedFileSystem); ok {
+			location = combined.indexedLinkLocation(ctx, name, target)
+		} else {
+			location = locationOf(image)
+			if mounted, ok := image.(*mountedImage); ok {
+				location = mounted.indexedLocation(ctx)
+			}
+			if location.index != (eris.Capability{}) {
+				if got, err := image.ReadLink(ctx, name); err != nil || got != target {
+					return imageLocation{}
+				}
+			}
+		}
+		if location.index == (eris.Capability{}) || (i > 0 && location != shared) {
+			return imageLocation{}
+		}
+		shared = location
+	}
+	return shared
 }
 
 // A mount adapter can resolve each path component in a different backend.
@@ -425,10 +462,15 @@ func checkLinkDirectories(ctx context.Context, image FileSystem, dir, ancestor s
 			break
 		}
 		if ancestor == "." || len(prefix) > len(ancestor) {
-			// Only a decoded index identifies an ordinary directory.
-			// A mounted tree can have an image root at any directory.
 			metadata, ok := info.(imageFileInfo)
-			if !ok || metadata.kind != directoryType {
+			implicit := ok && metadata.kind == directoryType
+			if mounted, ok := image.(*mountedImage); ok {
+				implicit, err = mounted.isImplicitDirectory(ctx, prefix)
+				if err != nil {
+					return err
+				}
+			}
+			if !implicit {
 				return stdfs.ErrNotExist
 			}
 		}
