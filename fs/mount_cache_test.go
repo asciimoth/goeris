@@ -476,6 +476,16 @@ func TestMountListingCacheSharedPrefixes(t *testing.T) {
 	m.rememberBlock(refs[3], 1024)
 	checkMountListing(t, m, "AAA")
 	checkMountListing(t, m, ".", "fs", refs[2].String()[:3], refs[2].String(), refs[3].String()[:3], refs[3].String())
+	// The old listing retains metadata from before both evictions.
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if entry.Name() == refs[1].String()[9:] && info.Size() != 32768 {
+			t.Fatalf("eviction changed retained size to %d", info.Size())
+		}
+	}
 	if source.reads != 0 {
 		t.Fatal("listing or Info read storage")
 	}
@@ -546,4 +556,17 @@ func TestMountIndexListingRefreshesRecency(t *testing.T) {
 	}
 	checkMountListing(t, m, ".", "fs", mountIndex, mountReadme)
 	checkMountListing(t, m, "fs", mountIndex)
+}
+
+func BenchmarkMountListingRefresh(b *testing.B) {
+	for name, keys := range map[string]byte{"hit": 1, "evict": 64} {
+		b.Run(name, func(b *testing.B) {
+			mount := withMountCache(b, NewMount(b.Context(), eris.BlockSet{}, eris.BlockOptions{}), 0, 32)
+			var ref eris.Reference
+			for b.Loop() {
+				mount.rememberBlock(ref, 1024)
+				ref[0] = (ref[0] + 1) % keys
+			}
+		})
+	}
 }

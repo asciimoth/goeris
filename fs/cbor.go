@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"errors"
 	"math"
@@ -25,28 +26,20 @@ func (index Index) MarshalBinary() ([]byte, error) {
 	if err := index.Validate(); err != nil {
 		return nil, err
 	}
-	type encodedEntry struct {
-		key   []byte
-		entry *Entry
+	entries := make([]*Entry, len(index.Entries))
+	for i := range entries {
+		entries[i] = &index.Entries[i]
 	}
-	encoded := make([]encodedEntry, len(index.Entries))
-	for i, entry := range index.Entries {
-		key := cborwire.AppendHead(nil, 4, uint64(len(entry.Path)))
-		for _, component := range entry.Path {
-			key = appendText(key, component)
-		}
-		encoded[i] = encodedEntry{key: key, entry: &index.Entries[i]}
-	}
-	slices.SortFunc(encoded, func(a, b encodedEntry) int {
-		return bytes.Compare(a.key, b.key)
-	})
+	slices.SortFunc(entries, func(a, b *Entry) int { return compareWirePaths(a.Path, b.Path) })
 	out := append([]byte(nil), MagicPrefix...)
 	out = cborwire.AppendHead(out, 4, 2)
 	out = cborwire.AppendHead(out, 0, SpecificationVersion)
-	out = cborwire.AppendHead(out, 5, uint64(len(encoded)))
-	for _, item := range encoded {
-		out = append(out, item.key...)
-		entry := item.entry
+	out = cborwire.AppendHead(out, 5, uint64(len(entries)))
+	for _, entry := range entries {
+		out = cborwire.AppendHead(out, 4, uint64(len(entry.Path)))
+		for _, component := range entry.Path {
+			out = appendText(out, component)
+		}
 		fields := uint64(2)
 		if entry.Type == Regular || entry.Type == Executable {
 			if entry.Size < 0 {
@@ -75,6 +68,23 @@ func (index Index) MarshalBinary() ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// Preferred CBOR headers sort by increasing length for a fixed major type.
+// Compare the array length, then each text length and its UTF-8 bytes.
+func compareWirePaths(a, b []string) int {
+	if order := cmp.Compare(len(a), len(b)); order != 0 {
+		return order
+	}
+	for i, component := range a {
+		if order := cmp.Compare(len(component), len(b[i])); order != 0 {
+			return order
+		}
+		if order := strings.Compare(component, b[i]); order != 0 {
+			return order
+		}
+	}
+	return 0
 }
 
 // UnmarshalBinary parses a deterministic ERIS-FS version 1 or 2 index.

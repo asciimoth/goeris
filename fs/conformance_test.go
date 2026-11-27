@@ -85,3 +85,34 @@ func TestIndexRecommendedBlockSizeBoundary(t *testing.T) {
 		}
 	}
 }
+
+// ParseIndex checks the raw encoded keys. Use it as an independent check at
+// CBOR length boundaries for both path arrays and their text components.
+func TestMarshalPathLengthBoundaries(t *testing.T) {
+	lengths := []int{23, 24, 255, 256}
+	var want []Entry
+	for _, length := range lengths {
+		want = append(want, Entry{Path: []string{strings.Repeat("a", length), "z"}, Type: Symlink})
+	}
+	for _, length := range lengths {
+		path := strings.Split(strings.Repeat("d/", length-1)+"file", "/")
+		want = append(want, Entry{Path: path, Type: Symlink})
+	}
+	index := Index{Entries: slices.Clone(want)}
+	slices.Reverse(index.Entries)
+	original := slices.Clone(index.Entries)
+	wire, err := index.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(index.Entries, original) {
+		t.Fatal("MarshalBinary reordered input")
+	}
+	parsed, err := ParseIndex(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(parsed.Entries, want) {
+		t.Fatal("unexpected path order or data")
+	}
+}

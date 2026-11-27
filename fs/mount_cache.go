@@ -87,7 +87,7 @@ func (c *mountRecent[K, V]) put(key K, value V) {
 		return
 	}
 	if element := c.entries[key]; element != nil {
-		element.Value = mountRecentEntry[K, V]{key, value}
+		element.Value.(*mountRecentEntry[K, V]).value = value
 		c.order.MoveToFront(element)
 		return
 	}
@@ -96,10 +96,14 @@ func (c *mountRecent[K, V]) put(key K, value V) {
 	}
 	if len(c.entries) == c.limit {
 		oldest := c.order.Back()
-		delete(c.entries, oldest.Value.(mountRecentEntry[K, V]).key)
-		c.order.Remove(oldest)
+		entry := oldest.Value.(*mountRecentEntry[K, V])
+		delete(c.entries, entry.key)
+		entry.key, entry.value = key, value
+		c.entries[key] = oldest
+		c.order.MoveToFront(oldest)
+		return
 	}
-	c.entries[key] = c.order.PushFront(mountRecentEntry[K, V]{key, value})
+	c.entries[key] = c.order.PushFront(&mountRecentEntry[K, V]{key, value})
 }
 
 func (m *Mount) rememberCapability(cap eris.Capability, size int64, image bool) {
@@ -110,7 +114,7 @@ func (m *Mount) rememberCapability(cap eris.Capability, size int64, image bool) 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if previous := c.capabilities.entries[cap]; previous != nil {
-		old := previous.Value.(mountRecentEntry[eris.Capability, mountCapabilityInfo]).value
+		old := previous.Value.(*mountRecentEntry[eris.Capability, mountCapabilityInfo]).value
 		image = image || old.image
 		if size < 0 {
 			size = old.size
@@ -160,7 +164,7 @@ func (m *Mount) addListings(dir *node, full string) {
 	case full == ".":
 		if m.content != nil {
 			for cap, element := range c.capabilities.entries {
-				info := element.Value.(mountRecentEntry[eris.Capability, mountCapabilityInfo]).value
+				info := element.Value.(*mountRecentEntry[eris.Capability, mountCapabilityInfo]).value
 				name := cap.String()
 				dir.children[name] = &node{name: name, kind: Regular, capability: cap,
 					store: m.content, size: info.size, sizeKnown: info.size >= 0}
@@ -168,13 +172,13 @@ func (m *Mount) addListings(dir *node, full string) {
 		}
 		for ref, element := range c.blocks.entries {
 			name := ref.String()
-			size := element.Value.(mountRecentEntry[eris.Reference, int64]).value
+			size := element.Value.(*mountRecentEntry[eris.Reference, int64]).value
 			dir.children[name] = &node{name: name, kind: Regular, size: size, sizeKnown: true}
 			dir.children[name[:3]] = directory(name[:3])
 		}
 	case mountUpper(full) == "FS":
 		for cap, element := range c.capabilities.entries {
-			if element.Value.(mountRecentEntry[eris.Capability, mountCapabilityInfo]).value.image {
+			if element.Value.(*mountRecentEntry[eris.Capability, mountCapabilityInfo]).value.image {
 				name := cap.String()
 				child := directory(name)
 				// A *Store uses standard ERIS-FS directory metadata. Other
@@ -197,7 +201,7 @@ func (m *Mount) addListings(dir *node, full string) {
 			if len(prefix) < 9 {
 				dir.children[rest[:3]] = directory(rest[:3])
 			} else {
-				size := element.Value.(mountRecentEntry[eris.Reference, int64]).value
+				size := element.Value.(*mountRecentEntry[eris.Reference, int64]).value
 				dir.children[rest] = &node{name: rest, kind: Regular, size: size, sizeKnown: true}
 			}
 		}

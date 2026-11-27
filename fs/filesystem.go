@@ -45,6 +45,7 @@ type node struct {
 	// A nested index has nil children until load succeeds. After that the
 	// map is immutable, including when the index is empty.
 	children    map[string]*node
+	ordered     []*node // Set on first listing, after children are immutable.
 	loading     chan struct{}
 	indexLimit  int64
 	size        int64
@@ -342,7 +343,7 @@ func (fileSystem *FS) ReadDir(ctx context.Context, path string) ([]stdfs.DirEntr
 	if !item.isDir() {
 		return nil, pathError("readdir", path, stdfs.ErrInvalid)
 	}
-	return item.dirEntries(ctx), nil
+	return bindDirEntries(ctx, item.sortedChildren()), nil
 }
 
 // ReadLink reads a symbolic link only when following it cannot leave this
@@ -384,12 +385,25 @@ func (fileSystem *FS) Sub(ctx context.Context, name string) (FileSystem, error) 
 	return &FS{root: fileSystem.root, prefix: prefix, subRoot: item}, nil
 }
 
-func (node *node) dirEntries(ctx context.Context) []stdfs.DirEntry {
-	entries := make([]stdfs.DirEntry, 0, len(node.children))
-	for _, child := range node.children {
-		entries = append(entries, dirEntry{node: child, ctx: ctx})
+func (dir *node) sortedChildren() []*node {
+	dir.mu.Lock()
+	defer dir.mu.Unlock()
+	if dir.ordered == nil {
+		children := make([]*node, 0, len(dir.children))
+		for _, child := range dir.children {
+			children = append(children, child)
+		}
+		slices.SortFunc(children, func(a, b *node) int { return strings.Compare(a.name, b.name) })
+		dir.ordered = children
 	}
-	slices.SortFunc(entries, func(a, b stdfs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
+	return dir.ordered
+}
+
+func bindDirEntries(ctx context.Context, children []*node) []stdfs.DirEntry {
+	entries := make([]stdfs.DirEntry, len(children))
+	for i, child := range children {
+		entries[i] = dirEntry{node: child, ctx: ctx}
+	}
 	return entries
 }
 
@@ -515,7 +529,7 @@ func (file *regularFile) Stat() (stdfs.FileInfo, error) {
 type directoryFile struct {
 	ctx     context.Context
 	node    *node
-	entries []stdfs.DirEntry
+	entries []*node
 	offset  int
 	closed  bool
 }
@@ -545,7 +559,7 @@ func (file *directoryFile) ReadDir(count int) ([]stdfs.DirEntry, error) {
 		return nil, err
 	}
 	if file.entries == nil {
-		file.entries = file.node.dirEntries(file.ctx)
+		file.entries = file.node.sortedChildren()
 	}
 	entries := file.entries
 	if file.offset == len(entries) && count > 0 {
@@ -555,8 +569,7 @@ func (file *directoryFile) ReadDir(count int) ([]stdfs.DirEntry, error) {
 	if count > 0 {
 		end = file.offset + min(count, len(entries)-file.offset)
 	}
-	// Do not let append on the returned slice overwrite unread entries.
-	result := entries[file.offset:end:end]
+	result := bindDirEntries(file.ctx, entries[file.offset:end])
 	file.offset = end
 	return result, nil
 }
