@@ -160,10 +160,12 @@ multiple backends rejects `..` after a named component because that component
 can resolve differently during fallback. Safe targets keep their original
 spelling. Each target must also stay in the image if a client removes dot
 segments before it follows links. A parent step that would remove a directory
-link is rejected. Targets with native device names, a backslash, a colon, a NUL
-byte, or a name ending in a dot or space are rejected because a native client
-can interpret them as a different path. The dot segments `.` and `..` retain
-their usual meaning.
+link from the target is rejected. If the lookup path contains a directory alias,
+the target can climb past that alias only when the alias and its destination
+have the same parent. Targets with native device names, a backslash, a colon, a
+NUL byte, or a name ending in a dot or space are rejected because a native
+client can interpret them as a different path. The dot segments `.` and `..`
+retain their usual meaning.
 
 Callers can explicitly enable recent listings with
 `Mount.WithListingCache(capabilityLimit, blockLimit)`. Both categories are

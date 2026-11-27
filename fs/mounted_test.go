@@ -76,8 +76,14 @@ func TestMountedOperations(t *testing.T) {
 	makePathTestTree(t, mount, other)
 	host := t.TempDir()
 	writePathTestTree(t, host)
+	if err := os.MkdirAll(filepath.Join(root, "deep", "dir"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	links := map[string]string{
 		"alias":         "docs",
+		"shortcut":      "deep/dir",
+		"deep/dir/up":   "../../hello.txt",
+		"via-shortcut":  "shortcut/up",
 		"docs/up":       "../hello.txt",
 		"escape":        "../outside",
 		"broken":        "missing",
@@ -117,6 +123,12 @@ func TestMountedOperations(t *testing.T) {
 	if target, err := image.ReadLink(ctx, "alias/up"); err != nil || target != "../hello.txt" {
 		t.Fatalf("image ReadLink = %q, %v", target, err)
 	}
+	if target, err := image.ReadLink(ctx, "deep/dir/up"); err != nil || target != links["deep/dir/up"] {
+		t.Fatalf("ReadLink at original path = %q, %v", target, err)
+	}
+	if data, err := image.ReadFile(ctx, "via-shortcut"); err != nil || string(data) != "Hello, ERIS!\n" {
+		t.Fatalf("ReadFile through directory alias = %q, %v", data, err)
+	}
 	if data, err := sub.ReadFile(ctx, "up"); err != nil || string(data) != "Hello, ERIS!\n" {
 		t.Fatal(string(data), err)
 	}
@@ -131,7 +143,7 @@ func TestMountedOperations(t *testing.T) {
 			t.Fatal(name, got, err)
 		}
 	}
-	for _, name := range []string{"escape", "unsafe", "unsafe-chain", "device", ".", "missing", "broken-escape", "broken-chain"} {
+	for _, name := range []string{"escape", "unsafe", "unsafe-chain", "device", ".", "missing", "broken-escape", "broken-chain", "shortcut/up", "via-shortcut"} {
 		if target, err := image.ReadLink(ctx, name); err == nil || target != "" {
 			t.Errorf("ReadLink(%q) = %q, %v", name, target, err)
 		}

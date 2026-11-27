@@ -20,15 +20,20 @@ const (
 
 // resolveLinks walks slash-separated components in order. The child lookup
 // returns errDangling for a missing entry and preserves backend failures.
-func resolveLinks[T any](root T, name string, mode linkLookup, child func(T, string) (T, EntryType, string, error)) (T, string, error) {
+func resolveLinks[T comparable](root T, name string, mode linkLookup, child func(T, string) (T, EntryType, string, error)) (T, string, error) {
 	// Keep one unprocessed string per followed link. Splitting and copying
 	// all target components can multiply memory use when a link points to
 	// itself followed by a long suffix, even with the 40-link limit.
+	type directoryLink struct {
+		parent T
+		floor  int
+	}
 	type linkPath struct {
 		path string
 		root int // Depth of the image that contains this link.
+		via  *directoryLink
 	}
-	pending := []linkPath{{name, 0}}
+	pending := []linkPath{{path: name}}
 	var zero T
 	var exported string
 	haveTarget := false
@@ -53,6 +58,7 @@ func resolveLinks[T any](root T, name string, mode linkLookup, child func(T, str
 	}
 	ancestors := []step{{root, directoryType, 0}}
 	links := 0
+	exportFloor := 0
 	for len(pending) > 0 {
 		current := ancestors[len(ancestors)-1]
 		if current.kind != directoryType && current.kind != Subdirectory {
@@ -60,6 +66,16 @@ func resolveLinks[T any](root T, name string, mode linkLookup, child func(T, str
 		}
 		last := len(pending) - 1
 		frame := pending[last]
+		if frame.via != nil {
+			// A client can clean a target relative to the spelling it used
+			// for this directory. A parent step can remove the directory
+			// link only if both spellings lead to the same parent.
+			exportFloor = frame.via.floor
+			if len(ancestors) < 2 || ancestors[len(ancestors)-2].value != frame.via.parent {
+				exportFloor = len(ancestors) - 1
+			}
+			pending[last].via = nil
+		}
 		component, rest, more := strings.Cut(frame.path, "/")
 		if more {
 			pending[last].path = rest
@@ -107,10 +123,13 @@ func resolveLinks[T any](root T, name string, mode linkLookup, child func(T, str
 		if mode == exportFinalLink {
 			// Cleaning the rest of this target could erase this directory
 			// link and make the client continue in a different directory.
-			if more && climbsAbove(rest, 0) {
-				return zero, "", stdfs.ErrNotExist
+			if more {
+				if climbsAbove(rest, 0) {
+					return zero, "", stdfs.ErrNotExist
+				}
+				pending[last].via = &directoryLink{current.value, exportFloor}
 			}
-			if err := checkNativeLinkTarget(target, len(ancestors)-1-current.root); err != nil {
+			if err := checkNativeLinkTarget(target, len(ancestors)-1-max(current.root, exportFloor)); err != nil {
 				return zero, "", err
 			}
 		}
@@ -118,7 +137,7 @@ func resolveLinks[T any](root T, name string, mode linkLookup, child func(T, str
 		// Cleaning the text first can select a different file through a link.
 		// Each nested index is an image. Its links have the same boundary
 		// here as when the index is opened by its own capability.
-		pending = append(pending, linkPath{target, current.root})
+		pending = append(pending, linkPath{path: target, root: current.root})
 	}
 	if mode == exportFinalLink && !haveTarget {
 		return zero, "", stdfs.ErrInvalid

@@ -34,6 +34,8 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 		"dir/escape":       "../..",
 		"root-alias":       ".",
 		"deep-alias":       "dir/child",
+		"dir/child/top":    "../..",
+		"via-deep-alias":   "deep-alias/top",
 		"ambiguous-parent": "deep-alias/../file",
 		"clean-escape":     "deep-alias/../../dir/file",
 		"through-alias":    "root-alias/../outside",
@@ -78,7 +80,7 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	mount := NewMount(ctx, blocks, eris.BlockOptions{})
 	view := NewIOFS(ctx, image)
 	root := "fs/" + capability.String() + "/"
-	for _, name := range []string{"dir/safe", "dir/up", "missing", "missing-safe", "root-alias", "deep-alias"} {
+	for _, name := range []string{"dir/safe", "dir/up", "missing", "missing-safe", "root-alias", "deep-alias", "dir/child/top"} {
 		for label, read := range map[string]func(string) (string, error){
 			"image": imageReadLink(ctx, image),
 			"mount": func(path string) (string, error) { return mount.ReadLink(root + path) },
@@ -89,7 +91,7 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"dir/escape", "through-alias", "chain", "root-escape", "absolute", "missing-escape", "clean-escape", "ambiguous-parent"} {
+	for _, name := range []string{"dir/escape", "through-alias", "chain", "root-escape", "absolute", "missing-escape", "clean-escape", "ambiguous-parent", "deep-alias/top", "via-deep-alias"} {
 		if info, err := mount.Lstat(root + name); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
 			t.Fatalf("Lstat(%q) = %v, %v", name, info, err)
 		}
@@ -106,6 +108,9 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	// Image lookup expands deep-alias before processing the parent steps.
 	if got, err := image.ReadFile(ctx, "clean-escape"); err != nil || string(got) != "content" {
 		t.Errorf("in-image read through directory alias = %q, %v", got, err)
+	}
+	if got, err := image.ReadFile(ctx, "via-deep-alias/dir/file"); err != nil || string(got) != "content" {
+		t.Errorf("in-image read through aliased parent link = %q, %v", got, err)
 	}
 	if got, err := image.ReadFile(ctx, "device-alias"); err != nil || string(got) != "image file" {
 		t.Errorf("in-image read of literal file name = %q, %v", got, err)
@@ -169,6 +174,9 @@ func TestReadLinkChecksNestedTarget(t *testing.T) {
 	if err := builder.AddSubdirectory("nested", nested); err != nil {
 		t.Fatal(err)
 	}
+	if err := builder.AddSymlink("alias", "nested/dir"); err != nil {
+		t.Fatal(err)
+	}
 	if err := builder.AddSymlink("link", "nested/file"); err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +190,13 @@ func TestReadLinkChecksNestedTarget(t *testing.T) {
 	image, err := OpenFS(ctx, outer, store, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Cleaning ".." against "alias" would select the outer image root.
+	if got, err := image.ReadLink(ctx, "alias/up"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ReadLink through alias into nested image = %q, %v", got, err)
+	}
+	if got, err := image.ReadLink(ctx, "nested/dir/up"); got != ".." || err != nil {
+		t.Errorf("ReadLink at original nested path = %q, %v", got, err)
 	}
 	for _, name := range []string{"link", "nested/file", "nested/indirect"} {
 		if got, err := image.ReadLink(ctx, name); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
