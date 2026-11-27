@@ -18,6 +18,10 @@ import (
 
 const directoryType EntryType = 255
 
+// Keep large strings out of shared allocations. A reference to any part of
+// a batch keeps the entire batch and the strings it points to alive.
+const maxBatchedTextBytes = 1024
+
 // FS provides context-aware access to an ERIS-FS image. Use NewIOFS to
 // use the standard library file-system interfaces. Nested ERIS-FS indexes are
 // loaded when a caller enters them. Each block read receives a copy of the
@@ -26,9 +30,9 @@ const directoryType EntryType = 255
 // concurrent calls. Each Open call returns a separate file position. Calls on
 // the same open directory must be serialized by the caller.
 type FS struct {
-	root    *node
-	prefix  string
-	subRoot *node // The directory exposed to consumers of ReadLink.
+	root    *node  // The index that contains the selected directory.
+	prefix  string // The path to the selected directory within that index.
+	subRoot *node  // The directory exposed to consumers of ReadLink.
 }
 
 type node struct {
@@ -36,7 +40,7 @@ type node struct {
 	// Image nodes leave it nil and read through their capability instead.
 	block []byte
 	// listedImage supplies root metadata for a virtual fs/C directory entry.
-	listedImage *Mount
+	listedImage *mountImageSource
 	mu          sync.Mutex
 	store       *Store
 	name        string
@@ -48,9 +52,8 @@ type node struct {
 	ordered     []*node // Set on first listing, after children are immutable.
 	loading     chan struct{}
 	indexLimit  int64
-	size        int64
+	encodedSize atomic.Int64 // Bitwise complement of the file size. Zero means unknown.
 	kind        EntryType
-	sizeKnown   bool
 	compression Compression
 }
 
@@ -124,9 +127,8 @@ func buildTree(index Index, s *Store, rootName string, indexLimit int64) *node {
 		}
 		name := entry.Path[len(entry.Path)-1]
 		var child *node
-		if entry.Type == Subdirectory {
-			// A loaded image can retain a whole tree. Give its root an
-			// independent allocation so a sibling's metadata cannot retain it.
+		if entry.Type == Subdirectory || len(name)+len(entry.Target) > maxBatchedTextBytes {
+			// Isolate large strings and nested trees from sibling handles.
 			child = new(node)
 		} else {
 			if len(leaves) == 0 {
@@ -138,8 +140,9 @@ func buildTree(index Index, s *Store, rootName string, indexLimit int64) *node {
 		*child = node{
 			name: name, kind: entry.Type, store: s, capability: entry.Capability,
 			target: entry.Target, indexLimit: indexLimit,
-			size: entry.Size, sizeKnown: entry.Size >= 0, compression: entry.Compression,
+			compression: entry.Compression,
 		}
+		child.initSize(entry.Size)
 		parent.children[name] = child
 	}
 	return root
@@ -179,15 +182,29 @@ func (item *node) load(ctx context.Context) error {
 		item.loading = nil
 		item.mu.Unlock()
 	}()
-	index, err := item.store.DecodeIndexWithLimit(ctx, item.capability, item.indexLimit)
+	children, err := item.decodeChildren(ctx)
 	if err != nil {
 		return err
 	}
-	root := buildTree(index, item.store, item.name, item.indexLimit)
 	item.mu.Lock()
-	item.children = root.children
+	item.children = children
 	item.mu.Unlock()
 	return nil
+}
+
+func (item *node) decodeChildren(ctx context.Context) (map[string]*node, error) {
+	index, err := item.store.DecodeIndexWithLimit(ctx, item.capability, item.indexLimit)
+	if err != nil {
+		return nil, err
+	}
+	return buildTree(index, item.store, item.name, item.indexLimit).children, nil
+}
+
+func (item *node) loadChildren(ctx context.Context) (map[string]*node, error) {
+	if err := item.load(ctx); err != nil {
+		return nil, err
+	}
+	return item.children, nil
 }
 
 func (fileSystem *FS) find(ctx context.Context, name string, followFinal bool) (*node, error) {
@@ -201,6 +218,10 @@ func (fileSystem *FS) find(ctx context.Context, name string, followFinal bool) (
 
 // lookup resolves a path from the root of the selected image or view.
 func (fileSystem *FS) lookup(ctx context.Context, name string, mode imagepath.Mode) (*node, string, error) {
+	return fileSystem.lookupWithChildren(ctx, name, mode, (*node).loadChildren)
+}
+
+func (fileSystem *FS) lookupWithChildren(ctx context.Context, name string, mode imagepath.Mode, loadChildren func(*node, context.Context) (map[string]*node, error)) (*node, string, error) {
 	if ctx == nil {
 		return nil, "", stdfs.ErrInvalid
 	}
@@ -215,10 +236,11 @@ func (fileSystem *FS) lookup(ctx context.Context, name string, mode imagepath.Mo
 		currentPath = path.Join(fileSystem.prefix, name)
 	}
 	return imagepath.Resolve(fileSystem.root, currentPath, mode, func(dir *node, name string) (*node, imagepath.Kind, string, error) {
-		if err := dir.load(ctx); err != nil {
+		children, err := loadChildren(dir, ctx)
+		if err != nil {
 			return nil, 0, "", err
 		}
-		next := dir.children[name]
+		next := children[name]
 		if next == nil {
 			return nil, 0, "", imagepath.ErrMissingEntry
 		}
@@ -278,9 +300,9 @@ func readImageFile(file stdfs.File) ([]byte, error) {
 	var size int64
 	switch f := file.(type) {
 	case *regularFile:
-		size = f.node.Size()
+		size = f.Size()
 	case *lzipFile:
-		size = f.node.size
+		size = f.info.size
 	}
 	// The size can come from an untrusted index. Limit the initial allocation
 	// and keep room for the read that verifies EOF or reports a size mismatch.
@@ -300,7 +322,9 @@ func (item *node) openRegular(ctx context.Context, path string) (ReadSeekCloser,
 	if err != nil {
 		return nil, pathError("open", path, err)
 	}
-	return &regularFile{ctx: ctx, node: item, CapabilityReader: reader}, nil
+	file := &regularFile{size: item.Size()}
+	file.state.Store(&regularFileState{ctx: ctx, node: item, reader: reader})
+	return file, nil
 }
 
 func (item *node) openRegularReader(ctx context.Context) (eris.CapabilityReader, error) {
@@ -419,7 +443,27 @@ func (fileSystem *FS) Sub(ctx context.Context, name string) (FileSystem, error) 
 	if !item.isDir() {
 		return nil, pathError("sub", name, stdfs.ErrInvalid)
 	}
-	return &FS{root: fileSystem.root, prefix: prefix, subRoot: item}, nil
+	root := fileSystem.root
+	// Lookup has loaded every directory on the canonical path. Links within
+	// the innermost image cannot reach the enclosing indexes.
+	for dir, rest := root, prefix; rest != "." && rest != ""; {
+		component, tail, _ := strings.Cut(rest, "/")
+		dir = dir.children[component]
+		if dir.kind == Subdirectory {
+			root, prefix = dir, tail
+		}
+		rest = tail
+	}
+	switch {
+	case prefix == "":
+		prefix = "."
+	case prefix != "." && !strings.Contains(prefix, "/"):
+		// A one-component canonical path can still share the caller's input.
+		prefix = item.name
+	case root != fileSystem.root:
+		prefix = strings.Clone(prefix)
+	}
+	return &FS{root: root, prefix: prefix, subRoot: item}, nil
 }
 
 func (dir *node) sortedChildren() []*node {
@@ -438,20 +482,63 @@ func (dir *node) sortedChildren() []*node {
 
 func bindDirEntries(ctx context.Context, children []*node) []stdfs.DirEntry {
 	entries := make([]stdfs.DirEntry, len(children))
-	// Keep allocation count low for large listings. Bound each batch so
-	// retaining one DirEntry only keeps a small group of wrappers alive.
-	for start := 0; start < len(children); {
-		batch := make([]dirEntry, min(16, len(children)-start))
-		for i := range batch {
-			batch[i] = dirEntry{node: children[start+i], ctx: ctx}
-			entries[start+i] = &batch[i]
+	if len(entries) == 0 {
+		return entries
+	}
+	// Bound the memory retained by one entry. Use separate batches so entries
+	// with complete metadata cannot keep a sibling's backend alive.
+	var ready []dirEntry
+	var pending []dirEntryLookup
+	var readyContext *dirEntryContext
+	if ctx.Done() != nil {
+		readyContext = &dirEntryContext{ctx}
+	}
+	lookupContext := readyContext
+	for i, child := range children {
+		info := child.metadata()
+		entry := dirEntry{imageFileInfo: info, ctx: readyContext}
+		if child.listedImage != nil || info.size < 0 {
+			if lookupContext == nil {
+				lookupContext = &dirEntryContext{ctx}
+			}
+			if child.listedImage == nil {
+				// Keep each lazy file independent so it can release its
+				// store after resolving the size.
+				lazy := &legacyDirEntry{imageFileInfo: info}
+				lazy.ctx.Store(lookupContext)
+				lazy.lookup.Store(child)
+				entries[i] = lazy
+				continue
+			}
+			entry.ctx = lookupContext
+			if len(info.name) > maxBatchedTextBytes {
+				entries[i] = &dirEntryLookup{dirEntry: entry, lookup: child}
+				continue
+			}
+			if len(pending) == 0 {
+				pending = make([]dirEntryLookup, min(16, len(children)-i))
+			}
+			pending[0] = dirEntryLookup{dirEntry: entry, lookup: child}
+			entries[i] = &pending[0]
+			pending = pending[1:]
+			continue
 		}
-		start += len(batch)
+		if len(info.name) > maxBatchedTextBytes {
+			entries[i] = &dirEntry{imageFileInfo: info, ctx: readyContext}
+			continue
+		}
+		if len(ready) == 0 {
+			ready = make([]dirEntry, min(16, len(children)-i))
+		}
+		ready[0] = entry
+		entries[i] = &ready[0]
+		ready = ready[1:]
 	}
 	return entries
 }
 
-func (node *node) Name() string { return node.name }
+// initSize sets the index size before the node is shared. A size of -1 is unknown.
+func (node *node) initSize(size int64) { node.encodedSize.Store(^size) }
 
 func (node *node) Size() int64 {
 	if node.kind == Symlink {
@@ -460,26 +547,23 @@ func (node *node) Size() int64 {
 	if node.kind != Regular && node.kind != Executable {
 		return 0
 	}
-	node.mu.Lock()
-	defer node.mu.Unlock()
-	if !node.sizeKnown {
-		return -1
-	}
-	return node.size
+	return ^node.encodedSize.Load()
 }
 
 // Keep the index size, or the first size learned for a version 1 file.
 func (node *node) recordSize(size int64) error {
-	node.mu.Lock()
-	defer node.mu.Unlock()
 	if size < 0 {
 		return eris.ErrInvalidSize
 	}
-	if node.sizeKnown && node.size != size {
+	encoded := ^size
+	current := node.encodedSize.Load()
+	if current == 0 {
+		node.encodedSize.CompareAndSwap(0, encoded)
+		current = node.encodedSize.Load()
+	}
+	if current != encoded {
 		return ErrSizeMismatch
 	}
-	node.size = size
-	node.sizeKnown = true
 	return nil
 }
 
@@ -494,18 +578,35 @@ func (node *node) info(ctx context.Context) (stdfs.FileInfo, error) {
 		}
 		return namedImageRoot{FileSystem: view, name: node.name}.Stat(ctx, ".")
 	}
-	if node.Size() < 0 {
+	info := node.metadata()
+	if info.size < 0 {
 		reader, err := node.openRegularReader(ctx)
 		if err != nil {
 			return nil, err
 		}
 		_ = reader.Close()
+		info.size = node.Size()
 	}
-	return node, nil
+	return info, nil
 }
 
-func (node *node) Mode() stdfs.FileMode {
-	switch node.kind {
+// A metadata snapshot can outlive its image or open file. Keep only the
+// fields that FileInfo needs so it cannot pin a tree, store, or raw block.
+type imageFileInfo struct {
+	name string
+	size int64
+	kind EntryType
+}
+
+func (node *node) metadata() imageFileInfo {
+	return imageFileInfo{name: node.name, size: node.Size(), kind: node.kind}
+}
+
+func (info imageFileInfo) Name() string { return info.name }
+func (info imageFileInfo) Size() int64  { return info.size }
+
+func (info imageFileInfo) Mode() stdfs.FileMode {
+	switch info.kind {
 	case directoryType, Subdirectory:
 		return stdfs.ModeDir | 0o555
 	case Executable:
@@ -517,63 +618,146 @@ func (node *node) Mode() stdfs.FileMode {
 	}
 }
 
-func (node *node) Type() stdfs.FileMode { return node.Mode().Type() }
-func (node *node) ModTime() time.Time   { return time.Time{} }
-func (node *node) IsDir() bool          { return node.isDir() }
-func (node *node) Sys() any             { return nil }
+func (info imageFileInfo) Type() stdfs.FileMode { return info.Mode().Type() }
+func (info imageFileInfo) ModTime() time.Time   { return time.Time{} }
+func (info imageFileInfo) IsDir() bool          { return isDirectory(info.kind) }
+func (info imageFileInfo) Sys() any             { return nil }
+
+type dirEntryContext struct{ context.Context }
 
 type dirEntry struct {
-	*node
-	ctx context.Context
+	imageFileInfo
+	ctx *dirEntryContext
 }
 
-func (entry dirEntry) Info() (stdfs.FileInfo, error) { return entry.info(entry.ctx) }
-func (node *node) isDir() bool                       { return node.kind == directoryType || node.kind == Subdirectory }
+func (entry *dirEntry) Info() (stdfs.FileInfo, error) {
+	if entry.ctx != nil {
+		if err := entry.ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return entry.imageFileInfo, nil
+}
+
+type dirEntryLookup struct {
+	dirEntry
+	lookup *node // Root metadata from another backend.
+}
+
+func (entry *dirEntryLookup) Info() (stdfs.FileInfo, error) {
+	return entry.lookup.info(entry.ctx.Context)
+}
+
+type legacyDirEntry struct {
+	imageFileInfo
+	ctx    atomic.Pointer[dirEntryContext]
+	lookup atomic.Pointer[node]
+	size   atomic.Int64
+}
+
+func (entry *legacyDirEntry) Info() (stdfs.FileInfo, error) {
+	if ctx := entry.ctx.Load(); ctx != nil {
+		if child := entry.lookup.Load(); child != nil {
+			info, err := child.info(ctx.Context)
+			if err == nil {
+				entry.size.Store(info.Size())
+				entry.lookup.Store(nil)
+				// A context without cancellation is only needed for backend
+				// reads. Publish the size and clear the lookup before dropping it.
+				if ctx.Done() == nil {
+					entry.ctx.Store(nil)
+				}
+			}
+			return info, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	info := entry.imageFileInfo
+	info.size = entry.size.Load()
+	return info, nil
+}
+
+func (node *node) isDir() bool { return isDirectory(node.kind) }
+
+func isDirectory(kind EntryType) bool { return kind == directoryType || kind == Subdirectory }
 
 type regularFile struct {
-	ctx  context.Context
-	node *node
-	eris.CapabilityReader
-	closed atomic.Bool
+	state atomic.Pointer[regularFileState]
+	size  int64
+}
+
+// An operation holds its own reference until it returns. Close can detach
+// the state without serializing operations that the reader permits concurrently.
+type regularFileState struct {
+	ctx    context.Context
+	node   *node
+	reader eris.CapabilityReader
 }
 
 func (file *regularFile) Close() error {
-	file.closed.Store(true)
-	return file.CapabilityReader.Close()
+	if state := file.state.Swap(nil); state != nil {
+		return state.reader.Close()
+	}
+	return nil
+}
+
+func (file *regularFile) Read(p []byte) (int, error) {
+	state := file.state.Load()
+	if state == nil {
+		return 0, ErrClosed
+	}
+	return state.reader.Read(p)
+}
+
+func (file *regularFile) ReadAt(p []byte, offset int64) (int, error) {
+	state := file.state.Load()
+	if state == nil {
+		return 0, ErrClosed
+	}
+	return state.reader.ReadAt(p, offset)
 }
 
 func (file *regularFile) Seek(offset int64, whence int) (int64, error) {
-	if file.IsClosed() {
+	state := file.state.Load()
+	if state == nil {
 		return 0, ErrClosed
 	}
-	if err := file.ctx.Err(); err != nil {
+	if err := state.ctx.Err(); err != nil {
 		return 0, err
 	}
-	return file.CapabilityReader.Seek(offset, whence)
+	return state.reader.Seek(offset, whence)
 }
+
+func (file *regularFile) Size() int64 { return file.size }
 
 // IsClosed and CacheSize preserve diagnostics previously provided by the
 // embedded block reader. An opaque capability reader reports no cache count.
-func (file *regularFile) IsClosed() bool { return file.closed.Load() }
+func (file *regularFile) IsClosed() bool { return file.state.Load() == nil }
 
 func (file *regularFile) CacheSize() int {
-	if reader, ok := file.CapabilityReader.(interface{ CacheSize() int }); ok {
-		return reader.CacheSize()
+	if state := file.state.Load(); state != nil {
+		if reader, ok := state.reader.(interface{ CacheSize() int }); ok {
+			return reader.CacheSize()
+		}
 	}
 	return 0
 }
 
 func (file *regularFile) Stat() (stdfs.FileInfo, error) {
-	if file.IsClosed() {
+	state := file.state.Load()
+	if state == nil {
 		return nil, ErrClosed
 	}
-	return file.node.info(file.ctx)
+	return state.node.info(state.ctx)
 }
 
 type directoryFile struct {
 	ctx     context.Context
 	node    *node
 	entries []*node
+	info    imageFileInfo
 	offset  int
 	closed  bool
 }
@@ -582,7 +766,13 @@ func (file *directoryFile) Stat() (stdfs.FileInfo, error) {
 	if file.closed {
 		return nil, ErrClosed
 	}
-	return file.node.info(file.ctx)
+	if file.node != nil {
+		return file.node.info(file.ctx)
+	}
+	if err := file.ctx.Err(); err != nil {
+		return nil, err
+	}
+	return file.info, nil
 }
 
 func (file *directoryFile) Read([]byte) (int, error) {
@@ -599,35 +789,47 @@ func (file *directoryFile) ReadDir(count int) ([]stdfs.DirEntry, error) {
 	if file.closed {
 		return nil, ErrClosed
 	}
-	if err := file.ctx.Err(); err != nil {
+	ctx := file.ctx
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if file.entries == nil {
+	if file.entries == nil && file.node != nil {
 		file.entries = file.node.sortedChildren()
 	}
 	entries := file.entries
-	if file.offset == len(entries) && count > 0 {
-		return nil, io.EOF
-	}
+	start := file.offset
 	end := len(entries)
 	if count > 0 {
-		end = file.offset + min(count, len(entries)-file.offset)
+		end = start + min(count, len(entries)-start)
 	}
-	result := bindDirEntries(file.ctx, entries[file.offset:end])
 	file.offset = end
-	return result, nil
+	if end == len(entries) && file.node != nil {
+		// The position cannot be reset. Keep only the directory's metadata.
+		file.info = file.node.metadata()
+		file.node = nil
+		file.entries = nil
+		file.offset = 0
+		if ctx.Done() == nil {
+			file.ctx = context.Background()
+		}
+	}
+	if count > 0 && start == end {
+		return nil, io.EOF
+	}
+	return bindDirEntries(ctx, entries[start:end]), nil
 }
 
 func (file *directoryFile) Close() error {
 	file.closed = true
 	file.entries = nil
 	file.node = nil
+	file.info = imageFileInfo{}
 	file.ctx = nil
 	return nil
 }
 
 func pathError(operation, path string, err error) error {
-	return &stdfs.PathError{Op: operation, Path: path, Err: err}
+	return &stdfs.PathError{Op: operation, Path: strings.Clone(path), Err: err}
 }
 
 var (

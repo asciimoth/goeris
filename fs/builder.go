@@ -22,10 +22,13 @@ type Builder struct {
 	paths   builderPath
 }
 
-// Store path components once. Storing every joined prefix would use quadratic
-// memory and processing time for a deeply nested path from an untrusted caller.
-// A nil child marks a complete entry. A non-nil child holds its descendants.
-type builderPath map[string]builderPath
+// Store path components once. A nil child marks a complete entry.
+type builderPath map[string]*builderDirectory
+
+type builderDirectory struct {
+	name     string
+	children builderPath
+}
 
 // NewBuilder returns a builder that writes files and indexes to content.
 // It keeps a copy of options. File writes preserve the supplied Root flag;
@@ -85,7 +88,7 @@ func (builder *Builder) AddFile(ctx context.Context, path string, content io.Rea
 	if executable {
 		kind = Executable
 	}
-	return builder.add(Entry{Path: components, Type: kind, Capability: capability, Size: counted.size})
+	return builder.add(path, Entry{Path: components, Type: kind, Capability: capability, Size: counted.size})
 }
 
 // AddLzipFile stores an existing Lzip stream. Size is the uncompressed length.
@@ -122,15 +125,23 @@ func (builder *Builder) AddCompressedFile(ctx context.Context, path string, cont
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	compressCtx, stop := context.WithCancel(ctx)
 	input, output := io.Pipe()
 	done := make(chan int64, 1)
 	go func() {
-		size, err := writeLzip(ctx, output, content)
+		size, err := writeLzip(compressCtx, output, content)
 		_ = output.CloseWithError(err)
 		done <- size
 	}()
-	err := builder.AddLzipFile(ctx, path, input, 0, executable)
-	_ = input.CloseWithError(err)
+	err := func() (err error) {
+		// The store can stop before the compressor next writes to the pipe.
+		// Cancel further input reads and release any pipe write, even on panic.
+		defer func() {
+			stop()
+			_ = input.CloseWithError(err)
+		}()
+		return builder.AddLzipFile(ctx, path, input, 0, executable)
+	}()
 	size := <-done
 	if err != nil {
 		return err
@@ -163,7 +174,7 @@ func (builder *Builder) AddSymlink(path, target string) error {
 	if err != nil {
 		return err
 	}
-	return builder.add(Entry{Path: components, Type: Symlink, Target: target})
+	return builder.add(path, Entry{Path: components, Type: Symlink, Target: target})
 }
 
 // AddSubdirectory adds a nested ERIS-FS image at path.
@@ -172,7 +183,7 @@ func (builder *Builder) AddSubdirectory(path string, capability eris.Capability)
 	if err != nil {
 		return err
 	}
-	return builder.add(Entry{Path: components, Type: Subdirectory, Capability: capability})
+	return builder.add(path, Entry{Path: components, Type: Subdirectory, Capability: capability})
 }
 
 // Index returns an independent snapshot of the current index.
@@ -196,7 +207,7 @@ func (builder *Builder) Finish(ctx context.Context) (eris.Capability, error) {
 	return builder.store.EncodeIndex(ctx, Index{Entries: builder.entries}, builder.secret)
 }
 
-func (builder *Builder) add(entry Entry) error {
+func (builder *Builder) add(path string, entry Entry) error {
 	if builder == nil || builder.store.content == nil {
 		return ErrInvalidEntry
 	}
@@ -207,6 +218,11 @@ func (builder *Builder) add(entry Entry) error {
 	if err != nil {
 		return err
 	}
+	for _, component := range entry.Path[:len(entry.Path)-len(suffix)] {
+		path = path[len(component)+1:]
+	}
+	ownPathComponents(path, suffix)
+	entry.Target = strings.Clone(entry.Target)
 	builder.entries = append(builder.entries, entry)
 	if parent == nil {
 		builder.paths = make(builderPath)
@@ -216,7 +232,29 @@ func (builder *Builder) add(entry Entry) error {
 	return nil
 }
 
+// Copy input storage in small groups of complete path components. A snapshot's
+// leaf name can then share a group without keeping a large parent name alive.
+func ownPathComponents(path string, components []string) {
+	for len(components) > 0 {
+		count, size := 1, len(components[0])
+		for count < len(components) && size+1+len(components[count]) <= maxBatchedTextBytes {
+			size += 1 + len(components[count])
+			count++
+		}
+		i := 0
+		for component := range strings.SplitSeq(strings.Clone(path[:size]), "/") {
+			components[i] = component
+			i++
+		}
+		components = components[count:]
+		if len(components) > 0 {
+			path = path[size+1:]
+		}
+	}
+}
+
 // insertionPoint returns the existing parent and the missing path components.
+// It replaces the existing prefix with the builder's copies of those names.
 func (builder *Builder) insertionPoint(components []string) (builderPath, []string, error) {
 	current := builder.paths
 	for i, component := range components {
@@ -227,7 +265,8 @@ func (builder *Builder) insertionPoint(components []string) (builderPath, []stri
 		if next == nil {
 			return nil, nil, ErrPathConflict
 		}
-		current = next
+		components[i] = next.name
+		current = next.children
 	}
 	return nil, nil, ErrPathConflict
 }
@@ -235,7 +274,7 @@ func (builder *Builder) insertionPoint(components []string) (builderPath, []stri
 func (current builderPath) addSuffix(components []string) {
 	for _, component := range components[:len(components)-1] {
 		next := make(builderPath)
-		current[component] = next
+		current[component] = &builderDirectory{name: component, children: next}
 		current = next
 	}
 	current[components[len(components)-1]] = nil

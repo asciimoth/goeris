@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/asciimoth/goeris"
@@ -304,7 +305,13 @@ func (m *mountedImage) open(ctx context.Context, name string, directories bool) 
 	if err != nil {
 		return nil, err
 	}
-	return &mountedFile{file: file, ctx: ctx}, nil
+	// After Open, only cancellation is used by the handle and its entries.
+	if ctx.Done() == nil {
+		ctx = context.Background()
+	}
+	result := &mountedFile{}
+	result.state.Store(&mountedFileState{file: file, ctx: ctx})
+	return result, nil
 }
 
 func (m *mountedImage) Open(ctx context.Context, name string) (stdfs.File, error) {
@@ -378,44 +385,66 @@ func bindMountedEntries(ctx context.Context, entries []stdfs.DirEntry) []stdfs.D
 
 // Expose only read operations. An os.File would also expose Chmod and Chown.
 type mountedFile struct {
+	state atomic.Pointer[mountedFileState]
+}
+
+type mountedFileState struct {
 	file *os.File
 	ctx  context.Context
 }
 
+func (f *mountedFile) active() (*mountedFileState, error) {
+	state := f.state.Load()
+	if state == nil {
+		return nil, ErrClosed
+	}
+	return state, state.ctx.Err()
+}
+
 func (f *mountedFile) Read(p []byte) (int, error) {
-	if err := f.ctx.Err(); err != nil {
+	state, err := f.active()
+	if err != nil {
 		return 0, err
 	}
-	return f.file.Read(p)
+	return state.file.Read(p)
 }
 
 func (f *mountedFile) ReadAt(p []byte, off int64) (int, error) {
-	if err := f.ctx.Err(); err != nil {
+	state, err := f.active()
+	if err != nil {
 		return 0, err
 	}
-	return f.file.ReadAt(p, off)
+	return state.file.ReadAt(p, off)
 }
 
 func (f *mountedFile) ReadDir(n int) ([]stdfs.DirEntry, error) {
-	if err := f.ctx.Err(); err != nil {
+	state, err := f.active()
+	if err != nil {
 		return nil, err
 	}
-	entries, err := f.file.ReadDir(n)
-	return bindMountedEntries(f.ctx, entries), err
+	entries, err := state.file.ReadDir(n)
+	return bindMountedEntries(state.ctx, entries), err
 }
 
 func (f *mountedFile) Seek(off int64, whence int) (int64, error) {
-	if err := f.ctx.Err(); err != nil {
+	state, err := f.active()
+	if err != nil {
 		return 0, err
 	}
-	return f.file.Seek(off, whence)
+	return state.file.Seek(off, whence)
 }
 
 func (f *mountedFile) Stat() (stdfs.FileInfo, error) {
-	if err := f.ctx.Err(); err != nil {
+	state, err := f.active()
+	if err != nil {
 		return nil, err
 	}
-	return f.file.Stat()
+	return state.file.Stat()
 }
 
-func (f *mountedFile) Close() error { return f.file.Close() }
+func (f *mountedFile) Close() error {
+	if state := f.state.Swap(nil); state != nil {
+		return state.file.Close()
+	}
+	return ErrClosed
+}

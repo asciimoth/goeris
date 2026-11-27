@@ -515,6 +515,11 @@ func TestMountDirectoryCloseReleasesSnapshot(t *testing.T) {
 			t.Fatal(err)
 		}
 		file := opened.(stdfs.ReadDirFile)
+		underlying := opened
+		named, renamed := opened.(*namedDirectory)
+		if renamed {
+			underlying = named.file
+		}
 		if _, err := file.ReadDir(1); err != nil {
 			t.Fatal(err)
 		}
@@ -523,9 +528,8 @@ func TestMountDirectoryCloseReleasesSnapshot(t *testing.T) {
 		}
 		// A closed handle must not retain the snapshot or the image tree through
 		// its node pointer. Both can be much larger than the handle itself.
-		underlying := opened
-		if named, ok := opened.(namedDirectory); ok {
-			underlying = named.File
+		if renamed && named.file != nil {
+			t.Fatal("closed mount directory retained its backend handle")
 		}
 		snapshot := underlying.(*directoryFile)
 		if snapshot.node != nil || snapshot.entries != nil || snapshot.ctx != nil {

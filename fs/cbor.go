@@ -195,16 +195,15 @@ func (decoder *cborDecoder) path() ([]string, error) {
 		return nil, ErrInvalidIndex
 	}
 
+	start := decoder.offset
+	batched := length <= 8
 	var components []string
-	if length <= 8 {
-		// Batch short paths to reduce allocations. Limit each batch so one
-		// retained path keeps only a small number of other components alive.
+	if batched {
 		n := int(length)
 		if len(decoder.pathSlots) < n {
 			decoder.pathSlots = make([]string, max(n, decoder.pathBatchSize))
 		}
 		components = decoder.pathSlots[:0:n]
-		decoder.pathSlots = decoder.pathSlots[n:]
 	} else {
 		// Bound the initial allocation for an untrusted length. Additional
 		// space is allocated only as valid components arrive.
@@ -215,28 +214,33 @@ func (decoder *cborDecoder) path() ([]string, error) {
 		if err != nil || !validPathComponent(component) {
 			return nil, ErrInvalidIndex
 		}
+		if batched && decoder.offset-start > maxBatchedTextBytes {
+			// Large paths have separate storage. Leave the batch available
+			// for the next compact path.
+			owned := make([]string, len(components), int(length))
+			copy(owned, components)
+			clear(components)
+			components = owned
+			batched = false
+		}
 		components = append(components, component)
+	}
+	if batched {
+		decoder.pathSlots = decoder.pathSlots[len(components):]
 	}
 	return components, nil
 }
 
 func (decoder *cborDecoder) entry(version uint64) (Entry, int, error) {
 	var entry Entry
+	var err error
 	if version == LegacySpecificationVersion && decoder.offset < len(decoder.data) && decoder.data[decoder.offset]>>5 == 3 {
-		name, err := decoder.text()
-		if err != nil {
-			return Entry{}, 0, err
-		}
-		entry.Path, err = splitPath(name)
-		if err != nil {
-			return Entry{}, 0, ErrInvalidIndex
-		}
+		entry.Path, err = decoder.legacyPath()
 	} else {
-		components, err := decoder.path()
-		if err != nil {
-			return Entry{}, 0, err
-		}
-		entry.Path = components
+		entry.Path, err = decoder.path()
+	}
+	if err != nil {
+		return Entry{}, 0, err
 	}
 	keyEnd := decoder.offset
 	length, err := decoder.head(4)
@@ -292,6 +296,25 @@ func (decoder *cborDecoder) entry(version uint64) (Entry, int, error) {
 		}
 	}
 	return entry, keyEnd, nil
+}
+
+func (decoder *cborDecoder) legacyPath() ([]string, error) {
+	name, err := decoder.textBytes()
+	if err != nil {
+		return nil, err
+	}
+	separator := []byte{'/'}
+	components := make([]string, 0, min(bytes.Count(name, separator), 15)+1)
+	for part := range bytes.SplitSeq(name, separator) {
+		// Copy components separately so a leaf name does not keep the entire
+		// path alive. The tree can then discard duplicate directory names.
+		component := string(part)
+		if !validPathComponent(component) {
+			return nil, ErrInvalidIndex
+		}
+		components = append(components, component)
+	}
+	return components, nil
 }
 
 func (decoder *cborDecoder) target() (string, error) {

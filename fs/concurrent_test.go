@@ -3,7 +3,10 @@ package fs
 import (
 	"bytes"
 	"context"
+	"errors"
 	stdfs "io/fs"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -121,4 +124,52 @@ func TestConcurrentImageReads(t *testing.T) {
 	}
 	close(start)
 	workers.Wait()
+}
+
+func TestReadSeekCloseConcurrently(t *testing.T) {
+	blocks, _ := mountFixture(t)
+	image, err := OpenFS(t.Context(), pathTestCapability(t), eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "hello.txt"), []byte("Hello, ERIS!\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		image FileSystem
+	}{
+		{"decoded", image},
+		{"mounted", &mountedImage{root: root, prefix: "."}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := test.image.OpenFile(t.Context(), "hello.txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var workers sync.WaitGroup
+			for range 8 {
+				workers.Go(func() {
+					var p [1]byte
+					if _, err := file.ReadAt(p[:], 0); err != nil && !errors.Is(err, ErrClosed) {
+						t.Errorf("ReadAt during Close: %v", err)
+					}
+					if _, err := file.Seek(0, 0); err != nil && !errors.Is(err, ErrClosed) {
+						t.Errorf("Seek during Close: %v", err)
+					}
+					if _, err := file.Stat(); err != nil && !errors.Is(err, ErrClosed) {
+						t.Errorf("Stat during Close: %v", err)
+					}
+				})
+			}
+			if err := file.Close(); err != nil {
+				t.Error(err)
+			}
+			workers.Wait()
+			if _, err := file.Read(make([]byte, 1)); !errors.Is(err, ErrClosed) {
+				t.Errorf("Read after Close: %v", err)
+			}
+		})
+	}
 }

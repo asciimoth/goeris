@@ -182,17 +182,21 @@ func (m *Mount) addListings(dir *node, full string) {
 			for _, element := range c.capabilities.entries {
 				entry := element.Value.(*mountRecentEntry[eris.Capability, mountCapabilityInfo])
 				info, name := entry.value, entry.name()
-				dir.children[name] = &node{name: name, kind: Regular, capability: entry.key,
-					store: m.content, size: info.size, sizeKnown: info.size >= 0}
+				child := &node{name: name, kind: Regular, capability: entry.key, store: m.content}
+				child.initSize(info.size)
+				dir.children[name] = child
 			}
 		}
 		for _, element := range c.blocks.entries {
 			entry := element.Value.(*mountRecentEntry[eris.Reference, int64])
 			name, size := entry.name(), entry.value
-			dir.children[name] = &node{name: name, kind: Regular, size: size, sizeKnown: true}
+			child := &node{name: name, kind: Regular}
+			child.initSize(size)
+			dir.children[name] = child
 			addPrefix(name[:3])
 		}
 	case isMountFS(full):
+		imageSource := m.mountImageSource
 		for _, element := range c.capabilities.entries {
 			entry := element.Value.(*mountRecentEntry[eris.Capability, mountCapabilityInfo])
 			if entry.value.image {
@@ -201,7 +205,7 @@ func (m *Mount) addListings(dir *node, full string) {
 				// A *Store uses standard ERIS-FS directory metadata. Other
 				// backends supply their own when the caller requests Info.
 				if m.content == nil {
-					child.listedImage = m
+					child.listedImage = &imageSource
 					child.capability = entry.key
 				}
 				dir.children[name] = child
@@ -220,7 +224,9 @@ func (m *Mount) addListings(dir *node, full string) {
 				addPrefix(rest[:3])
 			} else {
 				size := entry.value
-				dir.children[rest] = &node{name: rest, kind: Regular, size: size, sizeKnown: true}
+				child := &node{name: rest, kind: Regular}
+				child.initSize(size)
+				dir.children[rest] = child
 			}
 		}
 	}

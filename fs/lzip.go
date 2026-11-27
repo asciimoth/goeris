@@ -29,7 +29,7 @@ const MaxLzipDictionarySize = 64 << 20
 type lzipFile struct {
 	ctx        context.Context
 	mu         sync.Mutex
-	node       *node
+	info       imageFileInfo
 	raw        eris.CapabilityReader
 	input      countReader
 	decoder    *lzma.Reader
@@ -38,6 +38,7 @@ type lzipFile struct {
 	crc        uint32
 	total      int64
 	err        error
+	closeErr   error
 	closed     bool
 }
 
@@ -51,7 +52,7 @@ func openLzipFile(ctx context.Context, item *node) (*lzipFile, error) {
 	}
 	// LZMA requests individual bytes. Buffer them so each request does not
 	// traverse the ERIS tree or acquire the underlying reader's mutex.
-	file := &lzipFile{ctx: ctx, node: item, raw: raw, input: countReader{reader: bufio.NewReader(raw)}}
+	file := &lzipFile{ctx: ctx, info: item.metadata(), raw: raw, input: countReader{reader: bufio.NewReader(raw)}}
 	if err := file.nextMember(); err != nil {
 		_ = raw.Close()
 		// A Lzip stream must contain at least one member.
@@ -82,7 +83,7 @@ func (file *lzipFile) nextMember() error {
 	// Check the advertised dictionary above before reducing it: an invalid
 	// header must still fail. This also bounds decoder read-ahead for small
 	// files and avoids large allocations for repeated empty members.
-	if remaining := file.node.size - file.total; remaining < int64(dict) {
+	if remaining := file.info.size - file.total; remaining < int64(dict) {
 		dict = uint32(max(4096, remaining+1))
 	}
 	var synthetic [lzma.HeaderLen]byte
@@ -141,7 +142,7 @@ func (file *lzipFile) Read(p []byte) (int, error) {
 	if file.closed {
 		return 0, ErrClosed
 	}
-	if err := file.ctx.Err(); err != nil {
+	if err := file.checkCancellation(); err != nil {
 		return 0, err
 	}
 	if len(p) == 0 {
@@ -150,7 +151,8 @@ func (file *lzipFile) Read(p []byte) (int, error) {
 	if file.err != nil {
 		return 0, file.err
 	}
-	remaining := file.node.size - file.total
+	size := file.info.size
+	remaining := size - file.total
 	p = p[:min(int64(len(p)), remaining)]
 	var n int
 	var err error
@@ -158,7 +160,7 @@ func (file *lzipFile) Read(p []byte) (int, error) {
 		n, err = file.read(p)
 		file.total += int64(n)
 	}
-	if err == nil && file.total == file.node.size {
+	if err == nil && file.total == size {
 		// Finish the member and verify its trailer even if the caller stops at
 		// the declared size. A one-byte probe also detects excess output.
 		var probe [1]byte
@@ -168,11 +170,43 @@ func (file *lzipFile) Read(p []byte) (int, error) {
 			err = ErrSizeMismatch
 		}
 	}
-	if err == io.EOF && file.total != file.node.size {
+	if err == io.EOF && file.total != size {
 		err = ErrSizeMismatch
 	}
 	file.err = err
+	if err != nil && file.checkCancellation() == nil {
+		file.releaseReader()
+		if file.ctx.Done() == nil {
+			file.ctx = context.Background()
+		}
+	}
 	return n, err
+}
+
+func (file *lzipFile) checkCancellation() error {
+	if file.ctx == nil {
+		// The open file has already recorded its context's terminal error.
+		return file.err
+	}
+	err := file.ctx.Err()
+	if err != nil {
+		file.err = err
+		file.ctx = nil
+		file.releaseReader()
+	}
+	return err
+}
+
+// A terminal read ends this sequential stream. Save the backend's Close error
+// for the caller's explicit Close and release the decoder and reader now.
+func (file *lzipFile) releaseReader() {
+	file.decoder = nil
+	file.input.reader = nil
+	if file.raw != nil {
+		raw := file.raw
+		file.raw = nil
+		file.closeErr = raw.Close()
+	}
 }
 
 func (file *lzipFile) Stat() (stdfs.FileInfo, error) {
@@ -181,14 +215,24 @@ func (file *lzipFile) Stat() (stdfs.FileInfo, error) {
 	if file.closed {
 		return nil, ErrClosed
 	}
-	return file.node.info(file.ctx)
+	if err := file.checkCancellation(); err != nil {
+		return nil, err
+	}
+	return file.info, nil
 }
 
 func (file *lzipFile) Close() error {
 	file.mu.Lock()
 	defer file.mu.Unlock()
+	if file.closed {
+		return nil
+	}
 	file.closed = true
-	file.decoder = nil
-	file.input.reader = nil
-	return file.raw.Close()
+	file.releaseReader()
+	file.ctx = nil
+	file.info = imageFileInfo{}
+	file.err = nil
+	err := file.closeErr
+	file.closeErr = nil
+	return err
 }

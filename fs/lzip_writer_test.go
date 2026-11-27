@@ -10,6 +10,7 @@ import (
 	"math"
 	"reflect"
 	"testing"
+	"testing/synctest"
 
 	"github.com/asciimoth/goeris"
 	"github.com/ulikunitz/xz/lzma"
@@ -43,6 +44,83 @@ func (writer *failOnCall) Write(p []byte) (int, error) {
 		return 0, writer.err
 	}
 	return len(p), nil
+}
+
+type compressionTestStore struct {
+	eris.CapabilityStore
+	encode func(io.Reader) error
+}
+
+func (s compressionTestStore) EncodeContentWithOptions(_ context.Context, input io.Reader, _ eris.Secret, _ eris.EncodeOptions) (eris.Capability, error) {
+	return eris.Capability{}, s.encode(input)
+}
+
+type compressionTestInput func([]byte) (int, error)
+
+func (input compressionTestInput) Read(p []byte) (int, error) { return input(p) }
+
+func TestCompressedFileStopsReadingAfterStoreFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sentinel := errors.New("storage failure")
+		started, resume := make(chan struct{}), make(chan struct{})
+		reads := 0
+		source := compressionTestInput(func(p []byte) (int, error) {
+			reads++
+			if reads > 1 {
+				return 0, io.EOF
+			}
+			close(started)
+			<-resume
+			p[0] = 'a'
+			return 1, nil
+		})
+		store := compressionTestStore{encode: func(input io.Reader) error {
+			var header [6]byte
+			if _, err := io.ReadFull(input, header[:]); err != nil {
+				return err
+			}
+			<-started
+			return sentinel
+		}}
+		builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
+		done := make(chan error, 1)
+		go func() { done <- builder.AddCompressedFile(t.Context(), "file", source, false) }()
+		synctest.Wait() // The store has returned while the first input read is blocked.
+		close(resume)
+		if err := <-done; !errors.Is(err, sentinel) {
+			t.Fatalf("AddCompressedFile: %v", err)
+		}
+		if reads != 1 || len(builder.Index().Entries) != 0 {
+			t.Fatalf("after storage failure: %d input reads, %d entries", reads, len(builder.Index().Entries))
+		}
+	})
+}
+
+func TestCompressedFileClosesPipeWhenStorePanics(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sentinel := errors.New("storage panic")
+		var pipe io.Reader
+		store := compressionTestStore{encode: func(input io.Reader) error {
+			pipe = input
+			panic(sentinel)
+		}}
+		builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
+		func() {
+			defer func() {
+				if got := recover(); got != sentinel {
+					t.Errorf("recovered %v, want %v", got, sentinel)
+				}
+			}()
+			_ = builder.AddCompressedFile(t.Context(), "file", errorReader{sentinel}, false)
+		}()
+		if pipe == nil {
+			t.Fatal("store did not receive its input")
+		}
+		if n, err := pipe.Read(make([]byte, 6)); n != 0 || !errors.Is(err, io.ErrClosedPipe) {
+			_, _ = io.Copy(io.Discard, pipe) // Let the worker exit if the pipe is still open.
+			t.Errorf("pipe read after panic = %d, %v", n, err)
+		}
+	})
 }
 
 func TestCompressedFileRoundTripAndDeterminism(t *testing.T) {

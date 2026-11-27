@@ -770,11 +770,11 @@ func TestFileSystemErrorsAndMetadata(t *testing.T) {
 	}
 
 	directoryNode := &node{kind: directoryType}
-	if directoryNode.Size() != 0 || directoryNode.Mode()&stdfs.ModeDir == 0 {
+	if directoryNode.Size() != 0 || directoryNode.metadata().Mode()&stdfs.ModeDir == 0 {
 		t.Fatal("directory metadata is invalid")
 	}
 	unknownNode := &node{kind: 99}
-	if unknownNode.Mode() != 0o444 {
+	if unknownNode.metadata().Mode() != 0o444 {
 		t.Fatal("unknown node mode is invalid")
 	}
 	missingFileNode := &node{kind: Regular, capability: capability, store: NewStore(eris.NewBlockCapabilityStore(eris.BlockSet{}), eris.BlockOptions{})}

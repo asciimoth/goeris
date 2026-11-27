@@ -77,6 +77,9 @@ type mountBlockFile struct {
 }
 
 func newMountBlockFile(ctx context.Context, item *node) *mountBlockFile {
+	if ctx.Done() == nil {
+		ctx = context.Background()
+	}
 	return &mountBlockFile{ctx: ctx, info: item, reader: bytes.NewReader(item.block)}
 }
 
@@ -120,7 +123,7 @@ func (f *mountBlockFile) Stat() (stdfs.FileInfo, error) {
 	if err := f.check(); err != nil {
 		return nil, err
 	}
-	return f.info, nil
+	return f.info.metadata(), nil
 }
 
 func (f *mountBlockFile) Close() error {

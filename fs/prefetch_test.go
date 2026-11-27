@@ -146,6 +146,11 @@ func TestPrefetchImage(t *testing.T) {
 	if reads[nestedCap.Root.Reference] != 2 {
 		t.Fatal("nested index decoded more than once", reads[nestedCap.Root.Reference])
 	}
+	for _, name := range []string{"a", "b"} {
+		if image.root.children[name].children != nil {
+			t.Errorf("prefetch kept the decoded subtree for %q", name)
+		}
+	}
 	before := store.Snapshot().Cold
 	for _, name := range []string{"a/file", "b/compressed"} {
 		got, err := image.ReadFile(ctx, name)
@@ -207,6 +212,70 @@ func TestPrefetchImageMissingContent(t *testing.T) {
 	image.root.children["file"].kind = Subdirectory
 	if err := image.Prefetch(ctx, "."); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatal(err)
+	}
+}
+
+func TestNamedPrefetchReleasesIndexesUsedForLookup(t *testing.T) {
+	ctx := t.Context()
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	content := eris.NewBlockCapabilityStore(blocks)
+	nested := NewBuilder(content, eris.Secret{}, eris.BlockOptions{})
+	if err := nested.AddFile(ctx, "dir/file", bytes.NewReader([]byte("data")), false); err != nil {
+		t.Fatal(err)
+	}
+	nestedCap, err := nested.Finish(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileCap := nested.Index().Entries[0].Capability
+	root := NewBuilder(content, eris.Secret{}, eris.BlockOptions{})
+	if err := root.AddSubdirectory("nested", nestedCap); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.AddSymlink("alias", "nested/dir"); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := root.Finish(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		want error
+	}{
+		{"nested/dir/file", nil},
+		{"alias", nil},
+		{"nested/missing", stdfs.ErrNotExist},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := prefetchtest.New(blocks, 0, 1)
+			image, err := OpenFS(ctx, capability, eris.NewBlockCapabilityStore(source), eris.BlockOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := image.Prefetch(ctx, tc.name); !errors.Is(err, tc.want) {
+				t.Fatalf("Prefetch: %v, want %v", err, tc.want)
+			}
+			fileHints := 0
+			for _, hint := range source.Snapshot().Hints {
+				if hint.Reference == fileCap.Root.Reference {
+					fileHints++
+				}
+			}
+			wantHints := 0
+			if tc.want == nil {
+				wantHints = 1
+			}
+			if fileHints != wantHints {
+				t.Errorf("hints for the file: %d, want %d", fileHints, wantHints)
+			}
+			if image.root.children["nested"].children != nil {
+				t.Error("prefetch lookup kept the decoded nested index")
+			}
+			if data, err := image.ReadFile(ctx, "nested/dir/file"); err != nil || string(data) != "data" {
+				t.Fatalf("ReadFile: %q, %v", data, err)
+			}
+		})
 	}
 }
 

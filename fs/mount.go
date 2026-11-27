@@ -33,14 +33,19 @@ import (
 // its own position. The caller must serialize calls on one open directory.
 // A FUSE or 9P adapter can serve the mount through its io/fs interfaces.
 type Mount struct {
-	ctx        context.Context
+	mountImageSource
+	ctx      context.Context
+	content  *Store // supplies decoded files at C
+	source   eris.BlockSource
+	options  eris.BlockOptions
+	prefix   string // A Sub view of a virtual directory; empty at the mount root.
+	listings *mountListingCache
+}
+
+// Listed image entries need only the backend and its index limit.
+type mountImageSource struct {
 	images     ImageStore
-	content    *Store // supplies decoded files at C
-	source     eris.BlockSource
-	options    eris.BlockOptions
-	indexLimit int64  // Zero uses the image backend's default.
-	prefix     string // A Sub view of a virtual directory; empty at the mount root.
-	listings   *mountListingCache
+	indexLimit int64 // Zero uses the image backend's default.
 }
 
 // NewMount binds ctx and source without I/O. Both must be non-nil.
@@ -68,7 +73,7 @@ func NewMountWithStore(ctx context.Context, images ImageStore, source eris.Block
 		images = nil
 		content = nil
 	}
-	return &Mount{ctx: ctx, images: images, content: content, source: source, options: options}
+	return &Mount{ctx: ctx, mountImageSource: mountImageSource{images: images}, content: content, source: source, options: options}
 }
 
 // NewMountWithLimit is NewMount with a limit for each decoded index, including
@@ -143,7 +148,7 @@ func (m *Mount) resolvePath(full string, options mountResolveOptions) (FileSyste
 			return nil, "", stdfs.ErrNotExist
 		}
 		if !tree {
-			return virtualDirectory(first), ".", nil
+			return virtualDirectory(strings.Clone(first)), ".", nil
 		}
 		capName, inner, more := strings.Cut(rest, "/")
 		capability, err := mountCapability(capName)
@@ -158,12 +163,12 @@ func (m *Mount) resolvePath(full string, options mountResolveOptions) (FileSyste
 		// The image root has the name used by the caller, including aliases.
 		if !more {
 			inner = "."
-			view = namedImageRoot{FileSystem: view, name: capName}
+			view = namedImageRoot{FileSystem: view, name: strings.Clone(capName)}
 		}
 		return view, inner, nil
 	}
 	if ref, directory, ok := mountBlockPath(full); ok && m.source != nil {
-		base := path.Base(full)
+		base := strings.Clone(path.Base(full))
 		if directory {
 			return virtualDirectory(base), ".", nil
 		}
@@ -172,8 +177,9 @@ func (m *Mount) resolvePath(full string, options mountResolveOptions) (FileSyste
 			return nil, "", err
 		}
 		child := &node{
-			name: base, kind: Regular, size: int64(len(data)), sizeKnown: true,
+			name: base, kind: Regular,
 		}
+		child.initSize(int64(len(data)))
 		if options&mountBlockBytes != 0 {
 			child.block = bytes.Clone(data)
 		}
@@ -188,6 +194,7 @@ func (m *Mount) resolvePath(full string, options mountResolveOptions) (FileSyste
 		return nil, "", err
 	}
 	root := buildTree(Index{}, m.content, ".", m.indexLimit)
+	first = strings.Clone(first)
 	root.children[first] = &node{
 		name: first, kind: Regular, store: m.content,
 		capability: capability,
@@ -208,7 +215,7 @@ func (m *Mount) loadBlock(ref eris.Reference) ([]byte, error) {
 	return data, nil
 }
 
-func (m *Mount) openImage(ctx context.Context, cap eris.Capability) (FileSystem, error) {
+func (m mountImageSource) openImage(ctx context.Context, cap eris.Capability) (FileSystem, error) {
 	if m.indexLimit > 0 {
 		return m.images.OpenFSWithLimit(ctx, cap, m.indexLimit)
 	}
@@ -413,7 +420,7 @@ func (m *Mount) Sub(name string) (stdfs.FS, error) {
 	_, directory, blockPath := mountBlockPath(full)
 	if isMountFS(full) || (blockPath && directory) {
 		sub := *m
-		sub.prefix = full
+		sub.prefix = strings.Clone(full)
 		return &sub, nil
 	}
 	sub, err := image.Sub(m.ctx, inner)
@@ -466,7 +473,7 @@ func (m namedImageRoot) Open(ctx context.Context, p string) (stdfs.File, error) 
 	if err != nil {
 		return nil, err
 	}
-	return namedDirectory{File: file, name: m.name}, nil
+	return &namedDirectory{file: file, name: m.name}, nil
 }
 func (m namedImageRoot) Sub(ctx context.Context, p string) (FileSystem, error) {
 	sub, err := m.FileSystem.Sub(ctx, p)
@@ -478,22 +485,45 @@ func (m namedImageRoot) Sub(ctx context.Context, p string) (FileSystem, error) {
 
 // Preserve the backend's directory handle and metadata, including Close errors.
 type namedDirectory struct {
-	stdfs.File
+	file stdfs.File
 	name string
 }
 
-func (d namedDirectory) Stat() (stdfs.FileInfo, error) {
-	info, err := d.File.Stat()
+func (d *namedDirectory) Read(p []byte) (int, error) {
+	if d.file == nil {
+		return 0, ErrClosed
+	}
+	return d.file.Read(p)
+}
+
+func (d *namedDirectory) Stat() (stdfs.FileInfo, error) {
+	if d.file == nil {
+		return nil, ErrClosed
+	}
+	info, err := d.file.Stat()
 	if err != nil {
 		return nil, err
 	}
 	return namedInfo{info, d.name}, nil
 }
 
-func (d namedDirectory) ReadDir(n int) ([]stdfs.DirEntry, error) {
-	directory, ok := d.File.(stdfs.ReadDirFile)
+func (d *namedDirectory) ReadDir(n int) ([]stdfs.DirEntry, error) {
+	if d.file == nil {
+		return nil, ErrClosed
+	}
+	directory, ok := d.file.(stdfs.ReadDirFile)
 	if !ok {
 		return nil, errors.ErrUnsupported
 	}
 	return directory.ReadDir(n)
+}
+
+func (d *namedDirectory) Close() error {
+	file := d.file
+	d.file = nil
+	d.name = ""
+	if file == nil {
+		return nil
+	}
+	return file.Close()
 }

@@ -10,7 +10,7 @@
 // It uses the supplied context to read the root index. Later image operations
 // use the context supplied to each call. [NewIOFS] binds a context to an
 // image for use through the standard io/fs interfaces. Open files and
-// directory entries retain their operation context.
+// directory entries keep their operation context for I/O or cancellation.
 //
 // [FS.OpenFile] supports seeking and random access for uncompressed files.
 // [FS.ResolvePath] asks the backing store for the host path to an uncompressed

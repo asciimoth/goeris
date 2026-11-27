@@ -89,23 +89,7 @@ func locationOf(view FileSystem) imageLocation {
 		if image == nil || image.root == nil || image.root.capability == (eris.Capability{}) {
 			return imageLocation{}
 		}
-		dir := image.root
-		location := imageLocation{index: dir.capability, dir: image.prefix}
-		// Sub has already resolved each component to an immutable, loaded
-		// directory. Use the innermost index, which can also be opened
-		// directly or included at another path.
-		for rest := image.prefix; rest != "." && rest != ""; {
-			name, tail, _ := strings.Cut(rest, "/")
-			dir = dir.children[name]
-			if dir.kind == Subdirectory {
-				location = imageLocation{index: dir.capability, dir: tail}
-				if tail == "" {
-					location.dir = "."
-				}
-			}
-			rest = tail
-		}
-		return location
+		return imageLocation{index: image.root.capability, dir: image.prefix}
 	case *mountedImage:
 		if image != nil {
 			return imageLocation{mountRoot: image.root, dir: image.prefix}
@@ -443,8 +427,8 @@ func checkLinkDirectories(ctx context.Context, image FileSystem, dir, ancestor s
 		if ancestor == "." || len(prefix) > len(ancestor) {
 			// Only a decoded index identifies an ordinary directory.
 			// A mounted tree can have an image root at any directory.
-			node, ok := info.(*node)
-			if !ok || node.kind != directoryType {
+			metadata, ok := info.(imageFileInfo)
+			if !ok || metadata.kind != directoryType {
 				return stdfs.ErrNotExist
 			}
 		}
