@@ -9,13 +9,14 @@ import (
 	"github.com/asciimoth/goeris"
 )
 
-func ExampleEncodeContentRecommended() {
-	store := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)} // Any BlockSink can receive the encoded tree.
-	capability, err := eris.EncodeContentRecommended(context.Background(), strings.NewReader("Hello, ERIS!"), eris.Secret{}, store, eris.BlockOptions{})
+func ExampleCapabilityStore_EncodeContentRecommended() {
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
+	capability, err := store.EncodeContentRecommended(context.Background(), strings.NewReader("Hello, ERIS!"), eris.Secret{}, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
-	reader, err := eris.NewReader(context.Background(), capability, store, eris.BlockOptions{})
+	reader, err := store.NewReader(context.Background(), capability, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}

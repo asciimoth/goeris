@@ -45,7 +45,8 @@ func TestEncodedRootOptions(t *testing.T) {
 			t.Run(fmt.Sprintf("%d/%d", size, length), func(t *testing.T) {
 				content := make([]byte, length)
 				_, _ = rand.New(rand.NewSource(1)).Read(content)
-				want, blocks, err := eris.Encode(content, eris.Secret{}, size)
+				blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+				want, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), content, eris.Secret{}, size, eris.BlockOptions{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -56,7 +57,7 @@ func TestEncodedRootOptions(t *testing.T) {
 				}
 				for _, options := range []eris.BlockOptions{{}, {HighPriority: true}, {Root: true}} {
 					sink := &rootSink{t: t, BlockSet: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}}
-					got, err := eris.EncodeContent(context.Background(), bytes.NewReader(content), eris.Secret{}, size, sink, options)
+					got, err := eris.NewBlockCapabilityStore(sink).EncodeContent(context.Background(), bytes.NewReader(content), eris.Secret{}, size, options)
 					if err != nil || got != want {
 						t.Fatalf("encode: %v, %v", got, err)
 					}
@@ -104,7 +105,8 @@ func TestCapabilityStoreEncodeRootOptions(t *testing.T) {
 			content := make([]byte, tc.length)
 			_, _ = rand.New(rand.NewSource(1)).Read(content)
 			secret := eris.Secret{1}
-			want, wantBlocks, err := eris.Encode(content, secret, tc.wantSize)
+			wantBlocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+			want, err := eris.NewBlockCapabilityStore(wantBlocks).Encode(t.Context(), content, secret, tc.wantSize, eris.BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}

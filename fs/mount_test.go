@@ -31,7 +31,8 @@ func mountFixture(t testing.TB) (eris.BlockSet, []byte) {
 	}
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	for urn, data := range map[string][]byte{mountHello: []byte("Hello, ERIS!\n"), mountReadme: []byte("ERIS-FS example\n"), mountIndex: index} {
-		cap, stored, err := eris.Encode(data, eris.Secret{}, eris.BlockSize1KiB)
+		stored := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+		cap, err := eris.NewBlockCapabilityStore(stored).Encode(t.Context(), data, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 		if err != nil || cap.String() != urn {
 			t.Fatalf("vector capability = %v, %v; want %s", cap, err, urn)
 		}
@@ -483,7 +484,7 @@ func TestMountNestedImagesAndLinks(t *testing.T) {
 	t.Parallel()
 	nestedCap, blocks := contextImage(t)
 	ctx := context.Background()
-	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	builder := NewBuilder(eris.NewBlockCapabilityStore(blocks), eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddSubdirectory("tree", nestedCap); err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +561,8 @@ func TestMountNestedIndexLimit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-	nested := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	store := eris.NewBlockCapabilityStore(blocks)
+	nested := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	if err := nested.AddSymlink("link", strings.Repeat("x", 1024)); err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +570,7 @@ func TestMountNestedIndexLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddSubdirectory("nested", child); err != nil {
 		t.Fatal(err)
 	}

@@ -5,12 +5,7 @@
 //
 // The package provides deterministic encoding and decoding, storage interfaces,
 // an in-memory BlockSet, and a CombinedBlockStore that tries caller-supplied
-// stores in order. EncodeContent and EncodeContentRecommended stream content
-// from an io.Reader to a BlockSink and return its read capability. NewReader
-// decodes content from a BlockSource with sequential and random access. Readers
-// send best-effort PrefetchBlock hints for likely reads. Prefetch requests all
-// content blocks by reading internal nodes and sending hints for leaves.
-// ResolvePath finds decoded content on a compatible local ERIS mount.
+// stores in order.
 //
 // [CapabilityStore] reads and writes content by capability. Wrap a block
 // source with [NewBlockCapabilityStore], or read decoded files through

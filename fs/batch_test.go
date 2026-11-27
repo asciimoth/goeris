@@ -28,9 +28,9 @@ func TestFileSystemBatches(t *testing.T) {
 		store := &batchStore{BlockSet: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block), MaxBatchSize: limit}}
 		ctx := context.Background()
 		options := eris.BlockOptions{HighPriority: true}
-		// The compatibility builder must also preserve batching for write-only sinks.
+		// A write-only block backend must keep its batch size.
 		sink := struct{ eris.BlockSink }{store}
-		builder := NewBuilder(sink, eris.Secret{}, options)
+		builder := NewBuilder(eris.NewBlockCapabilityStore(eris.NewCombinedBlockStore(sink)), eris.Secret{}, options)
 		data := make([]byte, 70*int(eris.BlockSize32KiB)+10)
 		for i := range data {
 			data[i] = byte(i / int(eris.BlockSize32KiB))
@@ -49,7 +49,7 @@ func TestFileSystemBatches(t *testing.T) {
 		if !store.Blocks[cap.Root.Reference].Options.Root {
 			t.Fatal("index root not marked")
 		}
-		image, err := OpenFS(ctx, cap, store, options)
+		image, err := OpenFS(ctx, cap, eris.NewBlockCapabilityStore(store), options)
 		if err != nil {
 			t.Fatal(err)
 		}

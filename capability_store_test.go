@@ -11,11 +11,17 @@ import (
 	"testing"
 )
 
+// newTestStore creates an independent writable store for decoded content.
+func newTestStore() CapabilityStore {
+	return NewBlockCapabilityStore(BlockSet{Blocks: make(map[Reference]Block)})
+}
+
 func TestCapabilityStores(t *testing.T) {
 	ctx := t.Context()
 	opts := BlockOptions{HighPriority: true}
 	data := []byte("Hello, ERIS!\n")
-	capability, blocks, err := EncodeRecommended(data, Secret{})
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	capability, err := NewBlockCapabilityStore(blocks).EncodeRecommended(t.Context(), data, Secret{}, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,8 +171,9 @@ func TestCapabilityChainErrors(t *testing.T) {
 func TestCapabilityChainByteWrites(t *testing.T) {
 	data := bytes.Repeat([]byte("a"), 20<<10)
 	first := BlockSet{Blocks: make(map[Reference]Block)}
+	store := NewBlockCapabilityStore(first)
 	last := BlockSet{Blocks: make(map[Reference]Block)}
-	chain := NewCombinedCapabilityStore(NewMountCapabilityStore(""), NewBlockCapabilityStore(first), NewBlockCapabilityStore(last))
+	chain := NewCombinedCapabilityStore(NewMountCapabilityStore(""), store, NewBlockCapabilityStore(last))
 	opts := BlockOptions{HighPriority: true}
 	secret := Secret{1}
 	for _, size := range []BlockSize{BlockSize1KiB, ChooseBlockSize(len(data))} {
@@ -180,7 +187,7 @@ func TestCapabilityChainByteWrites(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want, _, err := Encode(data, secret, size)
+		want, err := newTestStore().Encode(t.Context(), data, secret, size, BlockOptions{})
 		if err != nil || capability != want {
 			t.Fatalf("encode = %v, want %v, %v", capability, want, err)
 		}
@@ -188,7 +195,7 @@ func TestCapabilityChainByteWrites(t *testing.T) {
 		if !root.Options.Root || !root.Options.HighPriority {
 			t.Fatalf("root options = %+v", root.Options)
 		}
-		got, err := Decode(capability, first)
+		got, err := store.Decode(t.Context(), capability, BlockOptions{})
 		if err != nil || !bytes.Equal(got, data) {
 			t.Fatalf("stored %d bytes, %v", len(got), err)
 		}
@@ -202,7 +209,9 @@ func TestCapabilityChainByteWrites(t *testing.T) {
 // be missing when the caller starts reading.
 func TestCapabilityChainMissingContentAfterOpen(t *testing.T) {
 	content := bytes.Repeat([]byte("x"), int(BlockSize1KiB))
-	c, complete, err := Encode(content, Secret{}, BlockSize1KiB)
+	complete := BlockSet{Blocks: make(map[Reference]Block)}
+	store := NewBlockCapabilityStore(complete)
+	c, err := store.Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +221,7 @@ func TestCapabilityChainMissingContentAfterOpen(t *testing.T) {
 	}
 	incomplete := BlockSet{Blocks: maps.Clone(complete.Blocks)}
 	delete(incomplete.Blocks, leaf.Reference)
-	chain := NewCombinedCapabilityStore(NewBlockCapabilityStore(incomplete), NewBlockCapabilityStore(complete))
+	chain := NewCombinedCapabilityStore(NewBlockCapabilityStore(incomplete), store)
 	ctx := t.Context()
 	opts := BlockOptions{}
 	r, err := chain.NewReader(ctx, c, opts)

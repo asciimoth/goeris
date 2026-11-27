@@ -11,26 +11,26 @@ import (
 
 // Tree builds a single flat v2 index. Use virtual slash-separated paths on
 // every platform. Add leaves only. Directories are implicit. Operations on a
-// Tree must be sequential. For a blob use eris.EncodeContentRecommended with
-// the secret from Options.
+// Tree must be sequential. For a blob, use [eris.CapabilityStore.EncodeContentRecommended]
+// with the secret from Options.
 type Tree struct {
 	builder         *erisfs.Builder
 	autoCompression bool
 }
 
 // NewTree applies the validated output settings to every file and the index.
-// The sink must acknowledge all writes before the handler reports success.
-func (o Options) NewTree(sink eris.BlockSink, blocks eris.BlockOptions) (*Tree, error) {
+// The store must acknowledge all writes before the handler reports success.
+func (o Options) NewTree(store eris.CapabilityStore, options eris.BlockOptions) (*Tree, error) {
 	if o.Kind != "erisfs" {
 		return nil, Failure{"unsupported-option", "erisfs.use"}
 	}
 	if o.Compression != "none" && o.Compression != "auto" {
 		return nil, Failure{"unsupported-option", "erisfs.compression"}
 	}
-	if sink == nil {
+	if store == nil {
 		return nil, erisfs.ErrInvalidEntry
 	}
-	return &Tree{builder: erisfs.NewBuilder(sink, o.Secret, blocks), autoCompression: o.Compression == "auto"}, nil
+	return &Tree{builder: erisfs.NewBuilder(store, o.Secret, options), autoCompression: o.Compression == "auto"}, nil
 }
 
 // AddFile stores the complete stream. In auto mode it applies ERIS-FS-AUTO-1.

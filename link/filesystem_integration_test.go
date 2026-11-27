@@ -145,7 +145,8 @@ func TestFSConcurrentReads(t *testing.T) {
 }
 
 func FuzzFS(f *testing.F) {
-	capability, blocks, err := eris.EncodeRecommended([]byte("target"), eris.Secret{})
+	store := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)})
+	capability, err := store.EncodeRecommended(f.Context(), []byte("target"), eris.Secret{}, eris.BlockOptions{})
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -162,7 +163,7 @@ func FuzzFS(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		const limit = 4096
 		base := plainFS{fstest.MapFS{"file": {Data: data}}}
-		wrapped, err := link.NewFSWithLimit(base, blocks, limit, eris.BlockOptions{})
+		wrapped, err := link.NewFSWithLimit(base, store, limit, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -19,6 +19,7 @@ import (
 func TestHandlerHugeContentRanges(t *testing.T) {
 	// Fourteen stored blocks describe almost 4 EiB of decoded content.
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
 	node := make([]byte, int(eris.BlockSize1KiB))
 	node[0] = 0x80
 	var pair eris.Pair
@@ -53,7 +54,7 @@ func TestHandlerHugeContentRanges(t *testing.T) {
 			request := httptest.NewRequest(nethttp.MethodHead, N2RPath+"?"+capability.String(), nil)
 			request.Header.Set("Range", test.byteRange)
 			recorder := httptest.NewRecorder()
-			Handler{Blocks: blocks}.ServeHTTP(recorder, request)
+			Handler{Content: store}.ServeHTTP(recorder, request)
 			if recorder.Code != test.status {
 				t.Fatalf("status %d; want %d", recorder.Code, test.status)
 			}
@@ -74,7 +75,7 @@ func TestHandlerHugeContentRanges(t *testing.T) {
 	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
 	request.Header.Set("Range", "bytes=0-10")
 	recorder := httptest.NewRecorder()
-	Handler{Blocks: blocks}.ServeHTTP(recorder, request)
+	Handler{Content: store}.ServeHTTP(recorder, request)
 	want := make([]byte, 11)
 	want[0] = 0x80
 	if recorder.Code != nethttp.StatusPartialContent || !bytes.Equal(recorder.Body.Bytes(), want) {
@@ -122,11 +123,12 @@ func TestHandlerLimitsRangeCount(t *testing.T) {
 		for _, method := range []string{nethttp.MethodGet, nethttp.MethodHead} {
 			for _, count := range []int{1, 16, 17, 1024} {
 				calls := 0
-				handler := Handler{Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
+				source := sourceFunc(func(ref eris.Reference) ([]byte, error) {
 					calls++
 					blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 					return blockResult, blockErr
-				})}
+				})
+				handler := Handler{Blocks: source, Content: eris.NewBlockCapabilityStore(source)}
 				request := httptest.NewRequest(method, N2RPath+"?"+urn, nil)
 				request.Header.Set("Range", "bytes=0-0"+strings.Repeat(",0-0", count-1))
 				recorder := httptest.NewRecorder()
@@ -145,10 +147,10 @@ func TestHandlerLimitsRangeCount(t *testing.T) {
 
 func TestHandlerCountsRangesAcrossHeaderFields(t *testing.T) {
 	capability, _, _ := testData(t)
-	handler := Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) {
+	handler := Handler{Content: eris.NewBlockCapabilityStore(sourceFunc(func(eris.Reference) ([]byte, error) {
 		t.Fatal("excessive ranges accessed the block source")
 		return nil, nil
-	})}
+	}))}
 	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
 	for range 2 {
 		request.Header.Add("Range", "bytes=0-0"+strings.Repeat(",0-0", 8))
@@ -166,7 +168,7 @@ func TestHandlerContentLimit(t *testing.T) {
 		for _, limit := range []int64{-1, 0, int64(len(content) - 1), int64(len(content)), int64(len(content) + 1)} {
 			request := httptest.NewRequest(method, N2RPath+"?"+capability.String(), nil)
 			response := httptest.NewRecorder()
-			handler := Handler{Blocks: blocks, MaxContentSize: limit}
+			handler := Handler{Content: eris.NewBlockCapabilityStore(blocks), MaxContentSize: limit}
 			handler.ServeHTTP(response, request)
 			want := nethttp.StatusOK
 			if limit < 0 {
@@ -189,14 +191,16 @@ func TestHandlerContentLimit(t *testing.T) {
 }
 
 func TestHandlerContentLimitAllowsEmptyContentAndBlockReads(t *testing.T) {
-	capability, blocks, err := eris.Encode(nil, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
+	capability, err := store.Encode(t.Context(), nil, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, urn := range []string{capability.String(), capability.Root.Reference.URN()} {
 		request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+urn, nil)
 		response := httptest.NewRecorder()
-		Handler{Blocks: blocks, MaxContentSize: 1}.ServeHTTP(response, request)
+		Handler{Blocks: blocks, Content: store, MaxContentSize: 1}.ServeHTTP(response, request)
 		want := []byte(nil)
 		if urn == capability.Root.Reference.URN() {
 			want = blocks.Blocks[capability.Root.Reference].Data
@@ -231,11 +235,11 @@ func TestHandlerLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	}
 	capability := eris.Capability{BlockSize: eris.BlockSize1KiB, Level: 8, Root: pair}
 	calls := 0
-	handler := Handler{MaxContentSize: 1024, Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
+	handler := Handler{MaxContentSize: 1024, Content: eris.NewBlockCapabilityStore(sourceFunc(func(ref eris.Reference) ([]byte, error) {
 		calls++
 		blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 		return blockResult, blockErr
-	})}
+	}))}
 	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
 	request.Header.Set("Range", "bytes=0-0")
 	response := httptest.NewRecorder()
@@ -253,12 +257,12 @@ func TestHandlerStopsCanceledTreeScan(t *testing.T) {
 			cancel()
 		}
 		calls := 0
-		handler := Handler{Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
+		handler := Handler{Content: eris.NewBlockCapabilityStore(sourceFunc(func(ref eris.Reference) ([]byte, error) {
 			calls++
 			cancel()
 			blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 			return blockResult, blockErr
-		})}
+		}))}
 		request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil).WithContext(ctx)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)

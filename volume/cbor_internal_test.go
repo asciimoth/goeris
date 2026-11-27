@@ -21,7 +21,7 @@ func FuzzCBORLookup(f *testing.F) {
 	blockElement, _ := cbor.NewBlock(block)
 	mapElement, _ := cbor.NewBlockMap(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{ref: {Data: block}}})
 	largeElement, _ := cbor.NewBlock(make([]byte, eris.BlockSize32KiB))
-	capability, _, _ := eris.Encode([]byte("metadata"), eris.Secret{}, eris.BlockSize1KiB)
+	capability, _ := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}).Encode(f.Context(), []byte("metadata"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	capElement, _ := cbor.NewCapability(capability)
 	for _, elements := range [][]cbor.Element{
 		nil, {blockElement}, {mapElement}, {capElement}, {largeElement},

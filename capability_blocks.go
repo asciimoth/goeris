@@ -32,7 +32,7 @@ func (s *blockCapabilityStore) EncodeContent(ctx context.Context, content io.Rea
 	if s.sink == nil {
 		return Capability{}, ErrReadOnly
 	}
-	return EncodeContent(ctx, content, secret, size, s.sink, options)
+	return encodeContent(ctx, content, secret, s.sink, EncodeOptions{BlockSize: size, BlockOptions: options})
 }
 
 func (s *blockCapabilityStore) EncodeContentRecommended(ctx context.Context, content io.Reader, secret Secret, options BlockOptions) (Capability, error) {
@@ -59,29 +59,6 @@ func (s *blockCapabilityStore) DecodeWithLimit(ctx context.Context, capability C
 
 func (s *blockCapabilityStore) NewReader(ctx context.Context, capability Capability, options BlockOptions) (CapabilityReader, error) {
 	return s.NewReaderWithLimit(ctx, capability, -1, NoTTL, options)
-}
-
-func (s *blockCapabilityStore) NewReaderWithSize(ctx context.Context, capability Capability, size int64, options BlockOptions) (CapabilityReader, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	reader, err := NewReaderWithSize(ctx, capability, s.source, size, options)
-	if err != nil {
-		return nil, err
-	}
-	return reader, nil
-}
-
-func (s *blockCapabilityStore) NewReaderWithLimit(ctx context.Context, capability Capability, limit int64, ttl TTL, options BlockOptions) (CapabilityReader, error) {
-	reader, err := NewReaderWithLimit(ctx, capability, s.source, limit, ttl, options)
-	if err != nil {
-		return nil, err
-	}
-	return reader, nil
-}
-
-func (s *blockCapabilityStore) Prefetch(ctx context.Context, capability Capability, ttl TTL, options BlockOptions) error {
-	return Prefetch(ctx, capability, s.source, ttl, options)
 }
 
 func (s *blockCapabilityStore) ResolvePath(ctx context.Context, capability Capability) (string, error) {

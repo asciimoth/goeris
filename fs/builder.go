@@ -30,14 +30,14 @@ type builderPath struct {
 	entry    bool
 }
 
-// NewBuilder returns a builder that writes all file and index blocks to sink.
+// NewBuilder returns a builder that writes files and indexes to content.
 // It keeps a copy of options. File writes preserve the supplied Root flag;
 // the encoder always sets Root on the index root. An explicit Root=true is
 // preserved on all writes. Other options pass to every block write.
 //
-// This compatibility function wraps Store.NewBuilder.
-func NewBuilder(sink eris.BlockSink, secret eris.Secret, options eris.BlockOptions) *Builder {
-	return storeFromSink(sink, options).NewBuilder(secret)
+// For repeated operations, use [Store.NewBuilder].
+func NewBuilder(content eris.CapabilityStore, secret eris.Secret, options eris.BlockOptions) *Builder {
+	return NewStore(content, options).NewBuilder(secret)
 }
 
 // NewBuilder starts a v2 image. File writes preserve the caller's Root flag.

@@ -20,11 +20,13 @@ func (function exampleRoundTripper) RoundTrip(request *nethttp.Request) (*nethtt
 
 func ExampleClient() {
 	content := []byte("hello")
-	capability, blocks, err := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
+	capability, err := store.Encode(context.Background(), content, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
-	handler := erishttp.Handler{Blocks: blocks}
+	handler := erishttp.Handler{Content: store}
 
 	// This transport calls the handler in memory. It does not open a socket.
 	transport := exampleRoundTripper(func(request *nethttp.Request) (*nethttp.Response, error) {

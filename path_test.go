@@ -49,24 +49,22 @@ func TestResolvePath(t *testing.T) {
 	t.Setenv("ERIS_MNT", envMount)
 
 	for _, test := range []struct {
-		name   string
-		mounts []string
-		want   string
+		name  string
+		mount string
+		want  string
 	}{
-		{"explicit overrides environment", []string{mount}, want},
-		{"omitted uses environment", nil, envWant},
-		{"empty uses environment", []string{""}, envWant},
-		{"missing explicit mount has no fallback", []string{filepath.Join(mount, "missing")}, ""},
-		{"invalid mount path", []string{"mount\x00"}, ""},
-		{"multiple mounts rejected", []string{mount, envMount}, ""},
+		{"explicit overrides environment", mount, want},
+		{"empty uses environment", "", envWant},
+		{"missing explicit mount has no fallback", filepath.Join(mount, "missing"), ""},
+		{"invalid mount path", "mount\x00", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := ResolvePath(capability, test.mounts...); got != test.want {
+			if got, err := NewMountCapabilityStore(test.mount).ResolvePath(t.Context(), capability); got != test.want || (err == nil) != (test.want != "") {
 				t.Fatalf("ResolvePath() = %q, want %q", got, test.want)
 			}
 		})
 	}
-	if got := ResolvePath(Capability{}, mount); got != "" {
+	if got, err := NewMountCapabilityStore(mount).ResolvePath(t.Context(), Capability{}); got != "" || !errors.Is(err, ErrInvalidCapability) {
 		t.Fatalf("invalid capability resolved to %q", got)
 	}
 	// A root reference alone is not enough: every capability field belongs
@@ -83,7 +81,7 @@ func TestResolvePath(t *testing.T) {
 		case 3:
 			other.BlockSize = BlockSize32KiB
 		}
-		if got := ResolvePath(other, mount); got != "" {
+		if got, err := NewMountCapabilityStore(mount).ResolvePath(t.Context(), other); got != "" || !errors.Is(err, ErrMissingBlock) {
 			t.Errorf("different capability field %d resolved to %q", field, got)
 		}
 	}
@@ -95,7 +93,7 @@ func TestResolvePathContent(t *testing.T) {
 	mount := t.TempDir()
 	for _, size := range []BlockSize{BlockSize1KiB, BlockSize32KiB} {
 		for _, content := range [][]byte{nil, []byte("Hello, ERIS!\n"), bytes.Repeat([]byte("x"), int(size)+1)} {
-			capability, _, err := Encode(content, Secret{}, size)
+			capability, err := newTestStore().Encode(t.Context(), content, Secret{}, size, BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,8 +101,8 @@ func TestResolvePathContent(t *testing.T) {
 			if err := os.WriteFile(want, content, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			got := ResolvePath(capability, mount)
-			if got != want {
+			got, err := NewMountCapabilityStore(mount).ResolvePath(t.Context(), capability)
+			if err != nil || got != want {
 				t.Fatalf("ResolvePath() = %q, want %q", got, want)
 			}
 			data, err := os.ReadFile(got)
@@ -126,9 +124,9 @@ func TestResolvePathRelativeMount(t *testing.T) {
 	want := writePathTestContent(t, mount, capability)
 	t.Chdir(base)
 	t.Setenv("ERIS_MNT", "mount; with spaces")
-	for _, mounts := range [][]string{nil, {"mount; with spaces"}} {
-		if got := ResolvePath(capability, mounts...); got != want || !filepath.IsAbs(got) {
-			t.Fatalf("ResolvePath(%q) = %q, want absolute path %q", mounts, got, want)
+	for _, root := range []string{"", "mount; with spaces"} {
+		if got, err := NewMountCapabilityStore(root).ResolvePath(t.Context(), capability); err != nil || got != want || !filepath.IsAbs(got) {
+			t.Fatalf("ResolvePath(%q) = %q, want absolute path %q", root, got, want)
 		}
 	}
 }
@@ -173,7 +171,7 @@ func TestResolvePathFileTypes(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if got := ResolvePath(capability, mount); got != want {
+			if got, err := NewMountCapabilityStore(mount).ResolvePath(t.Context(), capability); got != want || (err == nil) != (want != "") {
 				t.Fatalf("ResolvePath() = %q, want %q", got, want)
 			}
 		})
@@ -210,7 +208,10 @@ func TestMountPathThroughSymlinkParent(t *testing.T) {
 	// A shell can retain this spelling of the current directory in PWD.
 	t.Chdir(mount)
 	t.Setenv("PWD", filepath.Join(work, "link")+"/..")
-	path := ResolvePath(c, ".")
+	path, err := NewMountCapabilityStore(".").ResolvePath(t.Context(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
 	info, err := os.Stat(path)
 	if err != nil || !os.SameFile(info, wantInfo) {
 		t.Fatalf("relative mount resolved to %q: %v", path, err)
@@ -254,7 +255,7 @@ func TestResolvePathMountSearch(t *testing.T) {
 		name      string
 		env       string
 		unset     bool
-		mounts    []string
+		mount     string
 		found     string
 		firstInfo fs.FileInfo
 		firstErr  error
@@ -263,15 +264,13 @@ func TestResolvePathMountSearch(t *testing.T) {
 	}{
 		{name: "unset prefers first", unset: true, found: first, want: first, calls: []string{first}},
 		{name: "empty prefers first", found: first, want: first, calls: []string{first}},
-		{name: "empty argument uses defaults", mounts: []string{""}, found: first, want: first, calls: []string{first}},
 		{name: "missing first", found: second, want: second, calls: []string{first, second}},
 		{name: "permission error at first", firstErr: fs.ErrPermission, found: second, want: second, calls: []string{first, second}},
 		{name: "directory at first", firstInfo: directory, found: second, want: second, calls: []string{first, second}},
 		{name: "special file at first", firstInfo: pipe, found: second, want: second, calls: []string{first, second}},
 		{name: "neither found", calls: []string{first, second}},
 		{name: "environment has no fallback", env: filepath.Dir(custom), found: second, calls: []string{custom}},
-		{name: "explicit has no fallback", mounts: []string{filepath.Dir(custom)}, found: second, calls: []string{custom}},
-		{name: "multiple mounts do no lookup", mounts: []string{"/n/eris", "/eris"}},
+		{name: "explicit has no fallback", mount: filepath.Dir(custom), found: second, calls: []string{custom}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("ERIS_MNT", test.env)
@@ -291,7 +290,7 @@ func TestResolvePathMountSearch(t *testing.T) {
 				}
 				return nil, fs.ErrNotExist
 			}
-			if got := resolvePath(capability, test.mounts, stat); got != test.want {
+			if got, err := resolveMountPath(capability, test.mount, stat); got != test.want || (err == nil) != (test.want != "") {
 				t.Errorf("resolvePath() = %q, want %q", got, test.want)
 			}
 			if !slices.Equal(calls, test.calls) {

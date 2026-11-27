@@ -21,7 +21,8 @@ func TestPrefetchDelayedReader(t *testing.T) {
 	for i := range data {
 		data[i] = byte(i / 1024)
 	}
-	cap, blocks, err := eris.Encode(data, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	cap, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), data, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +32,7 @@ func TestPrefetchDelayedReader(t *testing.T) {
 		if !enabled {
 			source = ignorePrefetch{store}
 		}
-		reader, err := eris.NewReaderWithSize(context.Background(), cap, source, int64(len(data)), eris.BlockOptions{})
+		reader, err := eris.NewBlockCapabilityStore(source).NewReaderWithSize(context.Background(), cap, int64(len(data)), eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,11 +57,12 @@ func TestPrefetchDelayedTraversal(t *testing.T) {
 	for i := range data {
 		data[i] = byte(i / 1024)
 	}
-	cap, blocks, _ := eris.Encode(data, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	cap, _ := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), data, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	store := prefetchtest.New(blocks, time.Hour, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := eris.Prefetch(ctx, cap, store, 5, eris.BlockOptions{HighPriority: true}); err != nil {
+	if err := eris.NewBlockCapabilityStore(store).Prefetch(ctx, cap, 5, eris.BlockOptions{HighPriority: true}); err != nil {
 		t.Fatal(err)
 	}
 	stats := store.Snapshot()
@@ -84,12 +86,13 @@ func FuzzPrefetchReaderOperations(f *testing.F) {
 		if len(data) > 1<<18 || len(operations) > 256 {
 			t.Skip()
 		}
-		cap, blocks, err := eris.Encode(data, eris.Secret{}, eris.BlockSize1KiB)
+		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+		cap, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), data, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		store := prefetchtest.New(blocks, 0, int(limit%65))
-		reader, err := eris.NewReaderWithSize(context.Background(), cap, store, int64(len(data)), eris.BlockOptions{})
+		reader, err := eris.NewBlockCapabilityStore(store).NewReaderWithSize(context.Background(), cap, int64(len(data)), eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -111,7 +114,7 @@ func FuzzPrefetchReaderOperations(f *testing.F) {
 				t.Fatalf("read %d,%v want %d,%v", n, err, m, wantErr)
 			}
 			if op%11 == 0 {
-				if err := reader.Prefetch(context.Background()); err != nil {
+				if err := reader.(*eris.Reader).Prefetch(context.Background()); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -125,9 +128,10 @@ func FuzzPrefetchReaderOperations(f *testing.F) {
 
 func TestPrefetchConcurrentReader(t *testing.T) {
 	data := bytes.Repeat([]byte{42}, 20000)
-	cap, blocks, _ := eris.Encode(data, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	cap, _ := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), data, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	store := prefetchtest.New(blocks, 0, 3)
-	reader, err := eris.NewReaderWithSize(context.Background(), cap, store, int64(len(data)), eris.BlockOptions{})
+	reader, err := eris.NewBlockCapabilityStore(store).NewReaderWithSize(context.Background(), cap, int64(len(data)), eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +139,7 @@ func TestPrefetchConcurrentReader(t *testing.T) {
 	for range 8 {
 		wg.Go(func() {
 			for range 10 {
-				if err := reader.Prefetch(context.Background()); err != nil {
+				if err := reader.(*eris.Reader).Prefetch(context.Background()); err != nil {
 					t.Error(err)
 					return
 				}
@@ -152,9 +156,10 @@ func TestPrefetchConcurrentReader(t *testing.T) {
 }
 
 func TestPrefetchRepeatedSubtrees(t *testing.T) {
-	cap, blocks, _ := eris.Encode(make([]byte, 1<<20), eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	cap, _ := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), make([]byte, 1<<20), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	store := prefetchtest.New(blocks, 0, 3)
-	if err := eris.Prefetch(context.Background(), cap, store, eris.NoTTL, eris.BlockOptions{}); err != nil {
+	if err := eris.NewBlockCapabilityStore(store).Prefetch(context.Background(), cap, eris.NoTTL, eris.BlockOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	seen := map[eris.Reference]bool{}
@@ -171,9 +176,10 @@ func TestReaderHintsFutureLeavesWithoutReadingThem(t *testing.T) {
 	for i := range data {
 		data[i] = byte(i / 1024)
 	}
-	cap, blocks, _ := eris.Encode(data, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	cap, _ := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), data, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	store := prefetchtest.New(blocks, 0, 2)
-	reader, err := eris.NewReaderWithSize(context.Background(), cap, store, int64(len(data)), eris.BlockOptions{})
+	reader, err := eris.NewBlockCapabilityStore(store).NewReaderWithSize(context.Background(), cap, int64(len(data)), eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,13 +228,14 @@ func TestReaderPrefetchPaddingAndCacheEviction(t *testing.T) {
 		data[i*1024] = byte(i)
 		data[i*1024+1] = byte(i >> 8)
 	}
-	cap, blocks, err := eris.Encode(data, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	cap, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), data, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, limit := range []int{1, 3, 64} {
 		store := prefetchtest.New(blocks, 0, limit)
-		reader, err := eris.NewReaderWithSize(context.Background(), cap, store, int64(len(data)), eris.BlockOptions{})
+		reader, err := eris.NewBlockCapabilityStore(store).NewReaderWithSize(context.Background(), cap, int64(len(data)), eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

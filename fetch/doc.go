@@ -18,6 +18,7 @@
 // Handlers can use Response.MarshalText to write a result.
 //
 // Tree uses the ERIS-FS builder for deterministic flat indexes and
-// optional ERIS-FS-AUTO-1 file compression. Use eris.EncodeContentRecommended
-// for blobs. Handlers can use LockDB to store a capability URN under Source.Hash.
+// optional ERIS-FS-AUTO-1 file compression. For blobs, use
+// [github.com/asciimoth/goeris.CapabilityStore.EncodeContentRecommended].
+// Handlers can use LockDB to store a capability URN under Source.Hash.
 package fetch

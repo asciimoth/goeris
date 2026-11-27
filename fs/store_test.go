@@ -15,6 +15,109 @@ import (
 	"github.com/asciimoth/goeris"
 )
 
+// newTestStore creates an independent writable store for decoded content.
+func newTestStore() eris.CapabilityStore {
+	return eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)})
+}
+
+// Supply decoded results directly to exercise an image backed by a custom store.
+type imageResultStore struct {
+	eris.CapabilityStore
+	index  []byte
+	reader eris.CapabilityReader
+}
+
+func (s *imageResultStore) EncodeRecommended(context.Context, []byte, eris.Secret, eris.BlockOptions) (eris.Capability, error) {
+	return eris.Capability{}, nil
+}
+
+func (s *imageResultStore) DecodeWithLimit(context.Context, eris.Capability, int64, eris.BlockOptions) ([]byte, error) {
+	return s.index, nil
+}
+
+func (s *imageResultStore) NewReader(context.Context, eris.Capability, eris.BlockOptions) (eris.CapabilityReader, error) {
+	return s.reader, nil
+}
+
+func (s *imageResultStore) NewReaderWithSize(context.Context, eris.Capability, int64, eris.BlockOptions) (eris.CapabilityReader, error) {
+	return s.reader, nil
+}
+
+type imageResultReader struct {
+	*strings.Reader
+	size   int64
+	closed bool
+}
+
+func (r *imageResultReader) Size() int64 { return r.size }
+func (r *imageResultReader) Close() error {
+	r.closed = true
+	return nil
+}
+
+func TestImageChecksStoreResults(t *testing.T) {
+	ctx := t.Context()
+	capability := pathTestCapability(t)
+	index := Index{Entries: []Entry{
+		{Path: []string{"file"}, Capability: capability, Size: 7},
+		{Path: []string{"packed"}, Capability: capability, Size: 9, Compression: Lzip},
+	}}
+	data, err := index.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &imageResultStore{index: data}
+	if image, err := OpenFS(ctx, eris.Capability{}, store, eris.BlockOptions{}); image != nil || !errors.Is(err, eris.ErrInvalidCapability) {
+		t.Errorf("opened image with invalid root capability: %v, %v", image, err)
+	}
+	if _, err := EncodeIndex(ctx, index, eris.Secret{}, store, eris.BlockOptions{}); !errors.Is(err, eris.ErrInvalidCapability) {
+		t.Errorf("invalid index capability: %v", err)
+	}
+	if _, err := OpenFSWithLimit(ctx, capability, store, int64(len(data)-1), eris.BlockOptions{}); !errors.Is(err, ErrIndexTooLarge) {
+		t.Errorf("oversized index: %v", err)
+	}
+	image, err := OpenFSWithLimit(ctx, capability, store, int64(len(data)), eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &imageResultReader{Reader: strings.NewReader("")}
+	store.reader = reader
+	if _, err := image.OpenFile(ctx, "file"); !errors.Is(err, ErrSizeMismatch) {
+		t.Errorf("mismatched size: %v", err)
+	}
+	if !reader.closed {
+		t.Error("rejected reader was left open")
+	}
+	if info, err := image.Stat(ctx, "file"); err != nil || info.Size() != 7 {
+		t.Errorf("declared size changed: %v, %v", info, err)
+	}
+	store.reader = nil
+	for _, name := range []string{"file", "packed"} {
+		if _, err := image.Open(ctx, name); !errors.Is(err, stdfs.ErrInvalid) {
+			t.Errorf("nil reader for %q: %v", name, err)
+		}
+	}
+}
+
+func TestLegacyStatRetriesAfterInvalidSize(t *testing.T) {
+	_, index := mountFixture(t) // Version 1 omits file sizes.
+	reader := &imageResultReader{Reader: strings.NewReader("hello"), size: -1}
+	store := &imageResultStore{index: index, reader: reader}
+	image, err := OpenFS(t.Context(), pathTestCapability(t), store, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := image.Stat(t.Context(), "hello.txt"); !errors.Is(err, eris.ErrInvalidSize) || !reader.closed {
+		t.Fatalf("invalid size: error %v, reader closed %t", err, reader.closed)
+	}
+	reader = &imageResultReader{Reader: strings.NewReader("hello"), size: 5}
+	store.reader = reader
+	info, err := image.Stat(t.Context(), "hello.txt")
+	if err != nil || info.Size() != 5 || !reader.closed {
+		t.Fatalf("retry: info %v, error %v, reader closed %t", info, err, reader.closed)
+	}
+}
+
 func TestStoreFromMountedContent(t *testing.T) {
 	_, index := mountFixture(t)
 	dir := t.TempDir()
@@ -220,7 +323,8 @@ func TestMountIndependentStores(t *testing.T) {
 	imageOptions := eris.BlockOptions{HighPriority: true}
 	imageSource := &mountObservedSource{BlockSource: imageBlocks, t: t, ctx: ctx, options: imageOptions}
 	images := NewStore(eris.NewBlockCapabilityStore(imageSource), imageOptions)
-	rawCap, raw, err := eris.Encode([]byte("raw only"), eris.Secret{}, eris.BlockSize1KiB)
+	raw := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	rawCap, err := eris.NewBlockCapabilityStore(raw).Encode(t.Context(), []byte("raw only"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +438,8 @@ func TestMountOptionalComponents(t *testing.T) {
 func FuzzMountComponents(f *testing.F) {
 	blocks, _ := mountFixture(f)
 	images := NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
-	rawCap, raw, err := eris.Encode([]byte("independent raw source"), eris.Secret{}, eris.BlockSize1KiB)
+	raw := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	rawCap, err := eris.NewBlockCapabilityStore(raw).Encode(f.Context(), []byte("independent raw source"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		f.Fatal(err)
 	}

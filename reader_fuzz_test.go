@@ -17,16 +17,17 @@ func FuzzReaderRandomAccess(f *testing.F) {
 		if len(content) > 1<<18 {
 			t.Skip()
 		}
-		capability, blocks, err := Encode(content, Secret{1}, BlockSize1KiB)
+		store := newTestStore()
+		capability, err := store.Encode(t.Context(), content, Secret{1}, BlockSize1KiB, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, sized := range []bool{false, true} {
-			var reader *Reader
+			var reader CapabilityReader
 			if sized {
-				reader, err = NewReaderWithSize(context.Background(), capability, blocks, int64(len(content)), BlockOptions{})
+				reader, err = store.NewReaderWithSize(context.Background(), capability, int64(len(content)), BlockOptions{})
 			} else {
-				reader, err = NewReader(context.Background(), capability, blocks, BlockOptions{})
+				reader, err = store.NewReader(context.Background(), capability, BlockOptions{})
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -63,6 +64,7 @@ func FuzzTreeShape(f *testing.F) {
 			t.Skip()
 		}
 		blocks := BlockSet{Blocks: make(map[Reference]Block)}
+		contentStore := NewBlockCapabilityStore(blocks)
 		store := func(node []byte, level Level) Pair {
 			block, pair, err := EncryptNode(node, Secret{}, level)
 			if err != nil {
@@ -96,7 +98,7 @@ func FuzzTreeShape(f *testing.F) {
 		wantSize := (leaves - 1) * int(BlockSize1KiB)
 		// The size-aware reader must reject malformed visited paths too. It
 		// has no decoded-size limit, so compare before applying that limit.
-		sized, sizedErr := NewReaderWithSize(context.Background(), capability, blocks, int64(wantSize), BlockOptions{})
+		sized, sizedErr := contentStore.NewReaderWithSize(context.Background(), capability, int64(wantSize), BlockOptions{})
 		if sizedErr == nil {
 			_, sizedErr = io.Copy(io.Discard, sized)
 			_ = sized.Close()
@@ -104,13 +106,13 @@ func FuzzTreeShape(f *testing.F) {
 		if (sizedErr == nil) != valid {
 			t.Fatalf("counts %v: sized reader = %v; valid = %t", counts, sizedErr, valid)
 		}
-		prefetchErr := Prefetch(context.Background(), capability, blocks, NoTTL, BlockOptions{})
+		prefetchErr := contentStore.Prefetch(context.Background(), capability, NoTTL, BlockOptions{})
 		if (prefetchErr == nil) != valid {
 			t.Fatalf("counts %v: prefetch = %v; valid = %t", counts, prefetchErr, valid)
 		}
 		valid = valid && int64(wantSize) <= limit
-		decoded, coreErr := DecodeWithLimit(capability, blocks, limit)
-		reader, readerErr := NewReaderWithLimit(context.Background(), capability, blocks, limit, NoTTL, BlockOptions{})
+		decoded, coreErr := contentStore.DecodeWithLimit(t.Context(), capability, limit, BlockOptions{})
+		reader, readerErr := contentStore.NewReaderWithLimit(context.Background(), capability, limit, NoTTL, BlockOptions{})
 		if (coreErr == nil) != valid || (readerErr == nil) != valid {
 			t.Fatalf("counts %v, limit %d: core = %v, reader = %v; valid = %t", counts, limit, coreErr, readerErr, valid)
 		}

@@ -47,8 +47,11 @@ func FuzzBlockSetPut(f *testing.F) {
 }
 
 func FuzzCapabilityBinary(f *testing.F) {
-	valid, _, _ := Encode([]byte("seed"), Secret{}, BlockSize1KiB)
-	binary, _ := valid.MarshalBinary()
+	valid := Capability{BlockSize: BlockSize1KiB, Root: Pair{Reference: Reference{1}, Key: Key{2}}}
+	binary, err := valid.MarshalBinary()
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Add(binary)
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -64,7 +67,7 @@ func FuzzCapabilityBinary(f *testing.F) {
 }
 
 func FuzzCapabilityText(f *testing.F) {
-	valid, _, _ := Encode([]byte("seed"), Secret{}, BlockSize32KiB)
+	valid := Capability{BlockSize: BlockSize32KiB, Root: Pair{Reference: Reference{1}, Key: Key{2}}}
 	f.Add(valid.String())
 	f.Add("")
 	f.Fuzz(func(t *testing.T, text string) {
@@ -79,8 +82,11 @@ func FuzzCapabilityText(f *testing.F) {
 }
 
 func FuzzCapabilityCBOR(f *testing.F) {
-	valid, _, _ := Encode([]byte("seed"), Secret{}, BlockSize1KiB)
-	cbor, _ := valid.MarshalCBOR()
+	valid := Capability{BlockSize: BlockSize1KiB, Root: Pair{Reference: Reference{1}, Key: Key{2}}}
+	cbor, err := valid.MarshalCBOR()
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Add(cbor)
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -206,11 +212,12 @@ func FuzzEncodeDecode(f *testing.F) {
 		}
 		var secret Secret
 		copy(secret[:], secretBytes)
-		capability, blocks, err := Encode(content, secret, size)
+		blocks := BlockSet{Blocks: make(map[Reference]Block)}
+		capability, err := NewBlockCapabilityStore(blocks).Encode(t.Context(), content, secret, size, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		decoded, err := Decode(capability, blocks)
+		decoded, err := NewBlockCapabilityStore(blocks).Decode(t.Context(), capability, BlockOptions{})
 		if err != nil || !bytes.Equal(decoded, content) {
 			t.Fatalf("encoding round trip failed: %v", err)
 		}
@@ -218,17 +225,18 @@ func FuzzEncodeDecode(f *testing.F) {
 		// input arrives in small chunks and the final read includes EOF.
 		input := smallChunkReader{Reader: &terminalEOFReader{data: content}, max: int(sizeCode) + 1}
 		streamed := BlockSet{Blocks: make(map[Reference]Block)}
-		streamCap, err := EncodeContent(context.Background(), input, secret, size, streamed, BlockOptions{})
+		streamCap, err := NewBlockCapabilityStore(streamed).EncodeContent(context.Background(), input, secret, size, BlockOptions{})
 		if err != nil || streamCap != capability || !maps.EqualFunc(streamed.Blocks, blocks.Blocks, equalBlocks) {
 			t.Fatalf("streaming encoding differs: %v", err)
 		}
-		capability, blocks, err = EncodeRecommended(content, secret)
+		blocks = BlockSet{Blocks: make(map[Reference]Block)}
+		capability, err = NewBlockCapabilityStore(blocks).EncodeRecommended(t.Context(), content, secret, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		input.Reader = &terminalEOFReader{data: content}
 		streamed = BlockSet{Blocks: make(map[Reference]Block)}
-		streamCap, err = EncodeContentRecommended(context.Background(), input, secret, streamed, BlockOptions{})
+		streamCap, err = NewBlockCapabilityStore(streamed).EncodeContentRecommended(context.Background(), input, secret, BlockOptions{})
 		if err != nil || streamCap != capability || !maps.EqualFunc(streamed.Blocks, blocks.Blocks, equalBlocks) {
 			t.Fatalf("recommended streaming encoding differs: %v", err)
 		}
@@ -236,16 +244,28 @@ func FuzzEncodeDecode(f *testing.F) {
 }
 
 func FuzzDecodeMutations(f *testing.F) {
-	capability, blocks, _ := Encode(bytes.Repeat([]byte("seed"), 300), Secret{}, BlockSize1KiB)
+	content := bytes.Repeat([]byte("seed"), 300)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	capability, err := NewBlockCapabilityStore(blocks).Encode(f.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
+	if err != nil {
+		f.Fatal(err)
+	}
 	root := blocks.Blocks[capability.Root.Reference]
 	f.Add(root.Data)
+	changed := bytes.Clone(root.Data)
+	changed[0] ^= 1
+	f.Add(changed)
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, candidate []byte) {
 		mutated := cloneBlocks(blocks)
 		mutated.Blocks[capability.Root.Reference] = Block{Data: bytes.Clone(candidate)}
-		decoded, err := Decode(capability, mutated)
-		if err == nil && !bytes.Equal(decoded, bytes.Repeat([]byte("seed"), 300)) {
-			t.Fatal("accepted mutation changed decoded content")
+		decoded, err := NewBlockCapabilityStore(mutated).Decode(t.Context(), capability, BlockOptions{})
+		if bytes.Equal(candidate, root.Data) {
+			if err != nil || !bytes.Equal(decoded, content) {
+				t.Fatalf("original root decoded to %d bytes: %v", len(decoded), err)
+			}
+		} else if !errors.Is(err, ErrInvalidBlock) {
+			t.Fatalf("changed root: got %v, want ErrInvalidBlock", err)
 		}
 	})
 }

@@ -156,11 +156,13 @@ func TestStreamBatches(t *testing.T) {
 	for _, limit := range []int{0, 1, 2, 3, 63, 64, 65} {
 		t.Run(string(rune('A'+limit)), func(t *testing.T) {
 			store := &batchProbe{BlockSet: BlockSet{Blocks: make(map[Reference]Block), MaxBatchSize: limit}}
-			cap, err := EncodeContent(context.Background(), bytes.NewReader(data), Secret{}, BlockSize1KiB, store, BlockOptions{HighPriority: true})
+			contentStore := NewBlockCapabilityStore(store)
+			cap, err := contentStore.EncodeContent(context.Background(), bytes.NewReader(data), Secret{}, BlockSize1KiB, BlockOptions{HighPriority: true})
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, blocks, _ := Encode(data, Secret{}, BlockSize1KiB)
+			blocks := BlockSet{Blocks: make(map[Reference]Block)}
+			want, _ := NewBlockCapabilityStore(blocks).Encode(t.Context(), data, Secret{}, BlockSize1KiB, BlockOptions{})
 			if cap != want || len(store.Blocks) != len(blocks.Blocks) {
 				t.Fatal("encoding changed")
 			}
@@ -172,7 +174,7 @@ func TestStreamBatches(t *testing.T) {
 					t.Fatal("write limit exceeded", n)
 				}
 			}
-			reader, err := NewReaderWithSize(context.Background(), cap, store, int64(len(data)), BlockOptions{})
+			reader, err := contentStore.NewReaderWithSize(context.Background(), cap, int64(len(data)), BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -201,7 +203,7 @@ func TestStreamBatchErrors(t *testing.T) {
 		func(r []PutBlockRequest) ([]Reference, error) { return make([]Reference, len(r)), nil },
 	} {
 		store := &batchProbe{writeHook: hook}
-		cap, err := EncodeContent(context.Background(), bytes.NewReader([]byte("short")), Secret{}, BlockSize1KiB, store, BlockOptions{})
+		cap, err := NewBlockCapabilityStore(store).EncodeContent(context.Background(), bytes.NewReader([]byte("short")), Secret{}, BlockSize1KiB, BlockOptions{})
 		if err == nil || cap != (Capability{}) {
 			t.Fatal(cap, err)
 		}
@@ -219,7 +221,8 @@ func TestReadBatchErrors(t *testing.T) {
 	for i := range data {
 		data[i] = byte(i / 1024)
 	}
-	cap, blocks, _ := Encode(data, Secret{}, BlockSize1KiB)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	cap, _ := NewBlockCapabilityStore(blocks).Encode(t.Context(), data, Secret{}, BlockSize1KiB, BlockOptions{})
 	for _, failure := range []error{io.EOF, ErrMissingBlock} {
 		store := &batchProbe{BlockSet: blocks}
 		store.readHook = func(r []BlockRequest) ([]Block, error) {
@@ -240,7 +243,7 @@ func TestReadBatchErrors(t *testing.T) {
 			}
 			return got, failure
 		}
-		reader, _ := NewReaderWithSize(context.Background(), cap, store, int64(len(data)), BlockOptions{})
+		reader, _ := NewBlockCapabilityStore(store).NewReaderWithSize(context.Background(), cap, int64(len(data)), BlockOptions{})
 		got := make([]byte, len(data))
 		n, err := reader.Read(got)
 		want := failure
@@ -266,15 +269,17 @@ func FuzzBatchRoundTrip(f *testing.F) {
 			size = BlockSize32KiB
 		}
 		store := &batchProbe{BlockSet: BlockSet{Blocks: make(map[Reference]Block), MaxBatchSize: int(limit)}}
-		cap, err := EncodeContent(context.Background(), bytes.NewReader(data), Secret{}, size, store, BlockOptions{})
+		contentStore := NewBlockCapabilityStore(store)
+		cap, err := contentStore.EncodeContent(context.Background(), bytes.NewReader(data), Secret{}, size, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		want, blocks, _ := Encode(data, Secret{}, size)
+		blocks := BlockSet{Blocks: make(map[Reference]Block)}
+		want, _ := NewBlockCapabilityStore(blocks).Encode(t.Context(), data, Secret{}, size, BlockOptions{})
 		if cap != want || !maps.EqualFunc(store.Blocks, blocks.Blocks, equalBlocks) {
 			t.Fatal("batch encoding differs")
 		}
-		reader, err := NewReaderWithSize(context.Background(), cap, store, int64(len(data)), BlockOptions{})
+		reader, err := contentStore.NewReaderWithSize(context.Background(), cap, int64(len(data)), BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -358,7 +363,7 @@ func TestBatchCancellationBoundaries(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	store, _ := batchBlocks()
-	if _, err := EncodeContent(ctx, bytes.NewReader(nil), Secret{}, BlockSize1KiB, store, BlockOptions{}); !errors.Is(err, context.Canceled) {
+	if _, err := NewBlockCapabilityStore(store).EncodeContent(ctx, bytes.NewReader(nil), Secret{}, BlockSize1KiB, BlockOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	encoder := treeEncoder{ctx: ctx}
@@ -375,14 +380,15 @@ func TestBatchCancellationBoundaries(t *testing.T) {
 		cancel()
 		return refs, err
 	}
-	if _, err := EncodeContent(ctx, bytes.NewReader(make([]byte, 2048)), Secret{}, BlockSize1KiB, probe, BlockOptions{}); !errors.Is(err, context.Canceled) || len(probe.writes) != 1 {
+	if _, err := NewBlockCapabilityStore(probe).EncodeContent(ctx, bytes.NewReader(make([]byte, 2048)), Secret{}, BlockSize1KiB, BlockOptions{}); !errors.Is(err, context.Canceled) || len(probe.writes) != 1 {
 		t.Fatal(err, probe.writes)
 	}
 }
 
 func TestReadBatchValidationAndCancellation(t *testing.T) {
 	data := make([]byte, 4*1024)
-	cap, blocks, _ := Encode(data, Secret{}, BlockSize1KiB)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	cap, _ := NewBlockCapabilityStore(blocks).Encode(t.Context(), data, Secret{}, BlockSize1KiB, BlockOptions{})
 	for _, mode := range []string{"short block", "cancel after root", "cancel after batch"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -398,11 +404,14 @@ func TestReadBatchValidationAndCancellation(t *testing.T) {
 				}
 				return got, err
 			}
-			reader, _ := NewReaderWithSize(ctx, cap, store, int64(len(data)), BlockOptions{})
+			reader, _ := NewBlockCapabilityStore(store).NewReaderWithSize(ctx, cap, int64(len(data)), BlockOptions{})
 			n, err := reader.Read(make([]byte, len(data)))
 			want := context.Canceled
 			if mode == "short block" {
 				want = ErrInvalidBlockSize
+				if !errors.Is(err, ErrInvalidBlock) {
+					t.Fatalf("short block in batch: %v", err)
+				}
 			}
 			if n != 0 || !errors.Is(err, want) {
 				t.Fatal(n, err)

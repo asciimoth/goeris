@@ -18,7 +18,8 @@ func (function exampleHTTPClient) Do(request *http.Request) (*http.Response, err
 }
 
 func ExampleClient() {
-	capability, blocks, err := eris.Encode([]byte("hello"), eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	capability, err := eris.NewBlockCapabilityStore(blocks).Encode(context.Background(), []byte("hello"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}

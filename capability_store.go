@@ -33,7 +33,7 @@ type EncodeOptions struct {
 	BlockOptions BlockOptions
 
 	// BlockSize selects [BlockSize1KiB] or [BlockSize32KiB]. Zero selects
-	// the recommended size, as in [EncodeContentRecommended].
+	// the recommended size, as in [CapabilityStore.EncodeContentRecommended].
 	BlockSize BlockSize
 
 	// PreserveRoot passes the supplied BlockOptions.Root unchanged on every
@@ -47,31 +47,51 @@ type EncodeOptions struct {
 // without reading the input. Write-only stores can return errors.ErrUnsupported
 // for read methods. Options and TTL apply to block operations.
 //
-// On block-backed stores, EncodeContentWithOptions uses [EncodeContent] rules
-// for explicit sizes and [EncodeContentRecommended] rules for a zero size.
-// The PreserveRoot option controls the Root flag on writes. The other encode
-// methods always mark the capability's root block. Root marking affects only
-// storage metadata.
-//
-// DecodeWithLimit rejects negative limits with ErrInvalidLimit. For
-// NewReaderWithLimit a negative limit disables the check. Both methods return
-// ErrDecodedTooLarge when the decoded size exceeds the limit.
-// NewReaderWithSize can defer size checks until the caller reads content.
-// Prefetch sends a best-effort hint. ResolvePath returns the absolute path of
-// a regular file, or errors.ErrUnsupported if the store cannot provide paths.
-// Missing content matches ErrMissingBlock when the store detects its absence.
+// Block-backed stores mark the root block on each encode operation.
+// Set [EncodeOptions.PreserveRoot] to pass the supplied Root flag unchanged.
+// Root marking affects storage metadata only. Missing content matches
+// [ErrMissingBlock] when the store detects its absence.
 type CapabilityStore interface {
+	// Encode writes content with the specified ERIS block size. The supported
+	// sizes are [BlockSize1KiB] and [BlockSize32KiB].
 	Encode(ctx context.Context, content []byte, secret Secret, size BlockSize, options BlockOptions) (Capability, error)
+	// EncodeRecommended selects the block size with [ChooseBlockSize].
 	EncodeRecommended(ctx context.Context, content []byte, secret Secret, options BlockOptions) (Capability, error)
+	// EncodeContent reads a stream once and writes its ERIS tree. Block-backed
+	// stores write with NoTTL and check ctx between reads and writes. Cancellation
+	// cannot interrupt a blocked input Read. Encoding stops at the first EOF,
+	// including EOF with data. After 100 consecutive empty reads, encoding
+	// returns io.ErrNoProgress. A writable block-backed store returns
+	// ErrInvalidBlockSize for an unsupported size and ErrInvalidInput for a nil
+	// reader. A failed encode can leave blocks in the store.
 	EncodeContent(ctx context.Context, content io.Reader, secret Secret, size BlockSize, options BlockOptions) (Capability, error)
+	// EncodeContentRecommended buffers up to 16 KiB to select the block size.
+	// It uses 1 KiB blocks for shorter input and 32 KiB blocks otherwise.
 	EncodeContentRecommended(ctx context.Context, content io.Reader, secret Secret, options BlockOptions) (Capability, error)
+	// EncodeContentWithOptions selects block size and root marking for a stream.
 	EncodeContentWithOptions(ctx context.Context, content io.Reader, secret Secret, options EncodeOptions) (Capability, error)
+	// Decode reads all decoded bytes. Use DecodeWithLimit to set a size limit.
 	Decode(ctx context.Context, capability Capability, options BlockOptions) ([]byte, error)
+	// DecodeWithLimit returns ErrDecodedTooLarge if the decoded size exceeds
+	// limit. A negative limit returns ErrInvalidLimit.
 	DecodeWithLimit(ctx context.Context, capability Capability, limit int64, options BlockOptions) ([]byte, error)
+	// NewReader opens content for sequential and random reads. A block-backed
+	// store scans internal nodes and the final leaf to determine the size.
 	NewReader(ctx context.Context, capability Capability, options BlockOptions) (CapabilityReader, error)
+	// NewReaderWithSize opens content with a known decoded size. A block-backed
+	// store defers block I/O until a read and checks the size on visited paths.
+	// A negative size returns ErrInvalidSize. A detected mismatch returns
+	// ErrSizeMismatch.
 	NewReaderWithSize(ctx context.Context, capability Capability, size int64, options BlockOptions) (CapabilityReader, error)
+	// NewReaderWithLimit passes ttl to block reads. It returns ErrDecodedTooLarge
+	// if the decoded size exceeds limit. A negative limit disables this check.
 	NewReaderWithLimit(ctx context.Context, capability Capability, limit int64, ttl TTL, options BlockOptions) (CapabilityReader, error)
+	// Prefetch requests content in advance. A block-backed store reads internal
+	// nodes and sends best-effort hints for leaves. The call can block or return
+	// an index read error. Success does not guarantee that leaves are available.
 	Prefetch(ctx context.Context, capability Capability, ttl TTL, options BlockOptions) error
+	// ResolvePath returns the absolute path to a regular file with the decoded
+	// content. Stores without host paths return errors.ErrUnsupported.
 	ResolvePath(ctx context.Context, capability Capability) (string, error)
 }
 

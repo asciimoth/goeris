@@ -544,16 +544,16 @@ func TestCombinedNativeNestedStreaming(t *testing.T) {
 	ctx := context.Background()
 	child := &combinedBatchProbe{BlockSet: BlockSet{Blocks: make(map[Reference]Block), MaxBatchSize: 3}}
 	inner := NewCombinedBlockStore(child)
-	store := NewCombinedBlockStore(inner)
+	store := NewBlockCapabilityStore(NewCombinedBlockStore(inner))
 	data := make([]byte, 20*1024+19)
 	for i := range data {
 		data[i] = byte(i / 1024)
 	}
-	capability, err := EncodeContent(ctx, bytes.NewReader(data), Secret{}, BlockSize1KiB, store, BlockOptions{})
+	capability, err := store.EncodeContent(ctx, bytes.NewReader(data), Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := NewReaderWithSize(ctx, capability, store, int64(len(data)), BlockOptions{})
+	reader, err := store.NewReaderWithSize(ctx, capability, int64(len(data)), BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

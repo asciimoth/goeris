@@ -157,11 +157,13 @@ func ExampleNewMountWithStore() {
 
 func ExampleMount_WithListingCache() {
 	ctx := context.Background()
-	capability, blocks, err := eris.Encode([]byte("hello"), eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
+	capability, err := store.Encode(context.Background(), []byte("hello"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
-	images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+	images := erisfs.NewStore(store, eris.BlockOptions{})
 	base := erisfs.NewMountWithStore(ctx, images, blocks, eris.BlockOptions{})
 	// Enable independent LRU limits for 128 capabilities and 256 raw blocks.
 	// The original mount keeps its default listings.

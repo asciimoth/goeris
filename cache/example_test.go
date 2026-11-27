@@ -10,7 +10,8 @@ import (
 )
 
 func ExampleNew() {
-	capability, blocks, err := eris.Encode([]byte("Hello, cached ERIS!"), eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	capability, err := eris.NewBlockCapabilityStore(blocks).Encode(context.Background(), []byte("Hello, cached ERIS!"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -29,7 +30,7 @@ func ExampleNew() {
 
 	ctx := context.Background()
 	eris.PrefetchBlock(ctx, cached, capability.Root.Reference, eris.NoTTL, eris.BlockOptions{HighPriority: true})
-	reader, err := eris.NewReader(ctx, capability, cached, eris.BlockOptions{})
+	reader, err := eris.NewBlockCapabilityStore(cached).NewReader(ctx, capability, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}

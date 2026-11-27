@@ -17,7 +17,8 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	store := eris.NewBlockCapabilityStore(blocks)
+	builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddFile(ctx, "dir/file", strings.NewReader("content"), false); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +61,7 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(ctx, capability, blocks, eris.BlockOptions{})
+	image, err := OpenFS(ctx, capability, store, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,11 +126,12 @@ func TestReadLinkChecksNestedTarget(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-	nested, err := EncodeIndex(ctx, Index{Entries: []Entry{{Path: []string{"file"}, Type: Symlink, Target: "../../outside"}}}, eris.Secret{}, blocks, eris.BlockOptions{})
+	store := eris.NewBlockCapabilityStore(blocks)
+	nested, err := EncodeIndex(ctx, Index{Entries: []Entry{{Path: []string{"file"}, Type: Symlink, Target: "../../outside"}}}, eris.Secret{}, store, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddSubdirectory("nested", nested); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +142,7 @@ func TestReadLinkChecksNestedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(ctx, outer, blocks, eris.BlockOptions{})
+	image, err := OpenFS(ctx, outer, store, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +150,7 @@ func TestReadLinkChecksNestedTarget(t *testing.T) {
 		t.Fatalf("link to escaping nested link = %q, %v", got, err)
 	}
 	delete(blocks.Blocks, nested.Root.Reference)
-	image, err = OpenFS(ctx, outer, blocks, eris.BlockOptions{})
+	image, err = OpenFS(ctx, outer, store, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

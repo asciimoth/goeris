@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/asciimoth/goeris"
@@ -101,13 +102,13 @@ func TestHandlerAbortsFailedStream(t *testing.T) {
 	for _, sourceErr := range []error{eris.ErrMissingBlock, io.EOF, errors.New("private store details")} {
 		for _, byteRange := range []string{"", "bytes=0-10", "bytes=0-10,1024-1030"} {
 			t.Run(sourceErr.Error()+byteRange, func(t *testing.T) {
-				handler := Handler{Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
+				handler := Handler{Content: eris.NewBlockCapabilityStore(sourceFunc(func(ref eris.Reference) ([]byte, error) {
 					if ref == pairs[0].Reference {
 						return nil, sourceErr
 					}
 					blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 					return blockResult, blockErr
-				})}
+				}))}
 				request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
 				request.Header.Set("Range", byteRange)
 				recorder := httptest.NewRecorder()
@@ -127,10 +128,11 @@ func TestHandlerAbortsFailedStream(t *testing.T) {
 
 func TestHandlerRejectsQuerySuffixesWithoutSourceAccess(t *testing.T) {
 	capability, _, _ := testData(t)
-	handler := Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) {
+	source := sourceFunc(func(eris.Reference) ([]byte, error) {
 		t.Fatal("invalid query accessed block source")
 		return nil, nil
-	})}
+	})
+	handler := Handler{Blocks: source, Content: eris.NewBlockCapabilityStore(source)}
 	for _, urn := range []string{capability.String(), capability.Root.Reference.URN()} {
 		for _, suffix := range []string{"&x=1", "%00", "=", strings.Repeat("A", 1<<20)} {
 			request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+urn+suffix, nil)
@@ -153,13 +155,13 @@ func TestHandlerStreamFailureClosesResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(Handler{Blocks: sourceFunc(func(ref eris.Reference) ([]byte, error) {
+	server := httptest.NewServer(Handler{Content: eris.NewBlockCapabilityStore(sourceFunc(func(ref eris.Reference) ([]byte, error) {
 		if ref == pairs[0].Reference {
 			return nil, eris.ErrMissingBlock
 		}
 		blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
 		return blockResult, blockErr
-	})})
+	}))})
 	defer server.Close()
 	for _, byteRange := range []string{"", "bytes=0-10", "bytes=0-10,1024-1030"} {
 		request, err := nethttp.NewRequest(nethttp.MethodGet, server.URL+N2RPath+"?"+capability.String(), nil)
@@ -181,7 +183,7 @@ func TestHandlerStreamFailureClosesResponse(t *testing.T) {
 
 func TestHandlerMultipartContent(t *testing.T) {
 	capability, blocks, content := testData(t)
-	server := httptest.NewServer(Handler{Blocks: blocks})
+	server := httptest.NewServer(Handler{Content: eris.NewBlockCapabilityStore(blocks)})
 	defer server.Close()
 	request, err := nethttp.NewRequest(nethttp.MethodGet, server.URL+N2RPath+"?"+capability.String(), nil)
 	if err != nil {
@@ -234,7 +236,7 @@ func TestHandlerPreservesCachePolicy(t *testing.T) {
 				// An outer handler can restrict caching of sensitive content.
 				recorder.Header().Add("Cache-Control", "private")
 				recorder.Header().Add("Cache-Control", "no-store")
-				Handler{Blocks: blocks}.ServeHTTP(recorder, request)
+				Handler{Blocks: blocks, Content: eris.NewBlockCapabilityStore(blocks)}.ServeHTTP(recorder, request)
 				wantStatus := nethttp.StatusOK
 				if byteRange != "" {
 					wantStatus = nethttp.StatusPartialContent
@@ -503,61 +505,52 @@ func (writer failedStreamWriter) Write([]byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
 
+type pendingRangeReader struct {
+	rangeReader
+	ctx      context.Context
+	started  chan struct{}
+	finished chan struct{}
+}
+
+func (r *pendingRangeReader) ReadAt([]byte, int64) (int, error) {
+	close(r.started)
+	<-r.ctx.Done()
+	close(r.finished)
+	return 0, r.ctx.Err()
+}
+
+func (r *pendingRangeReader) Close() error {
+	select {
+	case <-r.finished:
+		return r.rangeReader.Close()
+	default:
+		return errors.New("closed during a pending read")
+	}
+}
+
 func TestHandlerReturnsAfterMultipartWriteFailure(t *testing.T) {
-	capability, blocks, _ := testData(t)
-	root, err := eris.DecryptNode(blocks.Blocks[capability.Root.Reference].Data, capability.Root, capability.Level)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pairs, err := eris.ParseInternalNode(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	started := make(chan struct{})
-	finished := make(chan struct{})
-	requestCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	handler := Handler{Blocks: contextSourceFunc(func(ctx context.Context, ref eris.Reference) ([]byte, error) {
-		if ctx != requestCtx {
-			t.Error("request context changed")
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		reader := &pendingRangeReader{
+			rangeReader: rangeReader{size: 2048}, ctx: ctx,
+			started: make(chan struct{}), finished: make(chan struct{}),
 		}
-		if ref == pairs[0].Reference {
-			close(started)
-			<-ctx.Done()
-			close(finished)
-			return nil, ctx.Err()
+		capability := eris.Capability{BlockSize: eris.BlockSize1KiB}
+		request := httptest.NewRequestWithContext(ctx, nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
+		request.Header.Set("Range", "bytes=0-10,1024-1030")
+
+		contentHandlerFor(reader).ServeHTTP(failedStreamWriter{httptest.NewRecorder(), reader.started, ctx}, request)
+		if ctx.Err() != nil {
+			t.Error("handler canceled the caller's context")
 		}
-		blockResult, blockErr, _ := eris.GetBlock(context.Background(), blocks, ref, 0, eris.BlockOptions{})
-		return blockResult, blockErr
-	})}
-	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil).WithContext(requestCtx)
-	request.Header.Set("Range", "bytes=0-10,1024-1030")
-	done := make(chan any, 1)
-	go func() {
-		defer func() { done <- recover() }()
-		handler.ServeHTTP(failedStreamWriter{httptest.NewRecorder(), started, requestCtx}, request)
-	}()
-	select {
-	case result := <-done:
-		if result != nil && result != nethttp.ErrAbortHandler {
-			t.Fatalf("unexpected panic: %v", result)
+		// net/http cancels the request when ServeHTTP returns.
+		cancel()
+		synctest.Wait()
+		if !reader.closed {
+			t.Error("handler did not close the reader after cancellation")
 		}
-		if requestCtx.Err() != nil {
-			t.Fatal("handler canceled the caller's context")
-		}
-	case <-time.After(5 * time.Second):
-		cancel() // Release the blocked read before reporting the failure.
-		<-done
-		t.Fatal("handler did not return after a response write failed")
-	}
-	// net/http cancels the request when ServeHTTP returns. Emulate that step
-	// because this test calls the handler directly.
-	cancel()
-	select {
-	case <-finished:
-	case <-time.After(5 * time.Second):
-		t.Fatal("block read did not stop after request cancellation")
-	}
+	})
 }
 
 type multipartFailureWriter struct {
@@ -610,7 +603,7 @@ func TestServerCancelsPendingMultipartRead(t *testing.T) {
 					blockResult, blockErr, _ := eris.GetBlock(ctx, blocks, ref, 0, eris.BlockOptions{})
 					return blockResult, blockErr
 				})
-				handler := Handler{Blocks: source}
+				handler := Handler{Content: eris.NewBlockCapabilityStore(source)}
 				handler.ServeHTTP(multipartFailureWriter{w, started, request.Context(), failure}, request)
 			}))
 			defer server.Close()

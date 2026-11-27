@@ -6,7 +6,9 @@
 // The package does not create an HTTP client or server. Client uses a
 // caller-supplied HTTPClient. Handler is an http.Handler that callers can
 // register in their own server. Both components support custom transports,
-// including in-memory transports and Unix sockets.
+// including in-memory transports and Unix sockets. Set Handler.Blocks for
+// block URNs and Handler.Content for capability URNs. A request for a
+// resource with no configured store receives HTTP 500.
 //
 // Clients send the optional Eris-TTL request header (TTLHeader). A zero Go TTL
 // sends eris.DefaultTTL (16); other values decrease by one before sending.
@@ -21,10 +23,11 @@
 //
 // For untrusted requests, set Handler.MaxContentSize and configure server
 // timeouts, header limits, and concurrency limits. A zero MaxContentSize allows
-// unlimited decoded content. The handler scans the tree to find its size, even
-// for HEAD and range requests. Requests with more than 16 range entries receive
-// HTTP 416 before any block reads. Block sources must verify blocks as required by
-// eris.BlockSource. Each block read receives the request context unchanged.
+// unlimited decoded content. A block-backed store scans the tree to determine
+// its size, even for HEAD and range requests. Requests with more than 16 range
+// entries receive HTTP 416 before any block reads. Block sources must verify
+// blocks as required by [github.com/asciimoth/goeris.BlockSource]. Each block
+// read receives the request context unchanged.
 // Sources that support cancellation can stop pending reads when the request
 // ends. After a response write fails, Handler returns so net/http can cancel
 // that context. Callers that invoke Handler directly must cancel the request
@@ -32,9 +35,11 @@
 // For very large resources, the handler ignores ranges if their combined size
 // could overflow the response length. Small ranges remain available.
 //
-// If a block read fails after response headers are sent, Handler panics with
-// net/http.ErrAbortHandler to abort the response. Middleware must preserve this
-// behavior. Errors before streaming starts produce an HTTP error status.
+// Handler serves decoded ranges through CapabilityReader.ReadAt. If a read
+// fails or the content ends before its declared size during a transfer,
+// Handler panics with net/http.ErrAbortHandler to abort the response.
+// Middleware must preserve this behavior. Errors before streaming starts
+// produce an HTTP error status.
 //
 // Successful responses allow caching for one year by default. An outer handler
 // can set Cache-Control (for example, "no-store" for sensitive decoded content)

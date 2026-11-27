@@ -9,30 +9,25 @@ import (
 	"github.com/asciimoth/goeris/internal/streamio"
 )
 
-// EncodeContent reads content, encodes it with ERIS, and writes each encrypted
+// encodeContent reads content, encodes it with ERIS, and writes each encrypted
 // block to sink. It keeps at most 64 encrypted blocks (2 MiB) and a bounded
 // set of pending tree pairs per level. Batches respect the sink limit.
-// The result matches Encode for the same bytes, secret, and block size.
 // Each write uses NoTTL and passes ctx unchanged. Cancellation
 // is checked between input reads and block writes; it cannot stop a blocked
 // input Read. Each block write receives a copy of options, with Root always
-// set to true for the capability's root block.
+// set on the root block unless PreserveRoot is enabled.
 //
 // Encoding stops at the first io.EOF, including EOF returned with data. Other
 // read errors are preserved. After 100 consecutive empty reads it returns
 // io.ErrNoProgress. A size other than BlockSize1KiB or BlockSize32KiB returns
-// ErrInvalidBlockSize. A nil reader or sink returns ErrInvalidInput. A failed
+// ErrInvalidBlockSize. A nil reader returns ErrInvalidInput. A failed
 // call can leave blocks in the sink and returns no usable capability.
-func EncodeContent(ctx context.Context, content io.Reader, secret Secret, blockSize BlockSize, sink BlockSink, options BlockOptions) (Capability, error) {
-	return encodeContent(ctx, content, secret, sink, EncodeOptions{BlockSize: blockSize, BlockOptions: options})
-}
-
 func encodeContent(ctx context.Context, content io.Reader, secret Secret, sink BlockSink, options EncodeOptions) (Capability, error) {
 	blockSize := options.BlockSize
 	if !blockSize.Valid() {
 		return Capability{}, ErrInvalidBlockSize
 	}
-	if content == nil || sink == nil {
+	if content == nil {
 		return Capability{}, ErrInvalidInput
 	}
 	if err := ctx.Err(); err != nil {
@@ -81,17 +76,12 @@ func encodeContent(ctx context.Context, content io.Reader, secret Secret, sink B
 	}
 }
 
-// EncodeContentRecommended reads content and writes its ERIS blocks with the
+// encodeContentRecommended reads content and writes its ERIS blocks with the
 // recommended block size. It buffers at most 16 KiB to select 1 KiB blocks for
 // shorter content or 32 KiB blocks otherwise. The input is read once and need
-// not support seeking. The result matches EncodeRecommended for the same bytes
-// and secret. Writes and errors follow EncodeContent.
-func EncodeContentRecommended(ctx context.Context, content io.Reader, secret Secret, sink BlockSink, options BlockOptions) (Capability, error) {
-	return encodeContentRecommended(ctx, content, secret, sink, EncodeOptions{BlockOptions: options})
-}
-
+// not support seeking. Writes and errors follow encodeContent.
 func encodeContentRecommended(ctx context.Context, content io.Reader, secret Secret, sink BlockSink, options EncodeOptions) (Capability, error) {
-	if content == nil || sink == nil {
+	if content == nil {
 		return Capability{}, ErrInvalidInput
 	}
 	if err := ctx.Err(); err != nil {

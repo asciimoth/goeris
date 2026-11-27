@@ -80,7 +80,7 @@ func FuzzIndexRoundTrip(f *testing.F) {
 		if kind == Symlink {
 			entry.Target = target
 		} else {
-			entry.Capability, _, _ = eris.Encode([]byte("seed"), eris.Secret{}, eris.BlockSize1KiB)
+			entry.Capability, _ = newTestStore().Encode(t.Context(), []byte("seed"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 			if kind != Subdirectory {
 				entry.Size = 4
 			}
@@ -205,7 +205,7 @@ func FuzzAutoFile(f *testing.F) {
 		if entry.Size != int64(len(content)) || entry.Compression != ChooseCompression(content) {
 			t.Fatal("incorrect auto metadata")
 		}
-		image, err := OpenFS(context.Background(), cap, blocks, eris.BlockOptions{})
+		image, err := OpenFS(context.Background(), cap, eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

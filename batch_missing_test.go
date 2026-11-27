@@ -32,17 +32,18 @@ func TestReaderMissingLeaf(t *testing.T) {
 		for i := range content {
 			content[i] = byte(i/1024 + 1)
 		}
-		capability, blocks, err := Encode(content, Secret{}, BlockSize1KiB)
+		blocks := BlockSet{Blocks: make(map[Reference]Block)}
+		capability, err := NewBlockCapabilityStore(blocks).Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		ctx := context.Background()
 		source := &batchProbe{BlockSet: blocks}
-		reader, err := NewReaderWithSize(ctx, capability, source, int64(len(content)), BlockOptions{})
+		reader, err := NewBlockCapabilityStore(source).NewReaderWithSize(ctx, capability, int64(len(content)), BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		pair, err := reader.leafPair(int64(missing))
+		pair, err := reader.(*Reader).leafPair(int64(missing))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +90,8 @@ func TestReaderBatchInternalFailurePrefix(t *testing.T) {
 	}
 	for _, corrupt := range []bool{false, true} {
 		for _, limit := range []int{1, 3, 64} {
-			capability, blocks, err := Encode(content, Secret{}, BlockSize1KiB)
+			blocks := BlockSet{Blocks: make(map[Reference]Block)}
+			capability, err := NewBlockCapabilityStore(blocks).Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -110,7 +112,7 @@ func TestReaderBatchInternalFailurePrefix(t *testing.T) {
 				delete(blocks.Blocks, failed)
 			}
 			blocks.MaxBatchSize = limit
-			reader, err := NewReaderWithSize(context.Background(), capability, blocks, int64(len(content)), BlockOptions{})
+			reader, err := NewBlockCapabilityStore(blocks).NewReaderWithSize(context.Background(), capability, int64(len(content)), BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -199,16 +201,17 @@ func FuzzReaderMissingLeaf(f *testing.F) {
 		for i := range content {
 			content[i] = byte(i/1024 + 1)
 		}
-		capability, blocks, err := Encode(content, Secret{}, BlockSize1KiB)
+		blocks := BlockSet{Blocks: make(map[Reference]Block)}
+		capability, err := NewBlockCapabilityStore(blocks).Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		blocks.MaxBatchSize = int(limit)
-		reader, err := NewReaderWithSize(context.Background(), capability, blocks, int64(len(content)), BlockOptions{})
+		reader, err := NewBlockCapabilityStore(blocks).NewReaderWithSize(context.Background(), capability, int64(len(content)), BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		pair, err := reader.leafPair(int64(index))
+		pair, err := reader.(*Reader).leafPair(int64(index))
 		if err != nil {
 			t.Fatal(err)
 		}

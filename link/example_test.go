@@ -13,7 +13,8 @@ import (
 
 func ExampleNewFS() {
 	payload := []byte("hello from block storage")
-	capability, blocks, err := eris.EncodeRecommended(payload, eris.Secret{})
+	store := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)})
+	capability, err := store.EncodeRecommended(context.Background(), payload, eris.Secret{}, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -24,7 +25,7 @@ func ExampleNewFS() {
 		panic(err)
 	}
 	base := fstest.MapFS{"hello.txt.eris": {Data: encoded}}
-	files, err := link.NewFS(base, blocks, eris.BlockOptions{})
+	files, err := link.NewFS(base, store, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -38,7 +39,8 @@ func ExampleNewFS() {
 
 func ExampleFS_Open() {
 	payload := []byte("hello")
-	capability, blocks, err := eris.EncodeRecommended(payload, eris.Secret{})
+	store := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)})
+	capability, err := store.EncodeRecommended(context.Background(), payload, eris.Secret{}, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -46,7 +48,7 @@ func ExampleFS_Open() {
 	if err != nil {
 		panic(err)
 	}
-	files, err := link.NewFS(fstest.MapFS{"message": {Data: encoded}}, blocks, eris.BlockOptions{})
+	files, err := link.NewFS(fstest.MapFS{"message": {Data: encoded}}, store, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -73,7 +75,8 @@ func ExampleFS_Open() {
 
 func Example() {
 	payload := []byte("hello")
-	capability, _, err := eris.EncodeRecommended(payload, eris.Secret{})
+	store := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)})
+	capability, err := store.EncodeRecommended(context.Background(), payload, eris.Secret{}, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}

@@ -32,7 +32,8 @@ func TestMountBlockLayout(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	for _, size := range []eris.BlockSize{eris.BlockSize1KiB, eris.BlockSize32KiB} {
-		cap, blocks, err := eris.Encode([]byte("decoded content"), eris.Secret{}, size)
+		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+		cap, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), []byte("decoded content"), eris.Secret{}, size, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -351,7 +352,7 @@ func TestMountCaseAliases(t *testing.T) {
 		}
 	}
 	ctx := context.Background()
-	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	builder := NewBuilder(eris.NewBlockCapabilityStore(blocks), eris.Secret{}, eris.BlockOptions{})
 	for name, value := range map[string]string{"File": "upper", "file": "lower", "FS": "image entry", strings.Repeat("A", 52): "image hash name"} {
 		if err := builder.AddFile(ctx, name, strings.NewReader(value), false); err != nil {
 			t.Fatal(err)

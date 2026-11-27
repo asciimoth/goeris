@@ -14,7 +14,7 @@ import (
 func TestElementConstructorsAndAccessors(t *testing.T) {
 	t.Parallel()
 	block, reference := testBlock(t, eris.BlockSize1KiB, 1)
-	capability, _, err := eris.Encode([]byte("capability"), eris.Secret{}, eris.BlockSize1KiB)
+	capability, err := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}).Encode(t.Context(), []byte("capability"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +415,7 @@ func testElements(t *testing.T) []Element {
 	largeBlock, largeReference := testBlock(t, eris.BlockSize32KiB, 9)
 	blockElement, _ := NewBlock(block)
 	mapElement, _ := NewBlockMap(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{largeReference: {Data: largeBlock}}})
-	capability, _, err := eris.Encode([]byte("test content"), eris.Secret{}, eris.BlockSize1KiB)
+	capability, err := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}).Encode(t.Context(), []byte("test content"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

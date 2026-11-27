@@ -26,7 +26,7 @@ func cborBlocks(t *testing.T) ([]cbor.Element, eris.BlockSet) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	capability, _, err := eris.Encode([]byte("reference only"), eris.Secret{}, eris.BlockSize1KiB)
+	capability, err := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}).Encode(t.Context(), []byte("reference only"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

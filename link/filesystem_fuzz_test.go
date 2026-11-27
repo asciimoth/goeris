@@ -16,7 +16,7 @@ import (
 
 // Exercise detection, size limits, short reads, and lazy block access together.
 func FuzzFSOpen(f *testing.F) {
-	capability, _, err := eris.Encode([]byte("hello"), eris.Secret{}, eris.BlockSize1KiB)
+	capability, err := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}).Encode(f.Context(), []byte("hello"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func FuzzFSOpen(f *testing.F) {
 			observed, base = observedBase(t, nil)
 			observed.reader = &chunkReader{reader: bytes.NewReader(data), size: int(chunk) + 1}
 		}
-		files, err := link.NewFSWithLimit(base, source, limit, eris.BlockOptions{})
+		files, err := link.NewFSWithLimit(base, eris.NewBlockCapabilityStore(source), limit, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

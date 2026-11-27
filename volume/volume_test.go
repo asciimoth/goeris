@@ -357,7 +357,8 @@ func TestSymlinkCannotEscapeRoot(t *testing.T) {
 
 func TestEncodedContentRoundTrip(t *testing.T) {
 	content := bytes.Repeat([]byte("volume integration test\n"), 3000)
-	capability, blocks, err := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	capability, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), content, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +376,7 @@ func TestEncodedContentRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	decoded, err := eris.Decode(capability, stored)
+	decoded, err := eris.NewBlockCapabilityStore(stored).Decode(t.Context(), capability, eris.BlockOptions{})
 	if err != nil || !bytes.Equal(decoded, content) {
 		t.Fatalf("Decode stored content: length %d, %v", len(decoded), err)
 	}

@@ -28,14 +28,16 @@ func TestReaderHelpers(t *testing.T) {
 func TestReaderRandomAccess(t *testing.T) {
 	t.Parallel()
 	content := deterministicBytes(int(BlockSize1KiB)*40 + 123)
-	capability, blocks, err := Encode(content, Secret{8}, BlockSize1KiB)
+	store := newTestStore()
+	capability, err := store.Encode(t.Context(), content, Secret{8}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := NewReader(context.Background(), capability, blocks, BlockOptions{})
+	opened, err := store.NewReader(context.Background(), capability, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	reader := opened.(*Reader)
 	if reader.Size() != int64(len(content)) {
 		t.Fatalf("Size() = %d", reader.Size())
 	}
@@ -92,14 +94,16 @@ func TestScannedReaderCacheBound(t *testing.T) {
 	for i := 0; i+8 <= len(content); i += 1024 {
 		binary.LittleEndian.PutUint64(content[i:], uint64(i))
 	}
-	capability, blocks, err := Encode(content, Secret{}, BlockSize1KiB)
+	store := newTestStore()
+	capability, err := store.Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := NewReader(context.Background(), capability, blocks, BlockOptions{})
+	opened, err := store.NewReader(context.Background(), capability, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	reader := opened.(*Reader)
 	defer func() { _ = reader.Close() }()
 	if reader.CacheSize() > 64 {
 		t.Fatalf("cache after scan has %d nodes", reader.CacheSize())
@@ -125,12 +129,13 @@ func TestScannedReaderCacheBound(t *testing.T) {
 
 func TestReaderLimits(t *testing.T) {
 	for _, size := range []int{0, 1, 1023, 1024, 17000} {
-		capability, blocks, err := Encode(make([]byte, size), Secret{}, BlockSize1KiB)
+		store := newTestStore()
+		capability, err := store.Encode(t.Context(), make([]byte, size), Secret{}, BlockSize1KiB, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, limit := range []int64{-1, 0, int64(size) - 1, int64(size), int64(size) + 1} {
-			reader, err := NewReaderWithLimit(context.Background(), capability, blocks, limit, NoTTL, BlockOptions{})
+			reader, err := store.NewReaderWithLimit(context.Background(), capability, limit, NoTTL, BlockOptions{})
 			if limit >= 0 && limit < int64(size) {
 				if !errors.Is(err, ErrDecodedTooLarge) {
 					t.Fatalf("size %d, limit %d: %v", size, limit, err)
@@ -145,11 +150,11 @@ func TestReaderLimits(t *testing.T) {
 			}
 			_ = reader.Close()
 		}
-		if _, err := NewReader(context.Background(), capability, nil, BlockOptions{}); !errors.Is(err, ErrInvalidCapability) {
+		if _, err := NewBlockCapabilityStore(nil).NewReader(context.Background(), capability, BlockOptions{}); !errors.Is(err, ErrInvalidCapability) {
 			t.Fatalf("nil source: %v", err)
 		}
 	}
-	if _, err := NewReader(context.Background(), Capability{}, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, ErrInvalidCapability) {
+	if _, err := newTestStore().NewReader(context.Background(), Capability{}, BlockOptions{}); !errors.Is(err, ErrInvalidCapability) {
 		t.Fatalf("invalid capability: %v", err)
 	}
 }
@@ -157,31 +162,34 @@ func TestReaderLimits(t *testing.T) {
 func TestReaderRejectsBadBlocks(t *testing.T) {
 	t.Parallel()
 	content := deterministicBytes(3000)
-	capability, blocks, _ := Encode(content, Secret{}, BlockSize1KiB)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	store := NewBlockCapabilityStore(blocks)
+	capability, _ := store.Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
 	missing := cloneBlockSet(blocks)
 	delete(missing.Blocks, capability.Root.Reference)
-	if _, err := NewReader(context.Background(), capability, missing, BlockOptions{}); !errors.Is(err, ErrMissingBlock) {
+	if _, err := NewBlockCapabilityStore(missing).NewReader(context.Background(), capability, BlockOptions{}); !errors.Is(err, ErrMissingBlock) {
 		t.Fatalf("missing root error = %v", err)
 	}
 	wrongSize := cloneBlockSet(blocks)
 	wrongSize.Blocks[capability.Root.Reference] = Block{Data: []byte{1}}
-	if _, err := NewReader(context.Background(), capability, wrongSize, BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
+	if _, err := NewBlockCapabilityStore(wrongSize).NewReader(context.Background(), capability, BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Fatalf("short root error = %v", err)
 	}
-	if _, err := NewReader(context.Background(), capability, malformedSource(make([]byte, BlockSize32KiB)), BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
+	if _, err := NewBlockCapabilityStore(malformedSource(make([]byte, BlockSize32KiB))).NewReader(context.Background(), capability, BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Fatalf("wrong size from source error = %v", err)
 	}
 	corrupt := cloneBlockSet(blocks)
 	corrupt.Blocks[capability.Root.Reference].Data[0] ^= 1
-	if _, err := NewReader(context.Background(), capability, corrupt, BlockOptions{}); !errors.Is(err, ErrInvalidBlock) {
+	if _, err := NewBlockCapabilityStore(corrupt).NewReader(context.Background(), capability, BlockOptions{}); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("corrupt root error = %v", err)
 	}
-	leafCap, leafBlocks, _ := Encode([]byte("x"), Secret{}, BlockSize1KiB)
+	leafBlocks := BlockSet{Blocks: make(map[Reference]Block)}
+	leafCap, _ := NewBlockCapabilityStore(leafBlocks).Encode(t.Context(), []byte("x"), Secret{}, BlockSize1KiB, BlockOptions{})
 	leafBlocks.Blocks[leafCap.Root.Reference] = Block{Data: make([]byte, BlockSize1KiB)}
-	if _, err := NewReader(context.Background(), leafCap, leafBlocks, BlockOptions{}); !errors.Is(err, ErrInvalidBlock) {
+	if _, err := NewBlockCapabilityStore(leafBlocks).NewReader(context.Background(), leafCap, BlockOptions{}); !errors.Is(err, ErrInvalidBlock) {
 		t.Fatalf("corrupt leaf error = %v", err)
 	}
-	reader, _ := NewReader(context.Background(), capability, blocks, BlockOptions{})
+	reader, _ := store.NewReader(context.Background(), capability, BlockOptions{})
 	if _, err := reader.ReadAt(nil, -1); !errors.Is(err, stdfs.ErrInvalid) {
 		t.Fatalf("negative ReadAt error = %v", err)
 	}
@@ -209,10 +217,11 @@ func TestReaderRejectsBadBlocks(t *testing.T) {
 func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
 	t.Parallel()
 	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	store := NewBlockCapabilityStore(blocks)
 	badLeaf := make([]byte, BlockSize1KiB)
 	badLeafBlock, badLeafPair, _ := EncryptNode(badLeaf, Secret{}, 0)
 	blocks.Blocks[badLeafPair.Reference] = Block{Data: badLeafBlock}
-	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Root: badLeafPair}, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidPadding) {
+	if _, err := store.NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Root: badLeafPair}, BlockOptions{}); !errors.Is(err, ErrInvalidPadding) {
 		t.Fatalf("bad padding error = %v", err)
 	}
 
@@ -224,13 +233,13 @@ func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
 	oneBlock, onePair, _ := EncryptNode(oneChildNode, Secret{}, 1)
 	blocks.Blocks[onePair.Reference] = Block{Data: oneBlock}
 	oneCap := Capability{BlockSize: BlockSize1KiB, Level: 1, Root: onePair}
-	if _, err := NewReader(context.Background(), oneCap, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
+	if _, err := store.NewReader(context.Background(), oneCap, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("one-child root error = %v", err)
 	}
 	levelTwoNode := makeNode(onePair, onePair)
 	levelTwoBlock, levelTwoPair, _ := EncryptNode(levelTwoNode, Secret{}, 2)
 	blocks.Blocks[levelTwoPair.Reference] = Block{Data: levelTwoBlock}
-	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 2, Root: levelTwoPair}, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
+	if _, err := store.NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 2, Root: levelTwoPair}, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("short non-final subtree error = %v", err)
 	}
 	fullChildren := make([]Pair, 16)
@@ -243,21 +252,21 @@ func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
 	repeatedNode := makeNode(fullPair, fullPair)
 	repeatedBlock, repeatedPair, _ := EncryptNode(repeatedNode, Secret{}, 2)
 	blocks.Blocks[repeatedPair.Reference] = Block{Data: repeatedBlock}
-	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 2, Root: repeatedPair}, blocks, BlockOptions{}); err != nil {
+	if _, err := store.NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 2, Root: repeatedPair}, BlockOptions{}); err != nil {
 		t.Fatalf("repeated valid subtree error = %v", err)
 	}
 	missingInternal := Pair{Reference: Reference{9}, Key: Key{8}}
 	missingNode := makeNode(missingInternal, onePair)
 	missingBlock, missingPair, _ := EncryptNode(missingNode, Secret{}, 2)
 	blocks.Blocks[missingPair.Reference] = Block{Data: missingBlock}
-	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 2, Root: missingPair}, blocks, BlockOptions{}); !errors.Is(err, ErrMissingBlock) {
+	if _, err := store.NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 2, Root: missingPair}, BlockOptions{}); !errors.Is(err, ErrMissingBlock) {
 		t.Fatalf("missing internal error = %v", err)
 	}
 
 	emptyNode := make([]byte, BlockSize1KiB)
 	emptyBlock, emptyPair, _ := EncryptNode(emptyNode, Secret{}, 1)
 	blocks.Blocks[emptyPair.Reference] = Block{Data: emptyBlock}
-	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 1, Root: emptyPair}, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
+	if _, err := store.NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 1, Root: emptyPair}, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("empty root error = %v", err)
 	}
 
@@ -266,7 +275,7 @@ func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
 	blocks.Blocks[rootPair.Reference] = Block{Data: rootBlock}
 	badKeyCap := Capability{BlockSize: BlockSize1KiB, Level: 1, Root: rootPair}
 	badKeyCap.Root.Key[0] ^= 1
-	if _, err := NewReader(context.Background(), badKeyCap, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidRootKey) {
+	if _, err := store.NewReader(context.Background(), badKeyCap, BlockOptions{}); !errors.Is(err, ErrInvalidRootKey) {
 		t.Fatalf("bad root key error = %v", err)
 	}
 
@@ -274,7 +283,7 @@ func TestReaderRejectsMalformedTreesAndPadding(t *testing.T) {
 	copy(brokenSlots[2*PairSize:], brokenSlots[:PairSize])
 	brokenBlock, brokenPair, _ := EncryptNode(brokenSlots, Secret{}, 1)
 	blocks.Blocks[brokenPair.Reference] = Block{Data: brokenBlock}
-	if _, err := NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 1, Root: brokenPair}, blocks, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
+	if _, err := store.NewReader(context.Background(), Capability{BlockSize: BlockSize1KiB, Level: 1, Root: brokenPair}, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("non-contiguous pairs error = %v", err)
 	}
 
@@ -312,17 +321,18 @@ func deterministicBytes(length int) []byte {
 type malformedSource []byte
 
 func TestReaderRejectsSourceEOF(t *testing.T) {
-	capability, blocks, err := Encode([]byte("content"), Secret{}, BlockSize1KiB)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	capability, err := NewBlockCapabilityStore(blocks).Encode(t.Context(), []byte("content"), Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, sized := range []bool{false, true} {
 		source := &failAfterSource{BlockSource: blocks, err: io.EOF}
-		var reader *Reader
+		var reader CapabilityReader
 		if sized {
-			reader, err = NewReaderWithSize(context.Background(), capability, source, 7, BlockOptions{})
+			reader, err = NewBlockCapabilityStore(source).NewReaderWithSize(context.Background(), capability, 7, BlockOptions{})
 		} else {
-			reader, err = NewReader(context.Background(), capability, source, BlockOptions{})
+			reader, err = NewBlockCapabilityStore(source).NewReader(context.Background(), capability, BlockOptions{})
 		}
 		if err != nil {
 			t.Fatal(err)

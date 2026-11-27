@@ -13,13 +13,14 @@ func BenchmarkPrefetchReader(b *testing.B) {
 	for i := range data {
 		data[i] = byte(i / 1024)
 	}
-	capability, blocks, err := Encode(data, Secret{}, BlockSize1KiB)
+	store := newTestStore()
+	capability, err := store.Encode(b.Context(), data, Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
 	for _, size := range []int{1, 1024, 32768} {
 		b.Run(fmt.Sprint(size), func(b *testing.B) {
-			reader, err := NewReaderWithSize(context.Background(), capability, blocks, int64(len(data)), BlockOptions{})
+			reader, err := store.NewReaderWithSize(context.Background(), capability, int64(len(data)), BlockOptions{})
 			if err != nil {
 				b.Fatal(err)
 			}

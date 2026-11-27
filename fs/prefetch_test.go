@@ -18,7 +18,7 @@ func TestOpenFilePrefetch(t *testing.T) {
 	blocks, _ := mountFixture(t)
 	options := eris.BlockOptions{HighPriority: true}
 	source := prefetchtest.New(blocks, 0, 1)
-	image, err := OpenFS(t.Context(), pathTestCapability(t), source, options)
+	image, err := OpenFS(t.Context(), pathTestCapability(t), eris.NewBlockCapabilityStore(source), options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,11 +70,12 @@ func TestOpenFilePrefetch(t *testing.T) {
 func TestPrefetchImage(t *testing.T) {
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	contentStore := eris.NewBlockCapabilityStore(blocks)
 	data := make([]byte, 70*1024)
 	for i := range data {
 		data[i] = byte(i / 1024)
 	}
-	nested := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	nested := NewBuilder(contentStore, eris.Secret{}, eris.BlockOptions{})
 	if err := nested.AddFile(ctx, "file", bytes.NewReader(data), false); err != nil {
 		t.Fatal(err)
 	}
@@ -92,13 +93,13 @@ func TestPrefetchImage(t *testing.T) {
 		{Path: []string{"loop"}, Type: Symlink, Target: "loop"},
 		{Path: []string{"outside"}, Type: Symlink, Target: "../../outside"},
 	}}
-	cap, err := EncodeIndex(ctx, index, eris.Secret{}, blocks, eris.BlockOptions{})
+	cap, err := EncodeIndex(ctx, index, eris.Secret{}, contentStore, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	options := eris.BlockOptions{HighPriority: true}
 	store := prefetchtest.New(blocks, 0, 2)
-	image, err := OpenFS(ctx, cap, store, options)
+	image, err := OpenFS(ctx, cap, eris.NewBlockCapabilityStore(store), options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,13 +178,15 @@ func TestPrefetchImage(t *testing.T) {
 
 func TestPrefetchImageMissingContent(t *testing.T) {
 	ctx := context.Background()
-	cap, blocks, _ := eris.Encode(make([]byte, 4000), eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
+	cap, _ := store.Encode(t.Context(), make([]byte, 4000), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	index := Index{Entries: []Entry{{Path: []string{"file"}, Type: Regular, Capability: cap, Size: 4000}}}
-	root, err := EncodeIndex(ctx, index, eris.Secret{}, blocks, eris.BlockOptions{})
+	root, err := EncodeIndex(ctx, index, eris.Secret{}, store, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(ctx, root, blocks, eris.BlockOptions{})
+	image, err := OpenFS(ctx, root, store, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +213,9 @@ func TestPrefetchImageMissingContent(t *testing.T) {
 
 func TestPrefetchSubDoesNotVisitOtherFiles(t *testing.T) {
 	ctx := context.Background()
-	cap, blocks, _ := eris.Encode([]byte("small"), eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	contentStore := eris.NewBlockCapabilityStore(blocks)
+	cap, _ := contentStore.Encode(t.Context(), []byte("small"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	missing := cap
 	missing.Root.Reference[0] ^= 1
 	index := Index{Entries: []Entry{
@@ -219,12 +224,12 @@ func TestPrefetchSubDoesNotVisitOtherFiles(t *testing.T) {
 		{Path: []string{"dir", "link"}, Type: Symlink, Target: "../outside"},
 		{Path: []string{"outside"}, Type: Subdirectory, Capability: missing},
 	}}
-	root, err := EncodeIndex(ctx, index, eris.Secret{}, blocks, eris.BlockOptions{})
+	root, err := EncodeIndex(ctx, index, eris.Secret{}, contentStore, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	store := prefetchtest.New(blocks, time.Microsecond, 1)
-	image, err := OpenFS(ctx, root, store, eris.BlockOptions{})
+	image, err := OpenFS(ctx, root, eris.NewBlockCapabilityStore(store), eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +263,7 @@ func FuzzPrefetchImage(f *testing.F) {
 		}
 		ctx := context.Background()
 		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-		builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+		builder := NewBuilder(eris.NewBlockCapabilityStore(blocks), eris.Secret{}, eris.BlockOptions{})
 		var err error
 		if compressed {
 			err = builder.AddCompressedFile(ctx, "file", bytes.NewReader(data), false)
@@ -273,7 +278,7 @@ func FuzzPrefetchImage(f *testing.F) {
 			t.Fatal(err)
 		}
 		store := prefetchtest.New(blocks, 0, int(limit%8))
-		image, err := OpenFS(ctx, cap, store, eris.BlockOptions{})
+		image, err := OpenFS(ctx, cap, eris.NewBlockCapabilityStore(store), eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -319,8 +324,9 @@ func TestPrefetchImageCancellationDuringWalk(t *testing.T) {
 func TestConcurrentPrefetchAndRead(t *testing.T) {
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
 	content := bytes.Repeat([]byte("concurrent prefetch"), 1000)
-	child := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	child := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	if err := child.AddFile(ctx, "file", bytes.NewReader(content), false); err != nil {
 		t.Fatal(err)
 	}
@@ -328,11 +334,11 @@ func TestConcurrentPrefetchAndRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootCap, err := EncodeIndex(ctx, Index{Entries: []Entry{{Path: []string{"child"}, Type: Subdirectory, Capability: childCap}}}, eris.Secret{}, blocks, eris.BlockOptions{})
+	rootCap, err := EncodeIndex(ctx, Index{Entries: []Entry{{Path: []string{"child"}, Type: Subdirectory, Capability: childCap}}}, eris.Secret{}, store, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(ctx, rootCap, prefetchtest.New(blocks, 0, 1), eris.BlockOptions{})
+	image, err := OpenFS(ctx, rootCap, eris.NewBlockCapabilityStore(prefetchtest.New(blocks, 0, 1)), eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -46,7 +46,7 @@ func FuzzHugeContentRanges(f *testing.F) {
 }
 
 func FuzzResourceURL(f *testing.F) {
-	capability, _, err := eris.Encode([]byte("fuzz content"), eris.Secret{}, eris.BlockSize1KiB)
+	capability, err := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}).Encode(f.Context(), []byte("fuzz content"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -66,7 +66,9 @@ func FuzzResourceURL(f *testing.F) {
 }
 
 func FuzzHandler(f *testing.F) {
-	capability, blocks, err := eris.Encode([]byte("fuzz content"), eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
+	capability, err := store.Encode(f.Context(), []byte("fuzz content"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -86,7 +88,7 @@ func FuzzHandler(f *testing.F) {
 		request := &nethttp.Request{Method: method, URL: target, Header: make(nethttp.Header), Body: nethttp.NoBody}
 		request.Header.Set("Range", byteRange)
 		recorder := httptest.NewRecorder()
-		Handler{Blocks: blocks}.ServeHTTP(recorder, request)
+		Handler{Blocks: blocks, Content: store}.ServeHTTP(recorder, request)
 		if recorder.Code < 100 || recorder.Code > 599 {
 			t.Fatalf("invalid status %d", recorder.Code)
 		}
@@ -105,7 +107,8 @@ func FuzzHandler(f *testing.F) {
 }
 
 func FuzzClientGetBlock(f *testing.F) {
-	capability, blocks, err := eris.Encode([]byte("fuzz content"), eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	capability, err := eris.NewBlockCapabilityStore(blocks).Encode(f.Context(), []byte("fuzz content"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		f.Fatal(err)
 	}

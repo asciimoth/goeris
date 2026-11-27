@@ -46,6 +46,9 @@ func openLzipFile(ctx context.Context, item *node) (*lzipFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	if raw == nil {
+		return nil, stdfs.ErrInvalid
+	}
 	// LZMA requests individual bytes. Buffer them so each request does not
 	// traverse the ERIS tree or acquire the underlying reader's mutex.
 	file := &lzipFile{ctx: ctx, node: item, raw: raw, input: countReader{reader: bufio.NewReader(raw)}}

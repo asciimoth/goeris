@@ -10,6 +10,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/asciimoth/goeris"
 )
@@ -24,16 +25,15 @@ var (
 	ErrSizeMismatch = eris.ErrSizeMismatch
 )
 
-// FS wraps a file system and resolves ERIS link files through a block source.
+// FS wraps a file system and resolves ERIS link files through a capability store.
 // It identifies regular files by their magic bytes, regardless of extension.
 // Paths stay unchanged. Resolution stops after one link; MIME and attributes
 // do not change how content is read. Use the base FS to read the original links.
 //
-// Open and metadata operations read base files but do not fetch linked content.
-// Sizes are unverified until content is read. Reads check each visited tree
-// path and the declared size at the file end. Unvisited blocks are not checked.
-// Block reads use eris.NoTTL and require the BlockSource integrity
-// contract. Open binds ctx to later reads on resolved files. Use NewIOFS for
+// Open supplies the size from the link to CapabilityStore.NewReaderWithSize.
+// The store can defer size checks until a read. A block-backed store checks
+// each visited tree path and validates padding at the file end.
+// Open binds ctx to later reads on resolved files. Use NewIOFS for
 // io/fs compatibility. Context cannot stop reads made through the base fs.FS.
 // Open and ReadFile return io.ErrNoProgress after 100 consecutive empty reads
 // without an error. A blocked read still requires a timeout in the base FS.
@@ -46,32 +46,32 @@ var (
 // access to the cause. Files returned directly from the base keep their errors.
 // See the package documentation before exposing errors to untrusted callers.
 //
-// Concurrent FS calls require a base and source that support concurrent calls.
+// Concurrent FS calls require a base and store that support concurrent calls.
 // Separate Open calls have separate file positions. Calls on an open base file
 // or directory must be serialized unless the base permits concurrent use.
 // Symbolic links follow the base FS policy; this wrapper adds no confinement.
 type FS struct {
 	base        fs.FS
-	source      eris.BlockSource
+	store       eris.CapabilityStore
 	options     eris.BlockOptions
 	maxLinkSize int64
 }
 
 // NewFS wraps base with the default encoded link size limit.
 // It keeps a copy of options for all block reads.
-func NewFS(base fs.FS, source eris.BlockSource, options eris.BlockOptions) (*FS, error) {
-	return NewFSWithLimit(base, source, DefaultMaxLinkSize, options)
+func NewFS(base fs.FS, store eris.CapabilityStore, options eris.BlockOptions) (*FS, error) {
+	return NewFSWithLimit(base, store, DefaultMaxLinkSize, options)
 }
 
 // NewFSWithLimit wraps base with a positive encoded link size limit in bytes.
-// It performs no I/O. A nil base, nil source, or non-positive limit is invalid.
+// It performs no I/O. A nil base, nil store, or non-positive limit is invalid.
 // The limit applies to link metadata, not to decoded content or ordinary files.
 // It keeps a copy of options for all block reads.
-func NewFSWithLimit(base fs.FS, source eris.BlockSource, limit int64, options eris.BlockOptions) (*FS, error) {
-	if base == nil || source == nil || limit <= 0 {
+func NewFSWithLimit(base fs.FS, store eris.CapabilityStore, limit int64, options eris.BlockOptions) (*FS, error) {
+	if base == nil || store == nil || limit <= 0 {
 		return nil, fs.ErrInvalid
 	}
-	return &FS{base: base, source: source, options: options, maxLinkSize: limit}, nil
+	return &FS{base: base, store: store, options: options, maxLinkSize: limit}, nil
 }
 
 // Open opens a base file or the content referenced by an ERIS link file.
@@ -175,11 +175,19 @@ func (fileSystem *FS) open(ctx context.Context, file fs.File, name string) (fs.F
 	if link.size > math.MaxInt64 {
 		return nil, ErrInvalidLink
 	}
-	reader, err := eris.NewReaderWithSize(ctx, link.capability, fileSystem.source, int64(link.size), fileSystem.options)
+	size := int64(link.size)
+	reader, err := fileSystem.store.NewReaderWithSize(ctx, link.capability, size, fileSystem.options)
 	if err != nil {
 		return nil, err
 	}
-	return &resolvedFile{reader: reader, info: resolvedInfo{FileInfo: info, size: int64(link.size)}, name: name}, nil
+	if reader == nil {
+		return nil, fs.ErrInvalid
+	}
+	if reader.Size() != size {
+		_ = reader.Close()
+		return nil, ErrSizeMismatch
+	}
+	return &resolvedFile{reader: reader, info: resolvedInfo{FileInfo: info, size: size}, name: name}, nil
 }
 
 // Stat returns base metadata with the declared content size for a link file.
@@ -413,34 +421,61 @@ type resolvedInfo struct {
 func (info resolvedInfo) Size() int64 { return info.size }
 
 type resolvedFile struct {
-	reader *eris.Reader
+	mu     sync.RWMutex
+	reader eris.CapabilityReader
 	info   resolvedInfo
 	name   string
 }
 
 func (file *resolvedFile) Stat() (fs.FileInfo, error) {
-	if file.reader.IsClosed() {
+	file.mu.RLock()
+	defer file.mu.RUnlock()
+	if file.reader == nil {
 		return nil, linkPathError("stat", file.name, fs.ErrClosed)
 	}
 	return file.info, nil
 }
 
 func (file *resolvedFile) Read(buffer []byte) (int, error) {
+	file.mu.Lock()
+	defer file.mu.Unlock()
+	if file.reader == nil {
+		return 0, linkPathError("read", file.name, fs.ErrClosed)
+	}
 	n, err := file.reader.Read(buffer)
 	return n, linkReadError("read", file.name, err)
 }
 
 func (file *resolvedFile) ReadAt(buffer []byte, offset int64) (int, error) {
+	file.mu.RLock()
+	defer file.mu.RUnlock()
+	if file.reader == nil {
+		return 0, linkPathError("readat", file.name, fs.ErrClosed)
+	}
 	n, err := file.reader.ReadAt(buffer, offset)
 	return n, linkReadError("readat", file.name, err)
 }
 
 func (file *resolvedFile) Seek(offset int64, whence int) (int64, error) {
+	file.mu.Lock()
+	defer file.mu.Unlock()
+	if file.reader == nil {
+		return 0, linkPathError("seek", file.name, fs.ErrClosed)
+	}
 	position, err := file.reader.Seek(offset, whence)
 	return position, linkPathError("seek", file.name, err)
 }
 
-func (file *resolvedFile) Close() error { return file.reader.Close() }
+func (file *resolvedFile) Close() error {
+	file.mu.Lock()
+	defer file.mu.Unlock()
+	if file.reader == nil {
+		return nil
+	}
+	err := file.reader.Close()
+	file.reader = nil
+	return linkPathError("close", file.name, err)
+}
 
 type linkDirectory struct {
 	ctx context.Context

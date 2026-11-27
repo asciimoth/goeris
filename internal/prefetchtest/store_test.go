@@ -12,7 +12,8 @@ import (
 
 func TestStore(t *testing.T) {
 	ctx := context.Background()
-	cap, blocks, _ := eris.Encode([]byte("data"), eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	cap, _ := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), []byte("data"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	ref := cap.Root.Reference
 	req := []eris.BlockRequest{{Reference: ref, TTL: 3, Options: eris.BlockOptions{Root: true}}}
 	s := New(blocks, time.Millisecond, 1)
@@ -63,7 +64,8 @@ func TestStore(t *testing.T) {
 }
 
 func TestColdCancellationAndNonblockingHint(t *testing.T) {
-	cap, blocks, _ := eris.Encode(nil, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	cap, _ := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), nil, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	s := New(blocks, time.Hour, 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()

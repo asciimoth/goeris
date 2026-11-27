@@ -60,11 +60,12 @@ func (store *opaqueBlocks) getBlock(ctx context.Context, ref eris.Reference, ttl
 func TestImageThroughBlockStorage(t *testing.T) {
 	options := eris.BlockOptions{HighPriority: true}
 	store := &opaqueBlocks{data: make(map[eris.Reference][]byte), wantOptions: options}
+	contentStore := eris.NewBlockCapabilityStore(store)
 	var _ eris.BlockStore = store
 
 	plain := bytes.Repeat([]byte("a block storage image "), 4000)
 	packed := strings.Repeat("compress this text ", 4000)
-	nested := erisfs.NewBuilder(store, eris.Secret{1}, options)
+	nested := erisfs.NewBuilder(contentStore, eris.Secret{1}, options)
 	if err := nested.AddFile(context.Background(), "plain", bytes.NewReader(plain), false); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +73,7 @@ func TestImageThroughBlockStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder := erisfs.NewBuilder(store, eris.Secret{1}, options)
+	builder := erisfs.NewBuilder(contentStore, eris.Secret{1}, options)
 	if err := builder.AddSubdirectory("nested", nestedCap); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +106,7 @@ func TestImageThroughBlockStorage(t *testing.T) {
 
 	// Read through a separate handle, as with an external block service.
 	reader := &opaqueBlocks{data: store.data, wantOptions: options}
-	image, err := erisfs.OpenFS(context.Background(), capability, reader, options)
+	image, err := erisfs.OpenFS(context.Background(), capability, eris.NewBlockCapabilityStore(reader), options)
 	if err != nil {
 		t.Fatal(err)
 	}

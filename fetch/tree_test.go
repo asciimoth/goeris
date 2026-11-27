@@ -35,7 +35,7 @@ func TestTreeVectors(t *testing.T) {
 		{"file", "", "auto", "urn:eris:BIAOWCYFF3SO3ZVEXC7WGJIL5RWP4LWFMXKK6D2NIUT75LKYCOJCGDCTP2MWYXAUNJG5CPAZ2A5ZKQR4WFH5H6KYHSUUECFBWUJC7C2PIM", random[:]},
 	} {
 		o := Options{Kind: "erisfs", Compression: tc.profile}
-		tree, err := o.NewTree(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, eris.BlockOptions{})
+		tree, err := o.NewTree(eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}), eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -55,7 +55,7 @@ func TestTreeVectors(t *testing.T) {
 }
 
 func TestTreeBoundaries(t *testing.T) {
-	store := eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}
+	store := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 	for _, tc := range []struct {
 		options Options
 		key     string
@@ -69,7 +69,7 @@ func TestTreeBoundaries(t *testing.T) {
 	}
 	o := Options{Kind: "erisfs", Compression: "auto"}
 	if _, err := o.NewTree(nil, eris.BlockOptions{}); !errors.Is(err, erisfs.ErrInvalidEntry) {
-		t.Fatalf("NewTree with nil sink: %v", err)
+		t.Fatalf("NewTree with nil store: %v", err)
 	}
 	tree, err := o.NewTree(store, eris.BlockOptions{})
 	if err != nil {
@@ -103,7 +103,7 @@ func TestTreeChecksPathBeforeReading(t *testing.T) {
 	for _, profile := range []string{"none", "auto"} {
 		t.Run(profile, func(t *testing.T) {
 			options := Options{Kind: "erisfs", Compression: profile}
-			tree, err := options.NewTree(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, eris.BlockOptions{})
+			tree, err := options.NewTree(eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}), eris.BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -125,7 +125,7 @@ func TestCompressedFileRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}
+	store := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 	tree, err := options.NewTree(store, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestTreeConvergenceSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocks := eris.BlockOptions{}
-	store := eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}
+	store := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}})
 	tree, err := options.NewTree(store, blocks)
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestTreeConvergenceSecret(t *testing.T) {
 	for i := range secret {
 		secret[i] = 0xab
 	}
-	file, err := eris.EncodeContentRecommended(ctx, strings.NewReader(data), secret, store, blocks)
+	file, err := store.EncodeContentRecommended(ctx, strings.NewReader(data), secret, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}

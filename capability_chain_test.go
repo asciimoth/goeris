@@ -1,6 +1,7 @@
 package eris
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -126,7 +127,7 @@ func TestCombinedCapabilityStoreStopsAfterByteMutation(t *testing.T) {
 }
 
 func TestCombinedCapabilityStoreStreamAfterReadOnlyStore(t *testing.T) {
-	dst := NewBlockCapabilityStore(BlockSet{Blocks: make(map[Reference]Block)})
+	dst := newTestStore()
 	last := &failingStreamStore{}
 	store := NewCombinedCapabilityStore(NewMountCapabilityStore(""), dst, last)
 	input := struct{ io.Reader }{strings.NewReader("hello")}
@@ -154,7 +155,7 @@ func TestCombinedCapabilityStoreEncodeContentWithOptions(t *testing.T) {
 	if err != nil || last.calls != 0 {
 		t.Fatalf("encode: %v, later calls = %d", err, last.calls)
 	}
-	want, _, err := Encode([]byte(content), secret, options.BlockSize)
+	want, err := newTestStore().Encode(t.Context(), []byte(content), secret, options.BlockSize, BlockOptions{})
 	if err != nil || got != want {
 		t.Fatalf("capability = %v; want %v, %v", got, want, err)
 	}
@@ -208,4 +209,47 @@ func TestCombinedCapabilityStoreEncodeContentWithOptionsPartialWrite(t *testing.
 			}
 		})
 	}
+}
+
+// A read-only store must leave the stream available to the next store.
+// Storage options can change block metadata while preserving the capability.
+func FuzzCapabilityStoreWriteFallback(f *testing.F) {
+	f.Add([]byte{}, false, false, false, false)
+	f.Add([]byte("content"), true, true, false, true)
+	f.Add(make([]byte, 16<<10), false, false, true, true)
+	f.Fuzz(func(t *testing.T, data []byte, fixedSize, preserveRoot, root, highPriority bool) {
+		if len(data) > 1<<18 {
+			t.Skip()
+		}
+		options := EncodeOptions{
+			BlockOptions: BlockOptions{Root: root, HighPriority: highPriority},
+			PreserveRoot: preserveRoot,
+		}
+		size := ChooseBlockSize(len(data))
+		if fixedSize {
+			options.BlockSize = BlockSize1KiB
+			size = options.BlockSize
+		}
+		want, err := newTestStore().Encode(t.Context(), data, Secret{}, size, BlockOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocks := BlockSet{Blocks: make(map[Reference]Block)}
+		dst := NewBlockCapabilityStore(blocks)
+		store := NewCombinedCapabilityStore(NewMountCapabilityStore(""), dst)
+		got, err := store.EncodeContentWithOptions(t.Context(), bytes.NewReader(data), Secret{}, options)
+		if err != nil || got != want {
+			t.Fatalf("encode returned %v, %v; want %v", got, err, want)
+		}
+		for ref, block := range blocks.Blocks {
+			marked := root || (!preserveRoot && ref == got.Root.Reference)
+			if block.Options.Root != marked || block.Options.HighPriority != highPriority {
+				t.Fatalf("block %v has unexpected options %+v", ref, block.Options)
+			}
+		}
+		decoded, err := dst.DecodeWithLimit(t.Context(), got, int64(len(data)), BlockOptions{})
+		if err != nil || !bytes.Equal(decoded, data) {
+			t.Fatalf("destination returned %d bytes: %v", len(decoded), err)
+		}
+	})
 }

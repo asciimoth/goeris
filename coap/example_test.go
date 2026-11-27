@@ -18,7 +18,8 @@ func ExampleClient() {
 	store, _ := eriscoap.ParseStoreURL("coap+tcp://store.example/")
 	client, _ := eriscoap.NewClient(requester, store, eriscoap.ClientConfig{})
 
-	encoded, encodedBlocks, _ := eris.Encode([]byte("hello"), eris.Secret{}, eris.BlockSize1KiB)
+	encodedBlocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	encoded, _ := eris.NewBlockCapabilityStore(encodedBlocks).Encode(context.Background(), []byte("hello"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	reference := encoded.Root.Reference
 	block, _, _ := eris.GetBlock(context.Background(), encodedBlocks, reference, 0, eris.BlockOptions{})
 

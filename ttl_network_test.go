@@ -266,12 +266,13 @@ func TestCoAPBlockWisePreservesTTL(t *testing.T) {
 
 func TestHTTPContentPreservesTTL(t *testing.T) {
 	content := bytes.Repeat([]byte("content"), 1000)
-	cap, blocks, err := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	cap, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), content, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	terminal := &ttlStore{BlockSet: blocks}
-	handler := erishttp.Handler{Blocks: terminal}
+	handler := erishttp.Handler{Content: eris.NewBlockCapabilityStore(terminal)}
 	base, _ := url.Parse("http://example/")
 	client, err := erishttp.NewClient(ttlHTTPFunc(func(r *http.Request) (*http.Response, error) {
 		rec := httptest.NewRecorder()

@@ -20,11 +20,10 @@ type treeSummary struct {
 // Reader decodes one ERIS byte sequence and supports random access. Operations
 // on one reader are safe for concurrent use. At most 64 internal nodes and the
 // most recent leaf are cached. Reads fetch at most 64 requested leaves per batch
-// (at most 2 MiB of encrypted block data). Use NewReaderWithSize to avoid scanning
-// the tree on open. Create a Reader with one of the NewReader functions; its zero value
-// is not ready for use. The source must verify block references as required by
-// BlockSource. Every block read uses the context supplied at construction,
-// unchanged. Each block read receives a copy of the construction options.
+// (at most 2 MiB of encrypted block data). [CapabilityStore.NewReaderWithSize]
+// avoids scanning the tree on open. A block-backed store returns a *Reader.
+// The source must verify block references as required by [BlockSource]. Each
+// block read receives the original context and a copy of the options.
 // Cancellation stops later reads, including reads from the cache. Read and
 // ReadAt send best-effort hints for demand blocks and a bounded sequential
 // read-ahead window. Seek hints its target through cached indexes only.
@@ -57,23 +56,17 @@ type Reader struct {
 	hinted      map[Reference]bool
 }
 
-// NewReader opens an ERIS byte sequence from an abstract block source. It
-// scans internal nodes and the final leaf to obtain the decoded length and
-// check the tree shape. The scan keeps one temporary summary per distinct
-// internal node. Other leaf blocks are fetched when read. Use
-// NewReaderWithSize when the decoded length is already known. Reads use NoTTL.
-func NewReader(ctx context.Context, capability Capability, source BlockSource, options BlockOptions) (*Reader, error) {
-	return NewReaderWithLimit(ctx, capability, source, -1, NoTTL, options)
-}
-
 // NewReaderWithSize opens content with a known decoded size, without block I/O.
 // It checks tree shape on each visited path and padding when the end is read.
 // Unvisited blocks are not checked. Opening and Size do not validate content.
 // Its cache holds at most 64 internal nodes and one leaf, independent of content
 // size. Reads use NoTTL. A negative size returns ErrInvalidSize; content that
 // does not match size returns ErrSizeMismatch when the mismatch is detected.
-func NewReaderWithSize(ctx context.Context, capability Capability, source BlockSource, size int64, options BlockOptions) (*Reader, error) {
-	if source == nil || capability.Validate() != nil {
+func (s *blockCapabilityStore) NewReaderWithSize(ctx context.Context, capability Capability, size int64, options BlockOptions) (CapabilityReader, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.source == nil || capability.Validate() != nil {
 		return nil, ErrInvalidCapability
 	}
 	if size < 0 {
@@ -88,7 +81,7 @@ func NewReaderWithSize(ctx context.Context, capability Capability, source BlockS
 		return nil, ErrSizeMismatch
 	}
 	return &Reader{
-		ctx: ctx, source: source, options: options, capability: capability, size: size, leaves: leaves,
+		ctx: ctx, source: s.source, options: options, capability: capability, size: size, leaves: leaves,
 		maxSize: -1, sized: true, cache: make(map[decodeNodeID][]Pair),
 	}, nil
 }
@@ -96,12 +89,12 @@ func NewReaderWithSize(ctx context.Context, capability Capability, source BlockS
 // NewReaderWithLimit scans the tree and rejects decoded content above maxSize.
 // A negative maxSize disables the size limit. Every block read uses ttl unchanged.
 // Content above the limit returns ErrDecodedTooLarge.
-func NewReaderWithLimit(ctx context.Context, capability Capability, source BlockSource, maxSize int64, ttl TTL, options BlockOptions) (*Reader, error) {
-	if source == nil || capability.Validate() != nil {
+func (s *blockCapabilityStore) NewReaderWithLimit(ctx context.Context, capability Capability, maxSize int64, ttl TTL, options BlockOptions) (CapabilityReader, error) {
+	if s.source == nil || capability.Validate() != nil {
 		return nil, ErrInvalidCapability
 	}
 	reader := &Reader{
-		ctx: ctx, source: source, options: options, capability: capability, maxSize: maxSize, ttl: ttl,
+		ctx: ctx, source: s.source, options: options, capability: capability, maxSize: maxSize, ttl: ttl,
 		cache: make(map[decodeNodeID][]Pair), summaries: make(map[decodeNodeID]treeSummary),
 	}
 	leaves, last, err := reader.inspect(capability.Root, capability.Level, true)
@@ -284,7 +277,7 @@ func (reader *Reader) readBatch(buffer []byte, offset int64, count int) (int, er
 			return written, err
 		}
 		if len(block.Data) != int(blockSize) {
-			return written, ErrInvalidBlockSize
+			return written, errors.Join(ErrInvalidBlock, ErrInvalidBlockSize)
 		}
 		// The capability and the size check above guarantee a valid length.
 		node, _ := DecryptNodeFromSource(block.Data, pairs[i].Key, 0)
@@ -483,7 +476,7 @@ func (reader *Reader) decrypt(pair Pair, level Level) ([]byte, error) {
 		return nil, err
 	}
 	if len(block) != int(reader.capability.BlockSize) {
-		return nil, ErrInvalidBlockSize
+		return nil, errors.Join(ErrInvalidBlock, ErrInvalidBlockSize)
 	}
 	return DecryptNodeFromSource(block, pair.Key, level)
 }

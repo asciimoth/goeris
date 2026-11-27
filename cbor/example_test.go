@@ -1,6 +1,7 @@
 package cbor_test
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/asciimoth/goeris"
@@ -8,7 +9,8 @@ import (
 )
 
 func Example() {
-	capability, blocks, err := eris.EncodeRecommended([]byte("example"), eris.Secret{})
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	capability, err := eris.NewBlockCapabilityStore(blocks).EncodeRecommended(context.Background(), []byte("example"), eris.Secret{}, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}

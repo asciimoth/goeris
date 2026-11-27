@@ -43,7 +43,7 @@ var (
 	// ErrDecodedTooLarge means that content exceeds the decoded limit or the
 	// maximum size supported by the current system.
 	ErrDecodedTooLarge = errors.New("eris: decoded content is too large")
-	// ErrInvalidInput means that an encoder received a nil reader or block sink.
+	// ErrInvalidInput means that an encoder received a nil input reader.
 	ErrInvalidInput = errors.New("eris: invalid encoding input")
 	// ErrInvalidSize means that a declared decoded size is negative.
 	ErrInvalidSize = errors.New("eris: invalid decoded size")
@@ -129,7 +129,7 @@ type Pair struct {
 // BlockSet is an in-memory set of encrypted blocks, indexed by reference.
 // Initialize Blocks before writes. A nil Blocks map is readable but rejects
 // writes with ErrMissingBlock. Copies of a BlockSet share the same map.
-// Encode owns the slices in the set. Decode does not modify them. Concurrent
+// PutBlock stores a copy of each block. GetBlock returns a copy. Concurrent
 // reads are safe only while no caller changes the map or its blocks.
 // BlockSet is a terminal store and ignores TTL. It checks cancellation before
 // each request. Puts preserve true HighPriority and Root flags. Explicit

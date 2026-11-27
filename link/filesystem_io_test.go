@@ -103,7 +103,7 @@ func TestFSFileOwnershipAndLimits(t *testing.T) {
 			if limit == 0 {
 				limit = link.DefaultMaxLinkSize
 			}
-			wrapped, err := link.NewFSWithLimit(base, blocks, limit, eris.BlockOptions{})
+			wrapped, err := link.NewFSWithLimit(base, eris.NewBlockCapabilityStore(blocks), limit, eris.BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -56,18 +56,18 @@ type node struct {
 // system. It uses ctx only for this initial read and does not retain it.
 // Later operations use their own contexts. It does not read regular files.
 //
-// This compatibility function wraps Store.OpenFS.
-func OpenFS(ctx context.Context, capability eris.Capability, source eris.BlockSource, options eris.BlockOptions) (*FS, error) {
-	return storeFromSource(source, options).OpenFS(ctx, capability)
+// For repeated operations, use [Store.OpenFS].
+func OpenFS(ctx context.Context, capability eris.Capability, content eris.CapabilityStore, options eris.BlockOptions) (*FS, error) {
+	return NewStore(content, options).OpenFS(ctx, capability)
 }
 
 // OpenFSWithLimit opens an image whose top-level and nested decoded indexes
 // are each at most limit bytes. A non-positive limit is invalid.
 // It keeps a copy of options for all later block reads.
 //
-// This compatibility function wraps Store.OpenFSWithLimit.
-func OpenFSWithLimit(ctx context.Context, capability eris.Capability, source eris.BlockSource, limit int64, options eris.BlockOptions) (*FS, error) {
-	return storeFromSource(source, options).OpenFSWithLimit(ctx, capability, limit)
+// For repeated operations, use [Store.OpenFSWithLimit].
+func OpenFSWithLimit(ctx context.Context, capability eris.Capability, content eris.CapabilityStore, limit int64, options eris.BlockOptions) (*FS, error) {
+	return NewStore(content, options).OpenFSWithLimit(ctx, capability, limit)
 }
 
 // OpenFS reads the root index. Later operations use their own contexts.
@@ -299,21 +299,32 @@ func (item *node) openRegular(ctx context.Context, path string) (ReadSeekCloser,
 	if item.block != nil {
 		return newMountBlockFile(ctx, item), nil
 	}
+	reader, err := item.openRegularReader(ctx)
+	if err != nil {
+		return nil, pathError("open", path, err)
+	}
+	return &regularFile{ctx: ctx, node: item, CapabilityReader: reader}, nil
+}
+
+func (item *node) openRegularReader(ctx context.Context) (eris.CapabilityReader, error) {
 	var reader eris.CapabilityReader
 	var err error
-	item.mu.Lock()
-	size, known := item.size, item.sizeKnown
-	item.mu.Unlock()
-	if known {
+	if size := item.Size(); size >= 0 {
 		reader, err = item.store.content.NewReaderWithSize(ctx, item.capability, size, item.store.options)
 	} else {
 		reader, err = item.store.content.NewReader(ctx, item.capability, item.store.options)
 	}
 	if err != nil {
-		return nil, pathError("open", path, err)
+		return nil, err
 	}
-	item.setSize(reader.Size())
-	return &regularFile{ctx: ctx, node: item, CapabilityReader: reader}, nil
+	if reader == nil {
+		return nil, stdfs.ErrInvalid
+	}
+	if err := item.recordSize(reader.Size()); err != nil {
+		_ = reader.Close()
+		return nil, err
+	}
+	return reader, nil
 }
 
 // OpenFile opens a regular file and returns its random-access interface. It
@@ -454,36 +465,28 @@ func (node *node) Size() int64 {
 	return node.size
 }
 
-func (node *node) contentSize(ctx context.Context) (int64, error) {
+// Keep the index size, or the first size learned for a version 1 file.
+func (node *node) recordSize(size int64) error {
 	node.mu.Lock()
-	if node.sizeKnown {
-		size := node.size
-		node.mu.Unlock()
-		return size, nil
+	defer node.mu.Unlock()
+	if size < 0 {
+		return eris.ErrInvalidSize
 	}
-	node.mu.Unlock()
-	reader, err := node.store.content.NewReader(ctx, node.capability, node.store.options)
-	if err != nil {
-		return 0, err
+	if node.sizeKnown && node.size != size {
+		return ErrSizeMismatch
 	}
-	defer func() { _ = reader.Close() }()
-	size := reader.Size()
-	node.setSize(size)
-	return size, nil
-}
-
-func (node *node) setSize(size int64) {
-	node.mu.Lock()
 	node.size = size
 	node.sizeKnown = true
-	node.mu.Unlock()
+	return nil
 }
 
 func (node *node) info(ctx context.Context) (stdfs.FileInfo, error) {
-	if node.kind == Regular || node.kind == Executable {
-		if _, err := node.contentSize(ctx); err != nil {
+	if node.Size() < 0 {
+		reader, err := node.openRegularReader(ctx)
+		if err != nil {
 			return nil, err
 		}
+		_ = reader.Close()
 	}
 	return node, nil
 }

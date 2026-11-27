@@ -52,7 +52,8 @@ func NewMount(ctx context.Context, source eris.BlockSource, options eris.BlockOp
 	if source == nil {
 		return &Mount{}
 	}
-	return NewMountWithStore(ctx, storeFromSource(source, options), source, options)
+	images := NewStore(eris.NewBlockCapabilityStore(source), options)
+	return NewMountWithStore(ctx, images, source, options)
 }
 
 // NewMountWithStore exposes decoded content and fs/C trees from images and

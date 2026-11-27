@@ -155,7 +155,8 @@ func TestHTTPRootOnReadError(t *testing.T) {
 
 func TestHTTPDecodedContentRoot(t *testing.T) {
 	content := bytes.Repeat([]byte("root for all content blocks\n"), 200)
-	capability, blocks, err := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	capability, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), content, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +166,7 @@ func TestHTTPDecodedContentRoot(t *testing.T) {
 	}
 	for _, high := range []bool{false, true} {
 		terminal := &priorityProbe{BlockSet: blocks}
-		handler := erishttp.Handler{Blocks: terminal}
+		handler := erishttp.Handler{Content: eris.NewBlockCapabilityStore(terminal)}
 		request := httptest.NewRequest(http.MethodGet, "http://example/uri-res/N2R?"+capability.String(), nil)
 		if high {
 			request.Header.Set(erishttp.RootHeader, "true")

@@ -7,7 +7,11 @@ import (
 	"github.com/asciimoth/goeris/internal/batch"
 )
 
-// Prefetch requests all blocks referenced by capability. It reads and checks
+func (s *blockCapabilityStore) Prefetch(ctx context.Context, capability Capability, ttl TTL, options BlockOptions) error {
+	return prefetch(ctx, capability, s.source, ttl, options)
+}
+
+// prefetch requests all blocks referenced by capability. It reads and checks
 // internal nodes to discover references, but never reads content leaves, even
 // the final padding leaf. Repeated internal subtrees are scanned only once.
 // Calls use ctx, ttl, and options unchanged, with batches of at most 64 hints
@@ -17,7 +21,7 @@ import (
 // errors, but cannot report failures of the best-effort hints. Success does
 // not guarantee that content exists, is valid, or has reached a cache. Call
 // Prefetch in a caller-managed goroutine if the traversal must be asynchronous.
-func Prefetch(ctx context.Context, capability Capability, source BlockSource, ttl TTL, options BlockOptions) error {
+func prefetch(ctx context.Context, capability Capability, source BlockSource, ttl TTL, options BlockOptions) error {
 	if source == nil || capability.Validate() != nil {
 		return ErrInvalidCapability
 	}
@@ -49,7 +53,7 @@ func (reader *Reader) Prefetch(ctx context.Context) error {
 	}
 	capability, source, ttl, options := reader.capability, reader.source, reader.ttl, reader.options
 	reader.mu.Unlock()
-	return Prefetch(ctx, capability, source, ttl, options)
+	return prefetch(ctx, capability, source, ttl, options)
 }
 
 // prefetchPairs sends bounded batches. All request storage stays local; sources

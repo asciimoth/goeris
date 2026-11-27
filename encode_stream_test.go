@@ -11,17 +11,19 @@ import (
 	"github.com/asciimoth/goeris/internal/batch"
 )
 
-func TestEncodeContentMatchesCoreEncoder(t *testing.T) {
+func TestEncodeContentShortReadsMatchByteEncoding(t *testing.T) {
 	t.Parallel()
 	for _, size := range []BlockSize{BlockSize1KiB, BlockSize32KiB} {
 		for _, length := range []int{0, 1, int(size), int(size) + 17, int(size)*17 + 3} {
 			content := deterministicBytes(length)
-			wantCap, wantBlocks, err := Encode(content, Secret{1, 2, 3}, size)
+			wantBlocks := BlockSet{Blocks: make(map[Reference]Block)}
+			wantCap, err := NewBlockCapabilityStore(wantBlocks).Encode(t.Context(), content, Secret{1, 2, 3}, size, BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			blocks := BlockSet{Blocks: make(map[Reference]Block)}
-			gotCap, err := EncodeContent(context.Background(), bytes.NewReader(content), Secret{1, 2, 3}, size, blocks, BlockOptions{})
+			input := smallChunkReader{Reader: bytes.NewReader(content), max: 37}
+			gotCap, err := NewBlockCapabilityStore(blocks).EncodeContent(t.Context(), input, Secret{1, 2, 3}, size, BlockOptions{})
 			if err != nil || gotCap != wantCap || !reflect.DeepEqual(blocks, wantBlocks) {
 				t.Fatalf("size %d length %d mismatch: %v", size, length, err)
 			}
@@ -29,48 +31,57 @@ func TestEncodeContentMatchesCoreEncoder(t *testing.T) {
 	}
 }
 
-func TestIncrementalEncoderMatchesMultiLevelCoreTree(t *testing.T) {
+func TestMultiLevelEncodingCompatibility(t *testing.T) {
 	t.Parallel()
+	// The original in-memory encoder produced this three-level tree.
+	const want = "urn:eris:BIBQLXRNQHXV2QYI2AXXFPT7NOCNN3ZB5BL4HTWTK5WIGTQHGJTQ7DATXIPUKHSW6T2EVHQMLLO6N7EGURQD44QYLV3KZ4EKZNOMW3TVFA"
 	content := deterministicBytes(int(BlockSize1KiB)*257 + 3)
-	wantCap, wantBlocks, err := Encode(content, Secret{9}, BlockSize1KiB)
-	if err != nil {
-		t.Fatal(err)
-	}
 	blocks := BlockSet{Blocks: make(map[Reference]Block)}
-	gotCap, err := EncodeContent(context.Background(), bytes.NewReader(content), Secret{9}, BlockSize1KiB, blocks, BlockOptions{})
-	if err != nil || gotCap != wantCap || !reflect.DeepEqual(blocks, wantBlocks) {
-		t.Fatalf("multi-level encoding mismatch: %v", err)
+	store := NewBlockCapabilityStore(blocks)
+	got, err := store.EncodeContent(t.Context(), bytes.NewReader(content), Secret{9}, BlockSize1KiB, BlockOptions{})
+	if err != nil || got.String() != want || len(blocks.Blocks) != 19 {
+		t.Fatalf("encoded %v in %d distinct blocks: %v", got, len(blocks.Blocks), err)
+	}
+	decoded, err := store.Decode(t.Context(), got, BlockOptions{})
+	if err != nil || !bytes.Equal(decoded, content) {
+		t.Fatalf("multi-level decode returned %d bytes: %v", len(decoded), err)
 	}
 }
 
 func TestEncodeContentErrors(t *testing.T) {
 	sentinel := errors.New("sentinel")
-	if _, err := EncodeContent(context.Background(), nil, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, ErrInvalidInput) {
+	if _, err := newTestStore().EncodeContent(context.Background(), nil, Secret{}, BlockSize1KiB, BlockOptions{}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("nil reader error = %v", err)
 	}
-	if _, err := EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, BlockSize1KiB, nil, BlockOptions{}); !errors.Is(err, ErrInvalidInput) {
+	if _, err := NewBlockCapabilityStore(nil).EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, BlockSize1KiB, BlockOptions{}); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("nil sink error = %v", err)
 	}
-	if _, err := EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, 1, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
+	if _, err := newTestStore().EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, 1, BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Fatalf("invalid size error = %v", err)
 	}
-	if _, err := EncodeContent(context.Background(), errorReader{sentinel}, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, sentinel) {
+	if _, err := newTestStore().EncodeContent(context.Background(), errorReader{sentinel}, Secret{}, BlockSize1KiB, BlockOptions{}); !errors.Is(err, sentinel) {
 		t.Fatalf("reader error = %v", err)
 	}
-	if _, err := EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, BlockSize1KiB, errorSink{sentinel}, BlockOptions{}); !errors.Is(err, sentinel) {
+	if _, err := NewBlockCapabilityStore(NewCombinedBlockStore(errorSink{sentinel})).EncodeContent(context.Background(), bytes.NewReader(nil), Secret{}, BlockSize1KiB, BlockOptions{}); !errors.Is(err, sentinel) {
 		t.Fatalf("sink error = %v", err)
 	}
-	if _, err := EncodeContent(context.Background(), bytes.NewReader(make([]byte, BlockSize1KiB)), Secret{}, BlockSize1KiB, &countingSink{failAt: 2, err: sentinel}, BlockOptions{}); !errors.Is(err, sentinel) {
-		t.Fatalf("second leaf sink error = %v", err)
-	}
-	if _, err := EncodeContent(context.Background(), bytes.NewReader(make([]byte, BlockSize1KiB*2)), Secret{}, BlockSize1KiB, &countingSink{failAt: 4, err: sentinel}, BlockOptions{}); !errors.Is(err, sentinel) {
-		t.Fatalf("parent sink error = %v", err)
-	}
-	if _, err := EncodeContent(context.Background(), bytes.NewReader(make([]byte, BlockSize1KiB*16)), Secret{}, BlockSize1KiB, &countingSink{failAt: 17, err: sentinel}, BlockOptions{}); !errors.Is(err, sentinel) {
-		t.Fatalf("full parent sink error = %v", err)
-	}
-	if _, err := EncodeContent(context.Background(), bytes.NewReader(make([]byte, BlockSize1KiB*15)), Secret{}, BlockSize1KiB, &countingSink{failAt: 17, err: sentinel}, BlockOptions{}); !errors.Is(err, sentinel) {
-		t.Fatalf("final leaf parent sink error = %v", err)
+	for _, tc := range []struct {
+		name           string
+		blocks, failAt int
+	}{
+		{"second leaf", 1, 2},
+		{"parent", 2, 4},
+		{"full parent", 16, 17},
+		{"final leaf parent", 15, 17},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &countingSink{failAt: tc.failAt, err: sentinel}
+			store := NewBlockCapabilityStore(NewCombinedBlockStore(sink))
+			input := bytes.NewReader(make([]byte, tc.blocks*int(BlockSize1KiB)))
+			if _, err := store.EncodeContent(t.Context(), input, Secret{}, BlockSize1KiB, BlockOptions{}); !errors.Is(err, sentinel) {
+				t.Fatalf("write %d: %v", tc.failAt, err)
+			}
+		})
 	}
 	if _, err := (&treeEncoder{ctx: context.Background()}).putNode(nil, 0, BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Fatalf("invalid node error = %v", err)
@@ -82,7 +93,7 @@ func TestEncodeContentErrors(t *testing.T) {
 	if _, err := encoder.parent(255); !errors.Is(err, ErrInvalidTree) {
 		t.Fatalf("excessive parent level error = %v", err)
 	}
-	if _, err := NewReader(context.Background(), Capability{}, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, ErrInvalidCapability) {
+	if _, err := newTestStore().NewReader(context.Background(), Capability{}, BlockOptions{}); !errors.Is(err, ErrInvalidCapability) {
 		t.Fatalf("invalid capability error = %v", err)
 	}
 }
@@ -91,7 +102,8 @@ func TestEncodeContentRecommended(t *testing.T) {
 	for _, size := range []int{0, 1, 1023, 1024, 16383, 16384, 16385, 32768, 65536, 17*32768 + 3} {
 		content := deterministicBytes(size)
 		secret := Secret{1, 2, 3}
-		want, wantBlocks, err := EncodeRecommended(content, secret)
+		wantBlocks := BlockSet{Blocks: make(map[Reference]Block)}
+		want, err := NewBlockCapabilityStore(wantBlocks).EncodeRecommended(t.Context(), content, secret, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +113,7 @@ func TestEncodeContentRecommended(t *testing.T) {
 			smallChunkReader{Reader: bytes.NewReader(content), max: 37},
 		} {
 			blocks := BlockSet{Blocks: make(map[Reference]Block)}
-			got, err := EncodeContentRecommended(context.Background(), input, secret, blocks, BlockOptions{})
+			got, err := NewBlockCapabilityStore(blocks).EncodeContentRecommended(context.Background(), input, secret, BlockOptions{})
 			if err != nil || got != want || !reflect.DeepEqual(blocks, wantBlocks) {
 				t.Fatalf("size %d, input %T: capability or blocks differ: %v", size, input, err)
 			}
@@ -110,18 +122,13 @@ func TestEncodeContentRecommended(t *testing.T) {
 }
 
 func TestEncodeContentRecommendedErrors(t *testing.T) {
-	for _, input := range []io.Reader{nil, bytes.NewReader(nil)} {
-		var sink BlockSink
-		if input == nil {
-			sink = BlockSet{Blocks: make(map[Reference]Block)}
-		}
-		if _, err := EncodeContentRecommended(context.Background(), input, Secret{}, sink, BlockOptions{}); !errors.Is(err, ErrInvalidInput) {
-			t.Fatalf("nil input or sink: %v", err)
-		}
+	store := newTestStore()
+	if _, err := store.EncodeContentRecommended(t.Context(), nil, Secret{}, BlockOptions{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("nil input: %v", err)
 	}
 	sentinel := errors.New("storage failed")
 	for _, size := range []int{0, 16384, 65536} {
-		capability, err := EncodeContentRecommended(context.Background(), bytes.NewReader(make([]byte, size)), Secret{}, errorSink{sentinel}, BlockOptions{})
+		capability, err := NewBlockCapabilityStore(NewCombinedBlockStore(errorSink{sentinel})).EncodeContentRecommended(context.Background(), bytes.NewReader(make([]byte, size)), Secret{}, BlockOptions{})
 		if !errors.Is(err, sentinel) || capability != (Capability{}) {
 			t.Fatalf("size %d: failed write returned %v, %v", size, capability, err)
 		}
@@ -131,7 +138,10 @@ func TestEncodeContentRecommendedErrors(t *testing.T) {
 func TestEncodeContentFinalParentError(t *testing.T) {
 	sentinel := errors.New("storage failed")
 	// Completing the last partial subtree can fill and flush its parent.
-	if _, err := EncodeContent(context.Background(), bytes.NewReader(make([]byte, 240*1024)), Secret{}, BlockSize1KiB, &countingSink{failAt: 258, err: sentinel}, BlockOptions{}); !errors.Is(err, sentinel) {
+	sink := &countingSink{failAt: 258, err: sentinel}
+	store := NewBlockCapabilityStore(NewCombinedBlockStore(sink))
+	input := bytes.NewReader(make([]byte, 240*1024))
+	if _, err := store.EncodeContent(t.Context(), input, Secret{}, BlockSize1KiB, BlockOptions{}); !errors.Is(err, sentinel) {
 		t.Fatalf("final parent: %v", err)
 	}
 }

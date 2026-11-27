@@ -73,12 +73,13 @@ func TestIndexRecommendedBlockSizeBoundary(t *testing.T) {
 		if size >= 16384 {
 			blockSize = eris.BlockSize32KiB
 		}
-		want, wantBlocks, err := eris.Encode(wire, eris.Secret{}, blockSize)
+		wantBlocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+		want, err := eris.NewBlockCapabilityStore(wantBlocks).Encode(t.Context(), wire, eris.Secret{}, blockSize, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-		got, err := EncodeIndex(context.Background(), index, eris.Secret{}, blocks, eris.BlockOptions{})
+		got, err := EncodeIndex(context.Background(), index, eris.Secret{}, eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
 		if err != nil || got != want || !reflect.DeepEqual(blocks, wantBlocks) {
 			t.Fatalf("index size %d: wrong capability or blocks: %v", size, err)
 		}

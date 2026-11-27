@@ -54,7 +54,8 @@ func testRepeatedSerialization(t *testing.T, payload []byte, mime string) {
 	t.Helper()
 
 	secret := eris.Secret{0: 0x45, 7: 0x52, 15: 0x49, 31: 0x53}
-	capability, blocks, err := eris.EncodeRecommended(payload, secret)
+	store := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)})
+	capability, err := store.EncodeRecommended(t.Context(), payload, secret, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +107,7 @@ func testRepeatedSerialization(t *testing.T, payload []byte, mime string) {
 		clear(encoded)
 
 		assertLinkMetadata(t, round, parsed, capability, uint64(len(payload)), mime, wantAttributes)
-		decoded, decodeErr := eris.Decode(parsed.Capability, blocks)
+		decoded, decodeErr := store.Decode(t.Context(), parsed.Capability, eris.BlockOptions{})
 		if decodeErr != nil {
 			t.Fatalf("round %d: decode payload: %v", round, decodeErr)
 		}

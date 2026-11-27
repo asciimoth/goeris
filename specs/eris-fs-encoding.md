@@ -57,7 +57,8 @@ link, and `Finish`. No extra deterministic mode is needed:
 
 ```go
 blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-builder := erisfs.NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+images := erisfs.NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+builder := images.NewBuilder(eris.Secret{})
 if err := builder.AddFile(ctx, "docs/readme", strings.NewReader("hello\n"), false); err != nil {
 	return err
 }
@@ -75,9 +76,9 @@ Here `eris` is `github.com/asciimoth/goeris` and `erisfs` is
 `github.com/asciimoth/goeris/fs`. Another implementation must select the same
 settings; its defaults or a claim of ERIS-FS compliance are not sufficient. File
 insertion order does not matter. The builder sorts the encoded map keys. With
-the low-level API, pass the required block size to `eris.EncodeContent`, set
-`Entry.Size` and `Entry.Type`, leave `Entry.Compression` as `Uncompressed`, and
-use `EncodeIndex`.
+the low-level API, pass the required block size to
+`CapabilityStore.EncodeContent`, set `Entry.Size` and `Entry.Type`, leave
+`Entry.Compression` as `Uncompressed`, and use `EncodeIndex`.
 
 Compression can also produce equal capabilities across implementations, but only
 if they produce or receive exactly the same Lzip bytes for each file. An 8 MiB
@@ -159,8 +160,8 @@ does not normalize Unicode names or symlink targets.
 The builder uses 1 KiB ERIS blocks for stored content shorter than 16384 bytes,
 and 32 KiB blocks for other content. The same rule applies to index bytes. For
 compressed files, the stored content is the Lzip stream; the index still records
-the length before compression. Explicit `eris.EncodeContent` calls use the block
-size supplied by the caller.
+the length before compression. Explicit `CapabilityStore.EncodeContent` calls
+use the block size supplied by the caller.
 
 The convergence secret is supplied by the caller. No random secret, timestamp,
 host name, file name, or operating system field is added during encoding. Nested
@@ -239,8 +240,9 @@ encoder algorithm, or use exactly the same precompressed bytes.
 
 - `TestERISOfficialVectors` uses all 13 positive and 12 negative vectors linked
   by ERIS 1.0.0 section 2.8.6. It checks exact capabilities and block bytes with
-  both the in-memory encoder and the streaming ERIS encoder. Both readers must
-  reject the negative vectors.
+  both the byte-slice and streaming methods of the capability store. The tests
+  require both `Decode` and `NewReader` followed by a full read to reject the
+  negative vectors.
 - `TestV2WireVectors` and `TestV2CanonicalMapVector` use hand-written CBOR bytes
   derived from the local CDDL. They cover every entry type, the compression tag,
   symlink components, and bytewise key order. These are library fixtures, not

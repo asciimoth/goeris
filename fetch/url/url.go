@@ -19,12 +19,13 @@ import (
 // synchronously within each fetch. Dependencies must support concurrent use
 // if fetches overlap. The client must enforce any caller-specific destination
 // and credential policy, including checks on resolved network addresses.
-// A transport, redirect policy or block sink can return
+// A transport, redirect policy or capability store can return
 // fetch.Failure{Code: "denied"} to report a policy refusal.
 // Verbose enables diagnostic messages that contain no source URLs or secrets.
 type Config struct {
-	Client   *http.Client
-	Store    eris.BlockSink
+	Client *http.Client
+	// Store writes downloaded blobs, files, and image indexes.
+	Store    eris.CapabilityStore
 	Progress Progress
 	Log      func(string)
 	Verbose  bool
@@ -46,7 +47,7 @@ type Fetcher struct{ config Config }
 // each HTTP retrieval. Use the fetch context to set a request-wide deadline.
 func New(c Config) (*Fetcher, error) {
 	if c.Client == nil || c.Store == nil || c.MaxBytes < 0 {
-		return nil, errors.New("url fetcher requires a client, a block sink and a nonnegative byte limit")
+		return nil, errors.New("url fetcher requires a client, a capability store and a nonnegative byte limit")
 	}
 	client := c.Client
 	redirect := client.CheckRedirect
@@ -255,7 +256,7 @@ func (f *Fetcher) fetchCandidate(ctx context.Context, s fetch.Source, opts fetch
 		return failure("internal"), false
 	case errors.Is(err, fetch.Failure{Code: "denied"}):
 		return failure("denied"), false
-	case err != nil:
+	case err != nil || cap.Validate() != nil:
 		return failure("store"), false
 	}
 	return fetch.Response{Status: "ok", Kind: opts.Kind, Cap: cap}, false
@@ -278,7 +279,7 @@ func (r tempReader) Read(p []byte) (int, error) {
 
 func (f *Fetcher) encode(ctx context.Context, s fetch.Source, o fetch.Options, r io.Reader) (eris.Capability, error) {
 	if o.Kind == "blob" {
-		return eris.EncodeContentRecommended(ctx, r, o.Secret, f.config.Store, eris.BlockOptions{})
+		return f.config.Store.EncodeContentRecommended(ctx, r, o.Secret, eris.BlockOptions{})
 	}
 	tree, err := o.NewTree(f.config.Store, eris.BlockOptions{})
 	if err != nil {

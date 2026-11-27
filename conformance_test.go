@@ -62,6 +62,7 @@ func TestERISOfficialVectors(t *testing.T) {
 			t.Fatal(err)
 		}
 		blocks := BlockSet{Blocks: make(map[Reference]Block)}
+		store := NewBlockCapabilityStore(blocks)
 		for ref, data := range vector.Blocks {
 			reference, err := ParseReference(ref)
 			if err != nil {
@@ -83,8 +84,8 @@ func TestERISOfficialVectors(t *testing.T) {
 		}
 		t.Run(path.Base(header.Name), func(t *testing.T) {
 			content := decode(vector.Content)
-			decoded, err := Decode(capability, blocks)
-			reader, readErr := NewReader(context.Background(), capability, blocks, BlockOptions{})
+			decoded, err := store.Decode(t.Context(), capability, BlockOptions{})
+			reader, readErr := store.NewReader(context.Background(), capability, BlockOptions{})
 			var streamed []byte
 			if readErr == nil {
 				streamed, readErr = io.ReadAll(reader)
@@ -108,13 +109,14 @@ func TestERISOfficialVectors(t *testing.T) {
 			root := blocks.Blocks[capability.Root.Reference]
 			root.Options.Root = true
 			blocks.Blocks[capability.Root.Reference] = root
-			actualCap, actualBlocks, err := Encode(content, secret, BlockSize(vector.Size))
+			actualBlocks := BlockSet{Blocks: make(map[Reference]Block)}
+			actualCap, err := NewBlockCapabilityStore(actualBlocks).Encode(t.Context(), content, secret, BlockSize(vector.Size), BlockOptions{})
 			if err != nil || actualCap != capability || !reflect.DeepEqual(actualBlocks, blocks) {
 				t.Fatalf("Encode differs from official capability or blocks: %v", err)
 			}
 			for _, chunk := range []int{37, 32768} {
 				actualBlocks = BlockSet{Blocks: make(map[Reference]Block)}
-				actualCap, err = EncodeContent(context.Background(), smallChunkReader{bytes.NewReader(content), chunk}, secret, BlockSize(vector.Size), actualBlocks, BlockOptions{})
+				actualCap, err = NewBlockCapabilityStore(actualBlocks).EncodeContent(context.Background(), smallChunkReader{bytes.NewReader(content), chunk}, secret, BlockSize(vector.Size), BlockOptions{})
 				if err != nil || actualCap != capability || !reflect.DeepEqual(actualBlocks, blocks) {
 					t.Fatalf("EncodeContent chunk %d differs from official capability or blocks: %v", chunk, err)
 				}

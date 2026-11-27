@@ -110,3 +110,79 @@ func TestFSErrorTextKeepsKnownFailures(t *testing.T) {
 		}
 	}
 }
+
+type sizedReaderStore struct {
+	eris.CapabilityStore
+	reader eris.CapabilityReader
+}
+
+func (s sizedReaderStore) NewReaderWithSize(context.Context, eris.Capability, int64, eris.BlockOptions) (eris.CapabilityReader, error) {
+	return s.reader, nil
+}
+
+type testContentReader struct {
+	*strings.Reader
+	closed   bool
+	closeErr error
+}
+
+func (r *testContentReader) Close() error {
+	r.closed = true
+	return r.closeErr
+}
+
+func TestResolvedCloseError(t *testing.T) {
+	data, _ := encodeFSLink(t, []byte("file content"))
+	cause := &privateError{detail: "private storage path"}
+	store := sizedReaderStore{reader: &testContentReader{Reader: strings.NewReader("file content"), closeErr: cause}}
+	image, err := link.NewFS(fstest.MapFS{"file": {Data: data}}, store, eris.BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := image.Open(t.Context(), "file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = file.Close()
+	var pathError *fs.PathError
+	if !errors.As(err, &pathError) || pathError.Path != "file" || pathError.Op != "close" ||
+		!errors.Is(err, cause) || strings.Contains(err.Error(), cause.detail) {
+		t.Fatalf("unexpected close error: %v", err)
+	}
+	if _, err := file.Stat(); !errors.Is(err, fs.ErrClosed) {
+		t.Fatalf("Stat after Close: %v", err)
+	}
+	if _, err := file.Read(make([]byte, 1)); !errors.Is(err, fs.ErrClosed) {
+		t.Errorf("Read after Close: %v", err)
+	}
+	if _, err := file.(io.ReaderAt).ReadAt(make([]byte, 1), 0); !errors.Is(err, fs.ErrClosed) {
+		t.Errorf("ReadAt after Close: %v", err)
+	}
+	if _, err := file.(io.Seeker).Seek(0, io.SeekStart); !errors.Is(err, fs.ErrClosed) {
+		t.Errorf("Seek after Close: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Errorf("second Close: %v", err)
+	}
+}
+
+func TestOpenRejectsInvalidStoreReader(t *testing.T) {
+	data, _ := encodeFSLink(t, []byte("file content"))
+	base := fstest.MapFS{"file": {Data: data}}
+	short := &testContentReader{Reader: strings.NewReader("file")}
+	for _, tc := range []struct {
+		reader eris.CapabilityReader
+		want   error
+	}{{nil, fs.ErrInvalid}, {short, link.ErrSizeMismatch}} {
+		image, err := link.NewFS(base, sizedReaderStore{reader: tc.reader}, eris.BlockOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if file, err := image.Open(t.Context(), "file"); file != nil || !errors.Is(err, tc.want) {
+			t.Fatalf("Open returned %T and %v, want %v", file, err, tc.want)
+		}
+	}
+	if !short.closed {
+		t.Error("Open did not close the rejected reader")
+	}
+}

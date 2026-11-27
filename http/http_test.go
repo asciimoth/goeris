@@ -47,7 +47,8 @@ func (body *trackingBody) Close() error {
 func testData(t *testing.T) (eris.Capability, eris.BlockSet, []byte) {
 	t.Helper()
 	content := bytes.Repeat([]byte("ERIS over an injected HTTP transport. "), 40)
-	capability, blocks, err := eris.Encode(content, eris.Secret{}, eris.BlockSize1KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	capability, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), content, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestHandlerCombinedPlainBlockSets(t *testing.T) {
 	t.Parallel()
 	capability, blocks, content := testData(t)
 	store := eris.NewCombinedBlockStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}, blocks)
-	handler := Handler{Blocks: store}
+	handler := Handler{Blocks: store, Content: eris.NewBlockCapabilityStore(store)}
 	for _, test := range []struct {
 		name string
 		want []byte
@@ -200,7 +201,7 @@ func TestHandlerBlocksAndChaining(t *testing.T) {
 func TestHandlerContent(t *testing.T) {
 	t.Parallel()
 	capability, blocks, content := testData(t)
-	handler := Handler{Blocks: blocks}
+	handler := Handler{Content: eris.NewBlockCapabilityStore(blocks)}
 	for _, method := range []string{nethttp.MethodGet, nethttp.MethodHead} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(method, N2RPath+"?"+capability.String(), nil))
@@ -220,7 +221,7 @@ func TestHandlerForwardsRequestContext(t *testing.T) {
 	capability, blocks, content := testData(t)
 	ctx := context.WithValue(context.Background(), requestContextKey{}, "request")
 	source := &contextSource{blocks: blocks, wantContext: ctx}
-	handler := Handler{Blocks: source}
+	handler := Handler{Content: eris.NewBlockCapabilityStore(source)}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil).WithContext(ctx)
 	handler.ServeHTTP(recorder, request)
@@ -235,6 +236,7 @@ func TestHandlerForwardsRequestContext(t *testing.T) {
 func TestHandlerErrors(t *testing.T) {
 	t.Parallel()
 	capability, blocks, _ := testData(t)
+	store := eris.NewBlockCapabilityStore(blocks)
 	ref := capability.Root.Reference
 	tests := []struct {
 		name    string
@@ -246,16 +248,17 @@ func TestHandlerErrors(t *testing.T) {
 		{"default next", Handler{}, nethttp.MethodGet, "urn:other:value", nethttp.StatusNotFound},
 		{"method", Handler{Blocks: blocks}, nethttp.MethodPost, ref.URN(), nethttp.StatusMethodNotAllowed},
 		{"put rejected", Handler{Blocks: blocks}, nethttp.MethodPut, ref.URN(), nethttp.StatusMethodNotAllowed},
-		{"nil source", Handler{}, nethttp.MethodGet, ref.URN(), nethttp.StatusInternalServerError},
+		{"no block source", Handler{Content: store}, nethttp.MethodGet, ref.URN(), nethttp.StatusInternalServerError},
+		{"no content store", Handler{Blocks: blocks}, nethttp.MethodGet, capability.String(), nethttp.StatusInternalServerError},
 		{"bad block URN", Handler{Blocks: blocks}, nethttp.MethodGet, "urn:blake2b:bad", nethttp.StatusBadRequest},
-		{"bad capability URN", Handler{Blocks: blocks}, nethttp.MethodGet, "urn:eris:bad", nethttp.StatusBadRequest},
+		{"bad capability URN", Handler{Content: store}, nethttp.MethodGet, "urn:eris:bad", nethttp.StatusBadRequest},
 		{"missing block", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrMissingBlock })}, nethttp.MethodGet, ref.URN(), nethttp.StatusNotFound},
 		{"wrapped missing", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) {
 			return nil, errors.Join(errors.New("store"), eris.ErrMissingBlock)
 		})}, nethttp.MethodGet, ref.URN(), nethttp.StatusNotFound},
 		{"source failure", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, errors.New("store") })}, nethttp.MethodGet, ref.URN(), nethttp.StatusInternalServerError},
 		{"corrupt block", Handler{Blocks: sourceFunc(func(eris.Reference) ([]byte, error) { return nil, eris.ErrInvalidBlock })}, nethttp.MethodGet, ref.URN(), nethttp.StatusInternalServerError},
-		{"missing content", Handler{Blocks: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}}, nethttp.MethodGet, capability.String(), nethttp.StatusNotFound},
+		{"missing content", Handler{Content: eris.NewBlockCapabilityStore(eris.BlockSet{})}, nethttp.MethodGet, capability.String(), nethttp.StatusNotFound},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -291,7 +294,8 @@ func TestClientGetBlock(t *testing.T) {
 
 func TestClientBlockSizeBoundaryAndClose(t *testing.T) {
 	t.Parallel()
-	capability, blocks, err := eris.Encode([]byte("large block"), eris.Secret{}, eris.BlockSize32KiB)
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	capability, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), []byte("large block"), eris.Secret{}, eris.BlockSize32KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,3 +536,150 @@ func (s *contextSource) GetBlock(ctx context.Context, requests []eris.BlockReque
 func (sourceFunc) PrefetchBlock(context.Context, []eris.BlockRequest) {}
 
 func (*contextSource) PrefetchBlock(context.Context, []eris.BlockRequest) {}
+
+type contentRequestStore struct {
+	eris.CapabilityStore
+	open func(context.Context, eris.Capability, int64, eris.TTL, eris.BlockOptions) (eris.CapabilityReader, error)
+}
+
+func (s contentRequestStore) NewReaderWithLimit(ctx context.Context, c eris.Capability, limit int64, ttl eris.TTL, options eris.BlockOptions) (eris.CapabilityReader, error) {
+	return s.open(ctx, c, limit, ttl, options)
+}
+
+func TestHandlerForwardsContentOptions(t *testing.T) {
+	capability := eris.Capability{BlockSize: eris.BlockSize1KiB}
+	for _, tc := range []struct {
+		ttl       string
+		status    int
+		wantCalls int
+	}{
+		{"7", nethttp.StatusLoopDetected, 1},
+		{"invalid", nethttp.StatusBadRequest, 0},
+	} {
+		req := httptest.NewRequest(nethttp.MethodHead, N2RPath+"?"+capability.String(), nil)
+		req.Header.Set(TTLHeader, tc.ttl)
+		req.Header.Set(HighPriorityHeader, "true")
+		req.Header.Set(RootHeader, "true")
+		calls := 0
+		store := contentRequestStore{open: func(ctx context.Context, c eris.Capability, limit int64, ttl eris.TTL, options eris.BlockOptions) (eris.CapabilityReader, error) {
+			calls++
+			if ctx != req.Context() || c != capability || limit != 123 || ttl != 7 || options != (eris.BlockOptions{HighPriority: true, Root: true}) {
+				t.Fatalf("unexpected store arguments: capability %v, limit %d, TTL %d, options %+v", c, limit, ttl, options)
+			}
+			return nil, eris.ErrTTLExpired
+		}}
+		w := httptest.NewRecorder()
+		Handler{Content: store, MaxContentSize: 123}.ServeHTTP(w, req)
+		if w.Code != tc.status || calls != tc.wantCalls {
+			t.Fatalf("TTL %q: status %d, calls %d", tc.ttl, w.Code, calls)
+		}
+	}
+}
+
+func TestHandlerSkipsContentStoreForCanceledRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	c := eris.Capability{BlockSize: eris.BlockSize1KiB}
+	req := httptest.NewRequestWithContext(ctx, nethttp.MethodHead, N2RPath+"?"+c.String(), nil)
+	store := contentRequestStore{open: func(context.Context, eris.Capability, int64, eris.TTL, eris.BlockOptions) (eris.CapabilityReader, error) {
+		t.Fatal("opened content for a canceled request")
+		return nil, nil
+	}}
+	w := httptest.NewRecorder()
+	Handler{Content: store}.ServeHTTP(w, req)
+	if w.Code != nethttp.StatusInternalServerError || w.Body.Len() != 0 {
+		t.Fatalf("canceled request: status %d, body %q", w.Code, w.Body)
+	}
+}
+
+type rangeReader struct {
+	*bytes.Reader
+	size   int64
+	closed bool
+}
+
+func (r *rangeReader) Size() int64 { return r.size }
+func (r *rangeReader) Close() error {
+	r.closed = true
+	return nil
+}
+
+func (r *rangeReader) Seek(offset int64, whence int) (int64, error) {
+	if offset != 0 {
+		return 0, errors.New("backend seek failed")
+	}
+	return r.Reader.Seek(offset, whence)
+}
+
+func (r *rangeReader) ReadAt(p []byte, offset int64) (int, error) {
+	n, err := r.Reader.ReadAt(p, offset)
+	// ReaderAt permits EOF with all the requested bytes at the end of input.
+	if err == nil && offset+int64(n) == r.Reader.Size() {
+		err = io.EOF
+	}
+	return n, err
+}
+
+func contentHandlerFor(reader eris.CapabilityReader) Handler {
+	store := contentRequestStore{open: func(context.Context, eris.Capability, int64, eris.TTL, eris.BlockOptions) (eris.CapabilityReader, error) {
+		return reader, nil
+	}}
+	return Handler{Content: store}
+}
+
+func TestHandlerReadsRangeAtOffset(t *testing.T) {
+	reader := &rangeReader{Reader: bytes.NewReader([]byte("file content")), size: 12}
+	capability := eris.Capability{BlockSize: eris.BlockSize1KiB}
+	req := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
+	req.Header.Set("Range", "bytes=5-")
+	w := httptest.NewRecorder()
+	contentHandlerFor(reader).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusPartialContent || w.Body.String() != "content" || !reader.closed {
+		t.Fatalf("range response %d %q, reader closed %t", w.Code, w.Body, reader.closed)
+	}
+}
+
+func TestHandlerAbortsShortContent(t *testing.T) {
+	reader := &rangeReader{Reader: bytes.NewReader([]byte("part")), size: 12}
+	capability := eris.Capability{BlockSize: eris.BlockSize1KiB}
+	req := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
+	defer func() {
+		if got := recover(); got != nethttp.ErrAbortHandler || !reader.closed {
+			t.Errorf("short content: panic %v, reader closed %t", got, reader.closed)
+		}
+	}()
+	contentHandlerFor(reader).ServeHTTP(httptest.NewRecorder(), req)
+}
+
+func TestHandlerChecksOpenedContentSize(t *testing.T) {
+	// Check the size returned by a custom store before serving even one byte.
+	capability := eris.Capability{BlockSize: eris.BlockSize1KiB}
+	req := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
+	req.Header.Set("Range", "bytes=0-0")
+	for _, tc := range []struct {
+		size   int64
+		status int
+	}{
+		{-1, nethttp.StatusInternalServerError},
+		{12, nethttp.StatusRequestEntityTooLarge},
+	} {
+		reader := &rangeReader{size: tc.size}
+		handler := contentHandlerFor(reader)
+		handler.MaxContentSize = 11
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != tc.status || w.Body.Len() != 0 || !reader.closed {
+			t.Fatalf("size %d: status %d, body %q, reader closed %t", tc.size, w.Code, w.Body, reader.closed)
+		}
+	}
+}
+
+func TestHandlerRejectsNilContentReader(t *testing.T) {
+	capability := eris.Capability{BlockSize: eris.BlockSize1KiB}
+	req := httptest.NewRequest(nethttp.MethodGet, N2RPath+"?"+capability.String(), nil)
+	w := httptest.NewRecorder()
+	contentHandlerFor(nil).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusInternalServerError || w.Body.Len() != 0 {
+		t.Fatalf("nil reader: status %d, body %q", w.Code, w.Body)
+	}
+}

@@ -29,22 +29,29 @@ func (t transport) RoundTrip(r *http.Request) (*http.Response, error) { return t
 func response(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body))}
 }
-func setup(t testing.TB, rt transport) *Fetcher {
+
+type testFetcher struct {
+	*Fetcher
+	blocks eris.BlockSet
+}
+
+func setup(t testing.TB, rt transport) *testFetcher {
 	t.Helper()
 	return setupWithLocks(t, rt, nil)
 }
 
-func setupWithLocks(t testing.TB, rt transport, locks fetch.LockDB) *Fetcher {
+func setupWithLocks(t testing.TB, rt transport, locks fetch.LockDB) *testFetcher {
 	t.Helper()
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	f, err := New(Config{
 		Client: &http.Client{Transport: rt},
-		Store:  eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)},
+		Store:  eris.NewBlockCapabilityStore(blocks),
 		Locks:  locks,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return f
+	return &testFetcher{f, blocks}
 }
 func source(t testing.TB, desc string) fetch.Source {
 	t.Helper()
@@ -133,6 +140,7 @@ func TestHTTPMirrorFetch(t *testing.T) {
 	}))
 	defer origin.Close()
 	store := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	contentStore := eris.NewBlockCapabilityStore(store)
 	tempDir := t.TempDir()
 	checkTempFiles := func(want int) {
 		t.Helper()
@@ -154,7 +162,7 @@ func TestHTTPMirrorFetch(t *testing.T) {
 	})
 	var locks recordingLocks
 	handler, err := New(Config{
-		Client: client, Store: store, Locks: &locks, MaxBytes: 13, TempStorage: fetch.TempDir(tempDir),
+		Client: client, Store: contentStore, Locks: &locks, MaxBytes: 13, TempStorage: fetch.TempDir(tempDir),
 		Progress: func(progress ProgressNode) {
 			if progress.Child != nil {
 				checkTempFiles(1)
@@ -174,7 +182,7 @@ func TestHTTPMirrorFetch(t *testing.T) {
 	if got.Status != "ok" || got.Kind != "blob" {
 		t.Fatal(got)
 	}
-	body, err := eris.Decode(got.Cap, store)
+	body, err := contentStore.Decode(t.Context(), got.Cap, eris.BlockOptions{})
 	if err != nil || string(body) != "Hello world!" {
 		t.Fatalf("decoded body %q, error %v", body, err)
 	}
@@ -185,7 +193,7 @@ func TestHTTPMirrorFetch(t *testing.T) {
 
 	// A separate fetcher can reuse the mirror even when the new primary has
 	// never been seen and the new request omits the checksum.
-	second, err := New(Config{Client: client, Store: store, Locks: &locks})
+	second, err := New(Config{Client: client, Store: contentStore, Locks: &locks})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +218,7 @@ func TestResponseBodyCloseFailureTriesMirror(t *testing.T) {
 		}
 		return resp, nil
 	})
-	store := handler.config.Store.(eris.BlockSet)
+	store := handler.blocks
 	var buffers []*testTempData
 	handler.config.TempStorage = tempStorageFunc(func(context.Context) (fetch.TempData, error) {
 		for _, buffer := range buffers {
@@ -251,7 +259,7 @@ func TestTreeFileMetadataAndSecret(t *testing.T) {
 	const name = `tools\hello`
 	const content = "Hello world!"
 	secret := eris.Secret{1}
-	store := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)})
 	handler, err := New(Config{
 		Client: &http.Client{Transport: transport(func(*http.Request) (*http.Response, error) {
 			return response(http.StatusOK, content), nil
@@ -274,11 +282,11 @@ func TestTreeFileMetadataAndSecret(t *testing.T) {
 	if !slices.Equal(entry.Path, []string{name}) || entry.Type != erisfs.Executable || entry.Size != int64(len(content)) || entry.Compression != erisfs.Uncompressed {
 		t.Fatalf("got entry %+v", entry)
 	}
-	fileCap, _, err := eris.EncodeRecommended([]byte(content), secret)
+	fileCap, err := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}).EncodeRecommended(t.Context(), []byte(content), secret, eris.BlockOptions{})
 	if err != nil || entry.Capability != fileCap {
 		t.Fatalf("got file capability %s, want %s, error %v", entry.Capability, fileCap, err)
 	}
-	decoded, err := eris.Decode(entry.Capability, store)
+	decoded, err := store.Decode(t.Context(), entry.Capability, eris.BlockOptions{})
 	if err != nil || string(decoded) != content {
 		t.Fatalf("got file %q, error %v", decoded, err)
 	}
@@ -286,7 +294,7 @@ func TestTreeFileMetadataAndSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootCap, _, err := eris.EncodeRecommended(encodedIndex, secret)
+	rootCap, err := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}).EncodeRecommended(t.Context(), encodedIndex, secret, eris.BlockOptions{})
 	if err != nil || got.Cap != rootCap {
 		t.Fatalf("got root capability %s, want %s, error %v", got.Cap, rootCap, err)
 	}
@@ -306,7 +314,7 @@ func TestResponseTrailers(t *testing.T) {
 			}))
 			defer server.Close()
 			store := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-			f, err := New(Config{Client: server.Client(), Store: store})
+			f, err := New(Config{Client: server.Client(), Store: eris.NewBlockCapabilityStore(store)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -359,7 +367,7 @@ func TestOverlongResponseTriesMirror(t *testing.T) {
 	if got.Status != "ok" || !slices.Equal(paths, []string{"/data", "/next"}) {
 		t.Fatalf("got %+v after requests to %v", got, paths)
 	}
-	body, err := eris.Decode(got.Cap, handler.config.Store.(eris.BlockSet))
+	body, err := handler.config.Store.Decode(t.Context(), got.Cap, eris.BlockOptions{})
 	if err != nil || string(body) != "Hello world!" {
 		t.Fatalf("decoded body %q, error %v", body, err)
 	}
@@ -419,7 +427,7 @@ func TestUnknownLengthExceedsByteLimit(t *testing.T) {
 	handler.config.TempStorage = fetch.TempDir(tempDir)
 	handler.config.MaxBytes = 11
 	got := handler.Fetch(t.Context(), source(t, description+"alt https://b.test/next\n"+checksum))
-	if got.Status != "fail" || got.Failure.Code != "limit" || !slices.Equal(requests, []string{"/data"}) || len(handler.config.Store.(eris.BlockSet).Blocks) != 0 {
+	if got.Status != "fail" || got.Failure.Code != "limit" || !slices.Equal(requests, []string{"/data"}) || len(handler.blocks.Blocks) != 0 {
 		t.Fatalf("got %+v after requests to %v", got, requests)
 	}
 	if files, err := os.ReadDir(tempDir); err != nil || len(files) != 0 {
@@ -452,7 +460,7 @@ func TestShortTempWrite(t *testing.T) {
 	store := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	tempDir := t.TempDir()
 	handler, err := New(Config{
-		Client: &http.Client{Transport: rt}, Store: store, TempStorage: shortTempStorage{fetch.TempDir(tempDir)},
+		Client: &http.Client{Transport: rt}, Store: eris.NewBlockCapabilityStore(store), TempStorage: shortTempStorage{fetch.TempDir(tempDir)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -516,7 +524,7 @@ func TestTemporaryReadFailuresStopFetch(t *testing.T) {
 			data := &testTempData{open: tc.open}
 			handler.config.TempStorage = tempStorageFunc(func(context.Context) (fetch.TempData, error) { return data, nil })
 			got := handler.Fetch(t.Context(), source(t, description+"alt https://b.test/next\n"+tc.fields))
-			if got.Status != "fail" || got.Failure.Code != "internal" || calls != 1 || !data.closed || len(handler.config.Store.(eris.BlockSet).Blocks) != 0 {
+			if got.Status != "fail" || got.Failure.Code != "internal" || calls != 1 || !data.closed || len(handler.blocks.Blocks) != 0 {
 				t.Fatalf("got %+v after %d requests, temporary data closed: %t", got, calls, data.closed)
 			}
 		})
@@ -532,7 +540,7 @@ func TestTemporaryCleanupFailureStopsFetch(t *testing.T) {
 	data := &testTempData{closeErr: errors.New("temporary cleanup failed")}
 	handler.config.TempStorage = tempStorageFunc(func(context.Context) (fetch.TempData, error) { return data, nil })
 	got := handler.Fetch(t.Context(), source(t, description+"alt https://b.test/next\n"+checksum))
-	if got.Status != "fail" || got.Failure.Code != "internal" || calls != 1 || !data.closed || len(handler.config.Store.(eris.BlockSet).Blocks) != 0 {
+	if got.Status != "fail" || got.Failure.Code != "internal" || calls != 1 || !data.closed || len(handler.blocks.Blocks) != 0 {
 		t.Fatalf("got %+v after %d requests, temporary data closed: %t", got, calls, data.closed)
 	}
 }
@@ -553,7 +561,7 @@ func TestCancellationDuringBodyRead(t *testing.T) {
 	data := &testTempData{}
 	handler.config.TempStorage = tempStorageFunc(func(context.Context) (fetch.TempData, error) { return data, nil })
 	got := handler.Fetch(ctx, source(t, description+"alt https://b.test/next\n"))
-	if got.Status != "fail" || got.Failure.Code != "cancelled" || calls != 1 || !data.closed || data.Len() != 0 || len(handler.config.Store.(eris.BlockSet).Blocks) != 0 {
+	if got.Status != "fail" || got.Failure.Code != "cancelled" || calls != 1 || !data.closed || data.Len() != 0 || len(handler.blocks.Blocks) != 0 {
 		t.Fatalf("got %+v after %d requests with %d buffered bytes, temporary data closed: %t", got, calls, data.Len(), data.closed)
 	}
 }
@@ -591,7 +599,7 @@ func TestTimeoutScope(t *testing.T) {
 					defer cancel()
 				}
 				store := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-				handler, err := New(Config{Client: client, Store: store})
+				handler, err := New(Config{Client: client, Store: eris.NewBlockCapabilityStore(store)})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -624,7 +632,7 @@ func TestCancellationBeforeChecksum(t *testing.T) {
 		}
 	}
 	got := handler.Fetch(ctx, source(t, description+checksum))
-	if got.Status != "fail" || got.Failure.Code != "cancelled" || !data.closed || len(handler.config.Store.(eris.BlockSet).Blocks) != 0 {
+	if got.Status != "fail" || got.Failure.Code != "cancelled" || !data.closed || len(handler.blocks.Blocks) != 0 {
 		t.Fatalf("got %+v, temporary data closed: %t", got, data.closed)
 	}
 }
@@ -649,7 +657,7 @@ func TestFailures(t *testing.T) {
 	}
 	for _, fields := range []string{"", "name a"} {
 		calls = 0
-		f.config.Store = brokenStore{}
+		f.config.Store = eris.NewBlockCapabilityStore(brokenStore{})
 		desc := description + "alt https://b.test/next\n" + fields
 		if got := f.Fetch(t.Context(), source(t, desc)); got.Failure.Code != "store" || calls != 1 {
 			t.Fatalf("got %+v after %d attempts", got, calls)
@@ -691,7 +699,7 @@ func TestDeniedMirrorSelection(t *testing.T) {
 	for _, tc := range []struct {
 		name, fields, status, code string
 		primaryStatus, requests    int
-		store                      eris.BlockSink
+		store                      eris.BlockSource
 	}{
 		{"retrieval", "", "ok", "", 403, 2, eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}},
 		{"blob publication", "", "fail", "denied", 200, 1, deniedStore{}},
@@ -707,7 +715,7 @@ func TestDeniedMirrorSelection(t *testing.T) {
 					}
 					return response(200, "Hello world!"), nil
 				})},
-				Store: tc.store,
+				Store: eris.NewBlockCapabilityStore(tc.store),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -750,7 +758,7 @@ func TestRedirects(t *testing.T) {
 			resp.Header.Set("Location", loc)
 			return resp, nil
 		})
-		f, err := New(Config{Store: brokenStore{}, Client: &http.Client{Transport: rt, CheckRedirect: func(r *http.Request, _ []*http.Request) error {
+		f, err := New(Config{Store: eris.NewBlockCapabilityStore(brokenStore{}), Client: &http.Client{Transport: rt, CheckRedirect: func(r *http.Request, _ []*http.Request) error {
 			if r.URL.Path == "/denied" {
 				return fmt.Errorf("blocked by destination policy: %w", fetch.Failure{Code: "denied"})
 			}
@@ -959,7 +967,7 @@ func TestInterruptedStore(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	handler := setup(t, func(*http.Request) (*http.Response, error) { return response(200, ""), nil })
-	handler.config.Store = cancellingStore{cancel: cancel}
+	handler.config.Store = eris.NewBlockCapabilityStore(cancellingStore{cancel: cancel})
 	if got := handler.Fetch(ctx, source(t, description)); got.Failure.Code != "cancelled" {
 		t.Fatal(got)
 	}
@@ -1022,7 +1030,7 @@ func TestProgressReportsShortReads(t *testing.T) {
 			}))
 			return resp, nil
 		})},
-		Store: store,
+		Store: eris.NewBlockCapabilityStore(store),
 		Progress: func(node ProgressNode) {
 			reports = append(reports, node.Completed)
 		},

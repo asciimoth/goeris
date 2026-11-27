@@ -44,14 +44,15 @@ func TestStreamingContext(t *testing.T) {
 	defer cancel()
 	data := bytes.Repeat([]byte("context"), 6000)
 	store := &checkedContextStore{BlockSet: BlockSet{Blocks: map[Reference]Block{}}, t: t, want: ctx}
-	cap, err := EncodeContent(ctx, bytes.NewReader(data), Secret{}, BlockSize1KiB, store, BlockOptions{})
+	contentStore := NewBlockCapabilityStore(store)
+	cap, err := contentStore.EncodeContent(ctx, bytes.NewReader(data), Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if store.writes < 40 {
 		t.Fatal("test did not write internal and leaf blocks")
 	}
-	reader, err := NewReader(ctx, cap, store, BlockOptions{})
+	reader, err := contentStore.NewReader(ctx, cap, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +61,7 @@ func TestStreamingContext(t *testing.T) {
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("read: %v", err)
 	}
-	sized, err := NewReaderWithSize(ctx, cap, store, int64(len(data)), BlockOptions{})
+	sized, err := contentStore.NewReaderWithSize(ctx, cap, int64(len(data)), BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +71,11 @@ func TestStreamingContext(t *testing.T) {
 	}
 	reads := store.reads
 	cancel()
+	if opened, err := contentStore.NewReader(ctx, cap, BlockOptions{}); opened != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("open after cancellation returned %v, %v", opened, err)
+	}
 	// The first leaf is cached. Cancellation must still stop the read.
-	for _, r := range []*Reader{reader, sized} {
+	for _, r := range []CapabilityReader{reader, sized} {
 		if _, err := r.ReadAt(make([]byte, 1), 0); !errors.Is(err, context.Canceled) {
 			t.Fatalf("canceled read: %v", err)
 		}
@@ -85,11 +89,12 @@ func TestEncodeStopsAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	store := &checkedContextStore{BlockSet: BlockSet{Blocks: map[Reference]Block{}}, t: t, want: ctx, cancel: cancel}
-	_, err := EncodeContent(ctx, bytes.NewReader(make([]byte, 3000)), Secret{}, BlockSize1KiB, store, BlockOptions{})
+	contentStore := NewBlockCapabilityStore(store)
+	_, err := contentStore.EncodeContent(ctx, bytes.NewReader(make([]byte, 3000)), Secret{}, BlockSize1KiB, BlockOptions{})
 	if !errors.Is(err, context.Canceled) || store.writes != 1 {
 		t.Fatalf("error %v, writes %d", err, store.writes)
 	}
-	_, err = EncodeContentRecommended(ctx, bytes.NewReader([]byte("data")), Secret{}, store, BlockOptions{})
+	_, err = contentStore.EncodeContentRecommended(ctx, bytes.NewReader([]byte("data")), Secret{}, BlockOptions{})
 	if !errors.Is(err, context.Canceled) || store.writes != 1 {
 		t.Fatalf("error %v, writes %d", err, store.writes)
 	}
@@ -111,12 +116,12 @@ func (input *cancelingInput) Read(p []byte) (int, error) {
 }
 
 func TestEncodeCancellationDuringInput(t *testing.T) {
-	for name, encode := range map[string]func(context.Context, io.Reader, BlockSink) (Capability, error){
-		"explicit size": func(ctx context.Context, input io.Reader, sink BlockSink) (Capability, error) {
-			return EncodeContent(ctx, input, Secret{}, BlockSize1KiB, sink, BlockOptions{})
+	for name, encode := range map[string]func(context.Context, io.Reader, CapabilityStore) (Capability, error){
+		"explicit size": func(ctx context.Context, input io.Reader, store CapabilityStore) (Capability, error) {
+			return store.EncodeContent(ctx, input, Secret{}, BlockSize1KiB, BlockOptions{})
 		},
-		"size sample": func(ctx context.Context, input io.Reader, sink BlockSink) (Capability, error) {
-			return EncodeContentRecommended(ctx, input, Secret{}, sink, BlockOptions{})
+		"size sample": func(ctx context.Context, input io.Reader, store CapabilityStore) (Capability, error) {
+			return store.EncodeContentRecommended(ctx, input, Secret{}, BlockOptions{})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -124,7 +129,7 @@ func TestEncodeCancellationDuringInput(t *testing.T) {
 			defer cancel()
 			input := &cancelingInput{cancel: cancel}
 			blocks := BlockSet{Blocks: map[Reference]Block{}}
-			_, err := encode(ctx, input, blocks)
+			_, err := encode(ctx, input, NewBlockCapabilityStore(blocks))
 			if !errors.Is(err, context.Canceled) || input.reads != 1 || len(blocks.Blocks) != 0 {
 				t.Fatalf("error %v, input reads %d, blocks %d", err, input.reads, len(blocks.Blocks))
 			}

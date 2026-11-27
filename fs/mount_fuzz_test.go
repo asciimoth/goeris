@@ -94,12 +94,14 @@ func FuzzMountContent(f *testing.F) {
 		if large {
 			size = eris.BlockSize32KiB
 		}
-		cap, blocks, err := eris.Encode(data, eris.Secret{}, size)
+		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+		store := eris.NewBlockCapabilityStore(blocks)
+		cap, err := store.Encode(t.Context(), data, eris.Secret{}, size, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		index := Index{Entries: []Entry{{Path: []string{"file"}, Capability: cap, Size: int64(len(data))}, {Path: []string{"link"}, Type: Symlink, Target: "file"}}}
-		root, err := EncodeIndex(context.Background(), index, eris.Secret{}, blocks, eris.BlockOptions{})
+		root, err := EncodeIndex(context.Background(), index, eris.Secret{}, store, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -152,7 +154,8 @@ func FuzzMountIndex(f *testing.F) {
 		if len(data) > 1<<14 || len(inner) > 1024 {
 			t.Skip()
 		}
-		cap, blocks, err := eris.Encode(data, eris.Secret{}, eris.BlockSize1KiB)
+		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+		cap, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), data, eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -207,7 +210,8 @@ func FuzzMountLinks(f *testing.F) {
 		}
 		ctx := context.Background()
 		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-		builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+		store := eris.NewBlockCapabilityStore(blocks)
+		builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 		for _, path := range []string{"file", "dir/file", "dir/child/file"} {
 			if err := builder.AddFile(ctx, path, strings.NewReader(path), false); err != nil {
 				t.Fatal(err)
@@ -223,7 +227,7 @@ func FuzzMountLinks(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		image, err := OpenFS(ctx, cap, blocks, eris.BlockOptions{})
+		image, err := OpenFS(ctx, cap, store, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -272,7 +276,8 @@ func FuzzMountBlocks(f *testing.F) {
 		if large {
 			size = eris.BlockSize32KiB
 		}
-		cap, blocks, err := eris.Encode(data, eris.Secret{}, size)
+		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+		cap, err := eris.NewBlockCapabilityStore(blocks).Encode(t.Context(), data, eris.Secret{}, size, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

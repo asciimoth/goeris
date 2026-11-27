@@ -7,11 +7,12 @@ this is the top node, not the first leaf written by the encoder.
 
 ## Encoding and storage
 
-`Encode`, `EncodeRecommended`, `EncodeContent`, and `EncodeContentRecommended`
-always set `Root` to `true` on the capability's root block. This includes empty
-content and content that fits in one block. Streaming encoders set the flag on
-the first write of the root block. Other blocks receive the caller's options
-unchanged. An explicit `Root: true` marks every block in the operation.
+The `CapabilityStore` methods `Encode`, `EncodeRecommended`, `EncodeContent`,
+and `EncodeContentRecommended` always set `Root` to `true` on the capability's
+root block. This includes empty content and content that fits in one block.
+Streaming encoders set the flag on the first write of the root block. Other
+blocks receive the caller's options unchanged. An explicit `Root: true` marks
+every block in the operation.
 
 `CapabilityStore.EncodeContentWithOptions` marks the root by default. With
 `PreserveRoot: true`, it passes the caller's `BlockOptions.Root` unchanged on

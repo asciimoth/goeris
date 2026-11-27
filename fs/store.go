@@ -15,18 +15,3 @@ type Store struct {
 func NewStore(content eris.CapabilityStore, options eris.BlockOptions) *Store {
 	return &Store{content: content, options: options}
 }
-
-func storeFromSource(source eris.BlockSource, options eris.BlockOptions) *Store {
-	return NewStore(eris.NewBlockCapabilityStore(source), options)
-}
-
-func storeFromSink(sink eris.BlockSink, options eris.BlockOptions) *Store {
-	if sink == nil {
-		return NewStore(nil, options)
-	}
-	if source, ok := sink.(eris.BlockSource); ok {
-		return storeFromSource(source, options)
-	}
-	// The compatibility API also accepts write-only sinks.
-	return storeFromSource(eris.NewCombinedBlockStore(sink), options)
-}

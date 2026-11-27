@@ -47,7 +47,8 @@ func TestSingleBlockResultCounts(t *testing.T) {
 
 func TestReaderBatchResultCounts(t *testing.T) {
 	content := make([]byte, 5*1024)
-	cap, blocks, err := Encode(content, Secret{}, BlockSize1KiB)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	cap, err := NewBlockCapabilityStore(blocks).Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,14 +68,14 @@ func TestReaderBatchResultCounts(t *testing.T) {
 				}
 				return got[:count], nil
 			}
-			reader, err := NewReaderWithSize(context.Background(), cap, source, int64(len(content)), BlockOptions{})
+			reader, err := NewBlockCapabilityStore(source).NewReaderWithSize(context.Background(), cap, int64(len(content)), BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			// Calling the batch step directly detects zero progress without hanging a
 			// whole Read call if the storage result count is not checked.
 			buffer := bytes.Repeat([]byte{0xcc}, 2048)
-			n, err := reader.readBatch(buffer, 0, 2)
+			n, err := reader.(*Reader).readBatch(buffer, 0, 2)
 			if n != 0 || !errors.Is(err, ErrInvalidBatchResult) || !bytes.Equal(buffer, bytes.Repeat([]byte{0xcc}, 2048)) {
 				t.Fatal("accepted malformed read batch", n, err)
 			}
@@ -93,7 +94,8 @@ func TestBatchResultErrorsPreserved(t *testing.T) {
 
 func TestReaderCancellationBetweenCachedLeaves(t *testing.T) {
 	content := make([]byte, 4*1024) // Identical leaves reuse the last-leaf cache.
-	capability, blocks, err := Encode(content, Secret{}, BlockSize1KiB)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	capability, err := NewBlockCapabilityStore(blocks).Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,11 +103,11 @@ func TestReaderCancellationBetweenCachedLeaves(t *testing.T) {
 	defer cancel()
 	source := &batchProbe{BlockSet: blocks}
 	source.MaxBatchSize = 1
-	reader, err := NewReaderWithSize(ctx, capability, source, int64(len(content)), BlockOptions{})
+	reader, err := NewBlockCapabilityStore(source).NewReaderWithSize(ctx, capability, int64(len(content)), BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	pair, err := reader.leafPair(0)
+	pair, err := reader.(*Reader).leafPair(0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +158,7 @@ func TestEncodeBatchBackpressure(t *testing.T) {
 			}
 			return nil, failure
 		}
-		cap, err := EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, sink, BlockOptions{})
+		cap, err := NewBlockCapabilityStore(sink).EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, BlockOptions{})
 		if err != failure || cap != (Capability{}) || len(sink.writes) != 1 {
 			t.Fatal(cap, err, sink.writes)
 		}
@@ -170,7 +172,8 @@ func FuzzReaderBatchResultCounts(f *testing.F) {
 	f.Fuzz(func(t *testing.T, count uint8, failed bool) {
 		ctx := context.Background()
 		content := make([]byte, 3*1024)
-		cap, blocks, err := Encode(content, Secret{}, BlockSize1KiB)
+		blocks := BlockSet{Blocks: make(map[Reference]Block)}
+		cap, err := NewBlockCapabilityStore(blocks).Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -193,12 +196,12 @@ func FuzzReaderBatchResultCounts(f *testing.F) {
 			}
 			return results, nil
 		}
-		reader, err := NewReaderWithSize(ctx, cap, source, int64(len(content)), BlockOptions{})
+		reader, err := NewBlockCapabilityStore(source).NewReaderWithSize(ctx, cap, int64(len(content)), BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		got := make([]byte, 2048)
-		n, err := reader.readBatch(got, 0, 2)
+		n, err := reader.(*Reader).readBatch(got, 0, 2)
 		switch {
 		case count > 2 || !failed && count != 2:
 			if n != 0 || !errors.Is(err, ErrInvalidBatchResult) {

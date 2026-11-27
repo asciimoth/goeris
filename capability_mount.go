@@ -14,7 +14,9 @@ import (
 type mountCapabilityStore struct{ root string }
 
 // NewMountCapabilityStore reads decoded files from an ERIS mount. An empty
-// root uses the same search paths as ResolvePath. The mount verifies content.
+// root uses ERIS_MNT. If that variable is empty, it tries /n/eris, then /eris.
+// ResolvePath looks up the canonical capability URN as a regular file under
+// the selected root. It follows symbolic links. The mount verifies content.
 // A failed lookup matches ErrMissingBlock only if every candidate is absent.
 func NewMountCapabilityStore(root string) CapabilityStore { return &mountCapabilityStore{root} }
 

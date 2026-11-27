@@ -50,7 +50,8 @@ func contextImage(t *testing.T) (eris.Capability, eris.BlockSet) {
 	t.Helper()
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}
-	nested := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	store := eris.NewBlockCapabilityStore(blocks)
+	nested := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	if err := nested.AddFile(ctx, "file", strings.NewReader("payload"), false); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +65,7 @@ func contextImage(t *testing.T) (eris.Capability, eris.BlockSet) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	root := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	if err := root.AddSubdirectory("nested", cap); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +106,7 @@ func TestFSOperationContexts(t *testing.T) {
 			initial, finish := context.WithCancel(context.Background())
 			defer finish()
 			source := &contextBlocks{BlockSet: blocks, t: t, want: initial}
-			image, err := OpenFS(initial, cap, source, eris.BlockOptions{})
+			image, err := OpenFS(initial, cap, eris.NewBlockCapabilityStore(source), eris.BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -131,7 +132,7 @@ func TestIOFSContextAndSub(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	source := &contextBlocks{BlockSet: blocks, t: t, want: ctx}
-	image, err := OpenFS(ctx, cap, source, eris.BlockOptions{})
+	image, err := OpenFS(ctx, cap, eris.NewBlockCapabilityStore(source), eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +167,7 @@ func TestIOFSContextAndSub(t *testing.T) {
 func TestDirectoryEntryRetainsContext(t *testing.T) {
 	blocks := eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}
 	data := bytes.Repeat([]byte("metadata"), 500)
-	cap, err := eris.EncodeContent(context.Background(), bytes.NewReader(data), eris.Secret{}, eris.BlockSize1KiB, blocks, eris.BlockOptions{})
+	cap, err := eris.NewBlockCapabilityStore(blocks).EncodeContent(context.Background(), bytes.NewReader(data), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +175,7 @@ func TestDirectoryEntryRetainsContext(t *testing.T) {
 	for _, fromOpen := range []bool{false, true} {
 		ctx, cancel := context.WithCancel(context.Background())
 		source := &contextBlocks{BlockSet: blocks, t: t, want: ctx}
-		image, err := OpenFS(ctx, index, source, eris.BlockOptions{})
+		image, err := OpenFS(ctx, index, eris.NewBlockCapabilityStore(source), eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +204,7 @@ func TestDirectoryEntryRetainsContext(t *testing.T) {
 		cancel()
 		// Use a fresh image to ensure the size is still unknown at cancellation.
 		source.want = context.Background()
-		image, err = OpenFS(source.want, index, source, eris.BlockOptions{})
+		image, err = OpenFS(source.want, index, eris.NewBlockCapabilityStore(source), eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -223,7 +224,8 @@ func TestBuilderContexts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	store := &contextBlocks{BlockSet: eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, t: t, want: ctx}
-	builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
+	contentStore := eris.NewBlockCapabilityStore(store)
+	builder := NewBuilder(contentStore, eris.Secret{}, eris.BlockOptions{})
 	for name, add := range map[string]func(context.Context, string, io.Reader, bool) error{
 		"file": builder.AddFile, "compressed": builder.AddCompressedFile, "auto": builder.AddAutoFile,
 	} {
@@ -242,7 +244,7 @@ func TestBuilderContexts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DecodeIndex(ctx, cap, store, eris.BlockOptions{}); err != nil {
+	if _, err := DecodeIndex(ctx, cap, contentStore, eris.BlockOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	cancel()
@@ -288,7 +290,7 @@ func TestBuilderCancellationDuringInput(t *testing.T) {
 			for _, cancelAt := range []int{1, 2} {
 				ctx, cancel := context.WithCancel(context.Background())
 				input := &cancelingInput{cancel: cancel, cancelAt: cancelAt}
-				builder := NewBuilder(eris.BlockSet{Blocks: map[eris.Reference]eris.Block{}}, eris.Secret{}, eris.BlockOptions{})
+				builder := NewBuilder(newTestStore(), eris.Secret{}, eris.BlockOptions{})
 				err := add(builder, ctx, input)
 				cancel()
 				if !errors.Is(err, context.Canceled) || input.reads != cancelAt || len(builder.Index().Entries) != 0 {
@@ -321,7 +323,7 @@ func TestNestedIndexWaitCanBeCanceled(t *testing.T) {
 		blockResult, blockErr, _ := eris.GetBlock(ctx, blocks, ref, ttl, eris.BlockOptions{})
 		return blockResult, blockErr
 	})
-	image, err := OpenFS(context.Background(), capability, source, eris.BlockOptions{})
+	image, err := OpenFS(context.Background(), capability, eris.NewBlockCapabilityStore(source), eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

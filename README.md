@@ -17,18 +17,17 @@ The `eris` package implements:
   with sequential and random access; and
 - combined block storage with ordered fallback and optional error reporting.
 
-Use `eris.ResolvePath(capability)` to find decoded content on a local mount that
-uses the [ERIS FUSE path layout](specs/eris-go-fuse-layout.md). It uses
-`ERIS_MNT` if set and nonempty. Otherwise, it tries `/n/eris`, then `/eris`. To
-select one mount, call `eris.ResolvePath(capability, mountPath)`. An empty mount
-path uses the same defaults as an omitted argument. An explicit mount or a
-nonempty `ERIS_MNT` limits the search to that mount.
+Use `eris.NewMountCapabilityStore(root).ResolvePath(ctx, capability)` to find
+decoded content on a local mount that uses the
+[ERIS FUSE path layout](specs/eris-go-fuse-layout.md). Set `root` to select one
+mount. An empty root uses `ERIS_MNT` if set and nonempty. Otherwise, it tries
+`/n/eris`, then `/eris`.
 
-The function returns an absolute path to the regular file at
-`<mount>/<full capability URN>`, or `""` if none is found. Relative mount paths
-use the current working directory. Invalid capabilities and file-system errors
-also return `""`. For an ERIS-FS capability, the result is the decoded index
-file. The function checks file metadata and trusts the mount to verify content.
+The method returns an absolute path to the regular file at
+`<mount>/<full capability URN>`. Relative mount paths use the current working
+directory. If all candidates are missing, the error matches
+`eris.ErrMissingBlock`. For an ERIS-FS capability, the file contains the decoded
+index. The mount verifies the content.
 
 The `fetch` package reads source descriptions, response frames, and route
 configuration for the [ERIS Fetch Protocol v1](specs/eris-fetchers-v1.md). Use
@@ -37,15 +36,15 @@ machine. `Source.ID` returns the prehashed lock key. `fetch.LookupRoute` finds
 the first matching route in the configured file order. Handlers can use
 `Options.NewTree` to build a flat ERIS-FS result with the selected compression
 profile. The `fetch/url` package retrieves HTTP and HTTPS sources and writes
-blob or tree results to a caller-provided block sink. It holds each download in
-memory before checksum verification and encoding. Set `url.Config.TempStorage`
-to `fetch.TempDir(dir)` to use temporary files, or supply a custom storage
-implementation. The fetcher releases the temporary data after each candidate.
-Set `MaxBytes` to stop the fetch if a candidate exceeds the byte limit. The HTTP
-client timeout applies to each candidate, and a context deadline applies to the
-entire fetch. The caller supplies the HTTP client and its destination policy.
-Set `url.Config.Progress` to receive download updates, or use `url.NodeProgress`
-to display them on a Zig progress node.
+blob or tree results to a caller-provided capability store. It holds each
+download in memory before checksum verification and encoding. Set
+`url.Config.TempStorage` to `fetch.TempDir(dir)` to use temporary files, or
+supply a custom storage implementation. The fetcher releases the temporary data
+after each candidate. Set `MaxBytes` to stop the fetch if a candidate exceeds
+the byte limit. The HTTP client timeout applies to each candidate, and a context
+deadline applies to the entire fetch. The caller supplies the HTTP client and
+its destination policy. Set `url.Config.Progress` to receive download updates,
+or use `url.NodeProgress` to display them on a Zig progress node.
 
 Go's HTTP client can reject percent-encoded ASCII host characters in source URLs
 and redirect targets.
@@ -205,16 +204,18 @@ The `http` package implements [ERIS over HTTP](specs/eer/http/index.md):
 - abstract block retrieval with no storage implementation; and
 - a client that uses a caller-supplied HTTP request executor.
 
-The HTTP package does not create or configure a network client or server.
-Applications supply the HTTP request executor, block source, handler chain, and
-server registration.
+The HTTP package does not create or configure a network client or server. Set
+`http.Handler.Blocks` to serve encrypted blocks and `http.Handler.Content` to
+serve decoded content. To serve both from one block source, set `Blocks` to the
+source and `Content` to `eris.NewBlockCapabilityStore(source)`.
 
 Set `http.Handler.MaxContentSize` to a positive byte limit when clients can
 request untrusted capabilities. The handler checks the full decoded size before
 sending content, including for HEAD and range requests. It returns HTTP 413 for
-content above the limit. Zero leaves the size unlimited. Encrypted block reads
-are unaffected. The handler checks request cancellation before each block fetch;
-the block source must honor context to cancel a fetch already in progress.
+content above the limit. Zero leaves the size unlimited. Range requests read
+from the decoded reader at the requested offsets. The limit applies only to
+decoded content. Both stores receive the request context and must honor it to
+cancel a read already in progress.
 
 The `s3` package implements the
 [ERIS object-storage recommendation](specs/eer/object-storage/index.md):
@@ -294,8 +295,8 @@ The `link` and `magnet` packages implement the
 [ERIS link file](specs/eer/linkfile/index.md) and
 [ERIS Magnet URI](specs/eer/magnet-uri/index.md) recommendations.
 
-`link.NewFS(base, source, options)` wraps any `io/fs.FS` and an
-`eris.BlockSource`. It exposes the content of ERIS link files through
+`link.NewFS(base, store, options)` wraps any `io/fs.FS` and an
+`eris.CapabilityStore`. It exposes the content of ERIS link files through
 context-aware methods. Use `link.NewIOFS(ctx, image)` with `fs.ReadFile` and
 other `io/fs` functions. It detects links by their magic bytes and keeps the
 original paths, including any `.eris` extension. Ordinary files remain readable.
@@ -303,17 +304,18 @@ Resolved files support `io.Seeker` and `io.ReaderAt`.
 
 `Stat` and directory entry `Info` report the declared content size and preserve
 the other base file metadata. Detection requires read access to regular files.
-These operations read base files but do not fetch linked content. Content reads
-fetch blocks as needed and check the declared size at the file end. Partial
-reads do not check unvisited blocks. Invalid links return errors. Resolution
-stops after one link; MIME and attributes do not change the content. Use the
-base FS to read a link file itself.
+With a block-backed store, these operations read only base files. Content reads
+fetch blocks as needed and check the declared size at the file end. With a mount
+store, metadata lookup opens the target file and checks its size. Partial reads
+do not check unvisited blocks. Invalid links return errors. Resolution stops
+after one link; MIME and attributes do not change the content. Use the base FS
+to read a link file itself.
 
 The default limit for an encoded link is 1 MiB. Use `link.NewFSWithLimit` to
 change it. The limit does not restrict decoded content. `fs.ReadFile` reads all
 content into memory; use `Open` and `io.LimitReader` for a content byte limit.
 The wrapper follows the base FS policy for symbolic links. Network timeouts and
-cancellation must be handled by the supplied block source.
+cancellation must be handled by the supplied capability store.
 
 The core `eris` package provides storage interfaces, an in-memory block set, and
 a combined store. It also provides raw content encoding and ERIS tree reading.
@@ -326,7 +328,13 @@ source with `eris.NewBlockCapabilityStore(source)`. Writes require the source to
 implement `eris.BlockSink`. A source with only read methods returns
 `eris.ErrReadOnly` on writes. For files on an ERIS mount, use
 `eris.NewMountCapabilityStore(root)`. This read-only store also implements
-`ResolvePath`. An empty root uses the same search paths as `eris.ResolvePath`.
+`ResolvePath`.
+
+The package-level encode, decode, reader, and prefetch functions have moved to
+`CapabilityStore`. Pass the store to ERIS-FS, the link filesystem, and the URL
+fetcher. Use the mount store's `ResolvePath` method for decoded file paths. For
+a write-only block sink, use
+`eris.NewBlockCapabilityStore(eris.NewCombinedBlockStore(sink))`.
 
 Use `CapabilityStore.EncodeContentWithOptions` to control block size and root
 marking for a stream. A zero `BlockSize` selects the recommended size. The
@@ -340,24 +348,28 @@ the block store second. Read and write operations return the first successful
 result, return the last error if all attempts fail, and stop on cancellation.
 `Prefetch` calls every store in order. It returns `nil` if any call succeeds and
 returns the last error if all calls fail. Once a reader opens, it uses that
-store for all reads. The reader reports any later read error to the caller. A
-failed write stops the chain if the store changed the input bytes or called
+store for all reads. Put the mount first when using `NewReaderWithSize`. A
+block-backed store can open a sized reader before it knows whether it has the
+blocks. If a later read finds a missing block, the caller receives the error.
+
+A failed write stops the chain if the store changed the input bytes or called
 `Read` on the input stream. A store that cannot handle a stream should reject it
 before reading. A failed write can leave encoded blocks in the destination.
 
-To store a blob from any `io.Reader`, use `EncodeContentRecommended`. It reads
-the source once, selects the recommended block size with at most 16 KiB of
-lookahead, writes the complete encrypted tree to an `eris.BlockSink`, and
-returns the read capability. This operation creates no file system index.
+To store a blob from any `io.Reader`, use `store.EncodeContentRecommended`. A
+block-backed store reads the source once, selects the recommended block size
+with at most 16 KiB of lookahead, writes the complete encrypted tree to an
+`eris.BlockSink`, and returns the read capability. This operation creates no
+file system index.
 
 ```go
-capability, err := eris.EncodeContentRecommended(ctx, input, secret, store, eris.BlockOptions{})
+capability, err := store.EncodeContentRecommended(ctx, input, secret, eris.BlockOptions{})
 if err != nil {
 	return err
 }
 fmt.Println(capability.String()) // urn:eris:...
 
-reader, err := eris.NewReader(ctx, capability, store, eris.BlockOptions{})
+reader, err := store.NewReader(ctx, capability, eris.BlockOptions{})
 if err != nil {
 	return err
 }
@@ -365,33 +377,32 @@ defer reader.Close()
 _, err = io.Copy(output, reader)
 ```
 
-Use `EncodeContent(ctx, input, secret, blockSize, sink, options)` to select the
+Use `store.EncodeContent(ctx, input, secret, blockSize, options)` to select the
 block size explicitly. Both encoders write with `eris.NoTTL`. A read or write
 error can leave blocks in the sink; save the capability only after a successful
 return.
 
-`NewReader` scans internal nodes and the final leaf to determine the decoded
-size. `NewReaderWithLimit(ctx, capability, source, maxBytes, ttl, options)`
-applies a size limit and passes `ttl` to every block read. A negative limit
-disables the limit. Use
-`NewReaderWithSize(ctx, capability, source, size, options)` when the decoded
-size is known; it opens without block I/O and checks tree shape and padding as
-content is read. Readers support `Read`, `ReadAt`, `Seek`, and `Close`. Closing
-a reader does not close its block source.
+On a block-backed store, `NewReader` scans internal nodes and the final leaf to
+determine the decoded size.
+`store.NewReaderWithLimit(ctx, capability, maxBytes, ttl, options)` applies a
+size limit and passes `ttl` to every block read. A negative limit disables the
+limit. Use `store.NewReaderWithSize(ctx, capability, size, options)` when the
+decoded size is known; it opens without block I/O and checks tree shape and
+padding as content is read. Readers support `Read`, `ReadAt`, `Seek`, and
+`Close`. Closing a reader does not close its block source.
 
-Readers send best-effort prefetch hints for demand blocks and likely next
-blocks. Sequential reads start with four leaves of read-ahead and grow to at
-most 32. A random jump resets this window. Demand hints and read-ahead cover at
-most 64 leaves per iteration. Speculation follows cached indexes only; it never
-adds block reads. `Seek` hints its target through the same cached paths. A
-bounded cache of 128 references suppresses repeated hints. Block-backed ERIS-FS
-files and compressed streams use this reader policy.
+Block-backed readers send best-effort prefetch hints for demand blocks and
+likely next blocks. Sequential reads start with four leaves of read-ahead and
+grow to at most 32. A random jump resets this window. Demand hints and
+read-ahead cover at most 64 leaves per iteration. Speculation follows cached
+indexes only; it never adds block reads. `Seek` hints its target through the
+same cached paths. A bounded cache of 128 references suppresses repeated hints.
+Block-backed ERIS-FS files and compressed streams use this reader policy.
 
 To request all content in advance, use:
 
 ```go
-err := eris.Prefetch(ctx, capability, source, eris.NoTTL, options)
-err = reader.Prefetch(ctx)          // Keeps the reader position.
+err := store.Prefetch(ctx, capability, eris.NoTTL, options)
 err = image.Prefetch(ctx, ".")      // All files and nested ERIS-FS indexes.
 err = image.Prefetch(ctx, "docs")   // Only this file or directory.
 ```
@@ -424,7 +435,7 @@ if err != nil {
 }
 defer cached.Close()
 
-reader, err := eris.NewReader(ctx, capability, cached, eris.BlockOptions{})
+reader, err := eris.NewBlockCapabilityStore(cached).NewReader(ctx, capability, eris.BlockOptions{})
 ```
 
 All three limits must be positive. Blocks larger than `CapacityBytes` can be
@@ -454,26 +465,24 @@ does not track changes made directly to the source. A read-only source returns
 `eris.ErrNoBlockStorage` for writes. TTL values pass through unchanged and do
 not set cache expiry times.
 
-Raw content APIs now belong to the root package. Replace `fs.EncodeContent` with
-`eris.EncodeContent`. The shared reader has moved from `internal/erisreader` to
-`eris`; its size-limit error is `eris.ErrDecodedTooLarge`. The root streaming
-encoders return `eris.ErrInvalidInput` for a nil input reader or block sink.
-
-For content already held in memory, the byte-slice API is also available:
+The byte-slice encode methods return a capability and an error. To keep the
+encrypted blocks in memory, supply a writable `BlockSet` when you create the
+store:
 
 ```go
-secret := eris.Secret{} // The null convergence secret.
-capability, blocks, err := eris.EncodeRecommended(content, secret)
+blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+store := eris.NewBlockCapabilityStore(blocks)
+options := eris.BlockOptions{}
+capability, err := store.EncodeRecommended(ctx, content, secret, options)
 if err != nil {
 	return err
 }
-
-decoded, err := eris.Decode(capability, blocks)
+decoded, err := store.Decode(ctx, capability, options)
 ```
 
-`Decode` has no application size limit. When blocks come from an untrusted
-source, use `DecodeWithLimit(capability, blocks, maxBytes)` to reject a tree
-whose decoded content exceeds the selected size limit before expansion.
+`Decode` has no application size limit. Use
+`store.DecodeWithLimit(ctx, capability, maxBytes, options)` to bound decoded
+content from an untrusted source.
 
 Block storage uses ordered batches. Each request has its own TTL and options.
 The interfaces are:
@@ -828,9 +837,10 @@ alone does not ensure that two encoders produce the same capability.
 
 The [encoding profile](specs/eris-fs-encoding.md) specifies all Lzip settings
 and the pinned encoder algorithm. Fixed regression vectors check compressed
-bytes, file capabilities, and complete image capabilities. Other Lzip encoders
-can produce different valid streams; ERIS-FS does not prescribe a unique Lzip
-bitstream. The streaming encoder also passes all 25 official base ERIS vectors.
+bytes, file capabilities, and complete image capabilities. ERIS-FS permits Lzip
+encoders to produce different valid streams. The ERIS conformance tests check
+encoding and decoding against 13 official positive vectors and verify that
+decoding rejects all 12 negative vectors.
 
 `Store.OpenFS` and `Store.DecodeIndex` limit each decoded index to 64 MiB. Use
 `Store.OpenFSWithLimit` or `Store.DecodeIndexWithLimit` to select another

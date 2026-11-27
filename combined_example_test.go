@@ -17,17 +17,16 @@ func ExampleNewCombinedBlockStore() {
 	}
 
 	// This content fits in one encrypted block.
-	capability, blocks, err := eris.Encode([]byte("hello"), eris.Secret{}, eris.BlockSize1KiB)
+	ctx := context.Background()
+	content := eris.NewBlockCapabilityStore(store)
+	capability, err := content.Encode(ctx, []byte("hello"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}
 	ref := capability.Root.Reference
-	stored, err := eris.PutBlock(context.Background(), store, blocks.Blocks[ref].Data, 0, eris.BlockOptions{}, ref)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("stored:", stored == ref)
-	got, err, _ := eris.GetBlock(context.Background(), store, ref, 0, eris.BlockOptions{})
+	_, stored := writable.Blocks[ref]
+	fmt.Println("stored:", stored)
+	got, err, _ := eris.GetBlock(ctx, store, ref, eris.NoTTL, eris.BlockOptions{})
 	if err != nil {
 		panic(err)
 	}

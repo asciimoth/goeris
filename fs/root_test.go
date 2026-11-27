@@ -18,7 +18,7 @@ func TestBuilderRootOptions(t *testing.T) {
 			ctx := context.Background()
 			options := eris.BlockOptions{HighPriority: true, Root: originalRoot}
 			store := &opaqueBlocks{data: make(map[eris.Reference][]byte), wantOptions: options}
-			builder := erisfs.NewBuilder(store, eris.Secret{}, options)
+			builder := erisfs.NewBuilder(eris.NewBlockCapabilityStore(store), eris.Secret{}, options)
 			large := bytes.Repeat([]byte("file content "), 4000)
 			for _, file := range []struct {
 				name string
@@ -70,8 +70,9 @@ func TestBuilderRootOptions(t *testing.T) {
 func TestBuilderFileAndStandaloneBlob(t *testing.T) {
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
 	options := eris.BlockOptions{HighPriority: true}
-	builder := erisfs.NewBuilder(blocks, eris.Secret{}, options)
+	builder := erisfs.NewBuilder(store, eris.Secret{}, options)
 	content := []byte("shared content")
 	if err := builder.AddFile(ctx, "file", bytes.NewReader(content), false); err != nil {
 		t.Fatal(err)
@@ -80,7 +81,7 @@ func TestBuilderFileAndStandaloneBlob(t *testing.T) {
 	if got := blocks.Blocks[fileCap.Root.Reference].Options; got.Root || !got.HighPriority {
 		t.Fatalf("file options: %v", got)
 	}
-	blobCap, err := eris.EncodeContentRecommended(ctx, bytes.NewReader(content), eris.Secret{}, blocks, eris.BlockOptions{})
+	blobCap, err := store.EncodeContentRecommended(ctx, bytes.NewReader(content), eris.Secret{}, eris.BlockOptions{})
 	if err != nil || blobCap != fileCap {
 		t.Fatalf("blob: %v, %v", blobCap, err)
 	}

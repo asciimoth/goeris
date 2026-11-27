@@ -96,7 +96,7 @@ func TestFSResolvePathStoreLookup(t *testing.T) {
 func TestFSResolvePathErrors(t *testing.T) {
 	ctx := t.Context()
 	root, blocks := contextImage(t)
-	image, err := OpenFS(ctx, root, blocks, eris.BlockOptions{})
+	image, err := OpenFS(ctx, root, eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

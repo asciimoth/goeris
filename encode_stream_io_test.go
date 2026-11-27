@@ -68,11 +68,11 @@ func TestEncodeContentStopsAtEOFWithData(t *testing.T) {
 	for _, size := range []int{0, 1023, 1024, 16383, 16384, 32768, 65536} {
 		content := deterministicBytes(size)
 		for _, blockSize := range []BlockSize{BlockSize1KiB, BlockSize32KiB} {
-			want, _, err := Encode(content, Secret{}, blockSize)
+			want, err := newTestStore().Encode(t.Context(), content, Secret{}, blockSize, BlockOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := EncodeContent(context.Background(), &terminalEOFReader{data: content}, Secret{}, blockSize, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{})
+			got, err := newTestStore().EncodeContent(context.Background(), &terminalEOFReader{data: content}, Secret{}, blockSize, BlockOptions{})
 			if err != nil || got != want {
 				t.Errorf("size %d, block size %d: %v", size, blockSize, err)
 			}
@@ -83,45 +83,45 @@ func TestEncodeContentStopsAtEOFWithData(t *testing.T) {
 func TestEncodeContentReadTermination(t *testing.T) {
 	for _, size := range []int{0, 1, 1023, 1024, 1025, 16384, 32768} {
 		content := deterministicBytes(size)
-		want, _, err := Encode(content, Secret{}, BlockSize1KiB)
+		want, err := newTestStore().Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		source := &finalErrorReader{data: content, err: io.EOF}
-		got, err := EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{})
+		got, err := newTestStore().EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, BlockOptions{})
 		if err != nil || got != want {
 			t.Fatalf("EOF with %d bytes changed encoding: %v", size, err)
 		}
 		for _, cause := range []error{io.ErrUnexpectedEOF, errors.New("read error"), errors.Join(io.EOF, io.ErrUnexpectedEOF), fmt.Errorf("source failed: %w", io.EOF)} {
 			source = &finalErrorReader{data: content, err: cause}
-			if _, err := EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, cause) {
+			if _, err := newTestStore().EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, BlockOptions{}); !errors.Is(err, cause) {
 				t.Fatalf("%d bytes with %v: %v", size, cause, err)
 			}
 			source = &finalErrorReader{data: content, err: cause}
-			capability, err := EncodeContentRecommended(context.Background(), source, Secret{}, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{})
+			capability, err := newTestStore().EncodeContentRecommended(context.Background(), source, Secret{}, BlockOptions{})
 			if !errors.Is(err, cause) || capability != (Capability{}) {
 				t.Fatalf("recommended, %d bytes with %v: %v", size, cause, err)
 			}
 		}
 	}
-	if _, err := EncodeContent(context.Background(), noProgressReader{}, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, io.ErrNoProgress) {
+	if _, err := newTestStore().EncodeContent(context.Background(), noProgressReader{}, Secret{}, BlockSize1KiB, BlockOptions{}); !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("no progress: %v", err)
 	}
 	for _, size := range []int{0, 1 << 14} {
 		input := io.MultiReader(bytes.NewReader(make([]byte, size)), noProgressReader{})
-		if _, err := EncodeContentRecommended(context.Background(), input, Secret{}, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{}); !errors.Is(err, io.ErrNoProgress) {
+		if _, err := newTestStore().EncodeContentRecommended(context.Background(), input, Secret{}, BlockOptions{}); !errors.Is(err, io.ErrNoProgress) {
 			t.Fatalf("recommended, no progress after %d bytes: %v", size, err)
 		}
 	}
 	content := []byte("temporary empty reads")
 	source := &intermittentReader{reader: bytes.NewReader(content), empty: 99}
-	cap, err := EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{})
-	want, _, encodeErr := Encode(content, Secret{}, BlockSize1KiB)
+	cap, err := newTestStore().EncodeContent(context.Background(), source, Secret{}, BlockSize1KiB, BlockOptions{})
+	want, encodeErr := newTestStore().Encode(t.Context(), content, Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil || encodeErr != nil || cap != want {
 		t.Fatalf("empty reads changed encoding: %v", err)
 	}
 	source = &intermittentReader{reader: bytes.NewReader(content), empty: 99}
-	cap, err = EncodeContentRecommended(context.Background(), source, Secret{}, BlockSet{Blocks: make(map[Reference]Block)}, BlockOptions{})
+	cap, err = newTestStore().EncodeContentRecommended(context.Background(), source, Secret{}, BlockOptions{})
 	if err != nil || cap != want {
 		t.Fatalf("empty reads changed recommended encoding: %v", err)
 	}

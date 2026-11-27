@@ -12,8 +12,9 @@ import (
 
 func TestConcurrentImageReads(t *testing.T) {
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := eris.NewBlockCapabilityStore(blocks)
 	content := bytes.Repeat([]byte("concurrent image reads\n"), 2048)
-	nested := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	nested := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	if err := nested.AddFile(context.Background(), "plain", bytes.NewReader(content), false); err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +26,7 @@ func TestConcurrentImageReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	for name, capability := range map[string]eris.Capability{"v1": legacy, "v2": modern} {
 		if err := builder.AddSubdirectory(name, capability); err != nil {
 			t.Fatal(err)
@@ -38,7 +39,7 @@ func TestConcurrentImageReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFS(context.Background(), capability, blocks, eris.BlockOptions{})
+	image, err := OpenFS(context.Background(), capability, store, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

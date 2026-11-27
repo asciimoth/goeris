@@ -15,11 +15,11 @@ import (
 
 func TestCapabilityReaderConstructors(t *testing.T) {
 	data := []byte("reader content")
-	c, blocks, err := EncodeRecommended(data, Secret{})
+	source := newTestStore()
+	c, err := source.EncodeRecommended(t.Context(), data, Secret{}, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := NewBlockCapabilityStore(blocks)
 	chain := NewCombinedCapabilityStore(NewBlockCapabilityStore(BlockSet{}), source)
 	ctx := t.Context()
 	opts := BlockOptions{HighPriority: true}
@@ -53,6 +53,17 @@ func TestCapabilityReaderConstructors(t *testing.T) {
 				t.Fatalf("read = %q, %v", got, err)
 			}
 		})
+	}
+
+	// A sized reader can open on the empty first store. Its read error must
+	// reach the caller even though the second store has the content.
+	r, err := chain.NewReaderWithSize(ctx, c, int64(len(data)), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	if n, err := r.Read(make([]byte, len(data))); n != 0 || !errors.Is(err, ErrMissingBlock) {
+		t.Fatalf("sized read from empty first store returned %d bytes, %v", n, err)
 	}
 
 	canceled, cancel := context.WithCancel(ctx)
@@ -258,13 +269,14 @@ func TestMountReaderKeepsOpeningSize(t *testing.T) {
 }
 
 func TestCapabilityReaderErrors(t *testing.T) {
-	c, blocks, err := EncodeRecommended([]byte("Hello, ERIS!\n"), Secret{})
+	contentStore := newTestStore()
+	c, err := contentStore.EncodeRecommended(t.Context(), []byte("Hello, ERIS!\n"), Secret{}, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, backend := range []string{"blocks", "mount"} {
 		t.Run(backend, func(t *testing.T) {
-			store := NewBlockCapabilityStore(blocks)
+			store := contentStore
 			if backend == "mount" {
 				mount := t.TempDir()
 				writePathTestContent(t, mount, c)

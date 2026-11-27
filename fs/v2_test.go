@@ -39,7 +39,7 @@ func storeV1Index(t testing.TB, index Index, blocks eris.BlockSet) eris.Capabili
 			data = appendBytes(data, cap)
 		}
 	}
-	cap, err := eris.EncodeContent(context.Background(), bytes.NewReader(data), eris.Secret{}, eris.BlockSize1KiB, blocks, eris.BlockOptions{})
+	cap, err := eris.NewBlockCapabilityStore(blocks).EncodeContent(context.Background(), bytes.NewReader(data), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,20 +207,21 @@ func TestVersionAndMapOrder(t *testing.T) {
 func TestV1FilesAndMixedNestedImages(t *testing.T) {
 	for _, kind := range []EntryType{Regular, Executable} {
 		blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+		store := eris.NewBlockCapabilityStore(blocks)
 		content := bytes.Repeat([]byte("old file\n"), 3000)
-		capability, err := eris.EncodeContent(context.Background(), bytes.NewReader(content), eris.Secret{}, eris.BlockSize1KiB, blocks, eris.BlockOptions{})
+		capability, err := store.EncodeContent(context.Background(), bytes.NewReader(content), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		old := storeV1Index(t, Index{Entries: []Entry{{Path: []string{"file"}, Type: kind, Capability: capability}}}, blocks)
-		parsed, err := DecodeIndex(context.Background(), old, blocks, eris.BlockOptions{})
+		parsed, err := DecodeIndex(context.Background(), old, store, eris.BlockOptions{})
 		if err != nil || parsed.Entries[0].Size != -1 {
 			t.Fatalf("v1 size: %v, %v", parsed, err)
 		}
-		if _, err := EncodeIndex(context.Background(), parsed, eris.Secret{}, blocks, eris.BlockOptions{}); !errors.Is(err, ErrUnknownSize) {
+		if _, err := EncodeIndex(context.Background(), parsed, eris.Secret{}, store, eris.BlockOptions{}); !errors.Is(err, ErrUnknownSize) {
 			t.Fatal(err)
 		}
-		image, err := OpenFS(context.Background(), old, blocks, eris.BlockOptions{})
+		image, err := OpenFS(context.Background(), old, store, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -240,13 +241,13 @@ func TestV1FilesAndMixedNestedImages(t *testing.T) {
 			_ = file.Close()
 		}
 		parsed.Entries[0].Size = int64(len(content))
-		modern, err := EncodeIndex(context.Background(), parsed, eris.Secret{}, blocks, eris.BlockOptions{})
+		modern, err := EncodeIndex(context.Background(), parsed, eris.Secret{}, store, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		// A v1 parent can contain v2, and a v2 parent can contain v1.
 		oldParent := storeV1Index(t, Index{Entries: []Entry{{Path: []string{"new"}, Type: Subdirectory, Capability: modern}}}, blocks)
-		builder := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+		builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 		if err := builder.AddSubdirectory("old", oldParent); err != nil {
 			t.Fatal(err)
 		}
@@ -254,7 +255,7 @@ func TestV1FilesAndMixedNestedImages(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mixed, err := OpenFS(context.Background(), root, blocks, eris.BlockOptions{})
+		mixed, err := OpenFS(context.Background(), root, store, eris.BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -268,12 +269,12 @@ func TestV1FilesAndMixedNestedImages(t *testing.T) {
 func TestV2MetadataWithoutContent(t *testing.T) {
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	index := Index{Entries: []Entry{{Path: []string{"file"}, Capability: eris.Capability{BlockSize: eris.BlockSize1KiB}, Size: 123}}}
-	root, err := EncodeIndex(context.Background(), index, eris.Secret{}, blocks, eris.BlockOptions{})
+	root, err := EncodeIndex(context.Background(), index, eris.Secret{}, eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := &failAfterSource{BlockSource: blocks}
-	image, err := OpenFS(context.Background(), root, source, eris.BlockOptions{})
+	image, err := OpenFS(context.Background(), root, eris.NewBlockCapabilityStore(source), eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +307,7 @@ func TestV2MetadataWithoutContent(t *testing.T) {
 
 func TestV2AdditionalErrorPaths(t *testing.T) {
 	sentinel := errors.New("storage failed")
-	builder := NewBuilder(errorSink{sentinel}, eris.Secret{}, eris.BlockOptions{})
+	builder := NewBuilder(eris.NewBlockCapabilityStore(eris.NewCombinedBlockStore(errorSink{sentinel})), eris.Secret{}, eris.BlockOptions{})
 	if err := builder.AddFile(context.Background(), "file", strings.NewReader("data"), false); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
@@ -323,9 +324,9 @@ func TestV2AdditionalErrorPaths(t *testing.T) {
 		}
 	}
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-	cap, _, _ := eris.Encode([]byte("missing"), eris.Secret{}, eris.BlockSize1KiB)
+	cap, _ := newTestStore().Encode(t.Context(), []byte("missing"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	old := storeV1Index(t, Index{Entries: []Entry{{Path: []string{"file"}, Capability: cap}}}, blocks)
-	image, err := OpenFS(context.Background(), old, blocks, eris.BlockOptions{})
+	image, err := OpenFS(context.Background(), old, eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +343,8 @@ func TestV2AdditionalErrorPaths(t *testing.T) {
 
 func TestMixedSubdirectoryReuse(t *testing.T) {
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
-	nested := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	store := eris.NewBlockCapabilityStore(blocks)
+	nested := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	if err := nested.AddFile(context.Background(), "dir/file", strings.NewReader("content"), false); err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +352,7 @@ func TestMixedSubdirectoryReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outer := NewBuilder(blocks, eris.Secret{}, eris.BlockOptions{})
+	outer := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
 	if err := outer.AddSubdirectory("nested", inner); err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +361,7 @@ func TestMixedSubdirectoryReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := &failAfterSource{BlockSource: blocks}
-	image, err := OpenFS(context.Background(), root, source, eris.BlockOptions{})
+	image, err := OpenFS(context.Background(), root, eris.NewBlockCapabilityStore(source), eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package url
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -12,6 +13,32 @@ import (
 	eris "github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/fetch"
 )
+
+type invalidCapabilityStore struct{ eris.CapabilityStore }
+
+func (invalidCapabilityStore) EncodeContentRecommended(context.Context, io.Reader, eris.Secret, eris.BlockOptions) (eris.Capability, error) {
+	return eris.Capability{}, nil
+}
+
+func (invalidCapabilityStore) EncodeRecommended(context.Context, []byte, eris.Secret, eris.BlockOptions) (eris.Capability, error) {
+	return eris.Capability{}, nil
+}
+
+func TestInvalidCapabilityFromStore(t *testing.T) {
+	for _, fields := range []string{"", "name hello\n"} {
+		var locks recordingLocks
+		var requests int
+		f := setupWithLocks(t, func(*http.Request) (*http.Response, error) {
+			requests++
+			return response(200, "hello"), nil
+		}, &locks)
+		f.config.Store = invalidCapabilityStore{f.config.Store}
+		got := f.Fetch(t.Context(), source(t, description+"alt https://b.test/data\n"+fields))
+		if got.Status != "fail" || got.Failure.Code != "store" || requests != 1 || len(locks.writes) != 0 {
+			t.Errorf("fields %q: got %+v, requests %d, lock writes %d", fields, got, requests, len(locks.writes))
+		}
+	}
+}
 
 type recordingLocks struct {
 	mu          sync.Mutex
@@ -74,7 +101,7 @@ func TestURLLockVariants(t *testing.T) {
 					}
 					return response(200, "Hello world!"), nil
 				})},
-				Store: eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)},
+				Store: eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}),
 				Locks: &db,
 			})
 			if err != nil {
@@ -137,7 +164,7 @@ func TestURLLockLookupOrder(t *testing.T) {
 				t.Fatal("download on lock hit")
 				return nil, nil
 			})},
-			Store:    brokenStore{},
+			Store:    eris.NewBlockCapabilityStore(brokenStore{}),
 			Locks:    &db,
 			Progress: func(ProgressNode) { t.Fatal("download progress on lock hit") },
 		})
@@ -275,14 +302,14 @@ func TestURLFailedFetchDoesNotLock(t *testing.T) {
 			case "invalid-source":
 				fields += "eris.secret invalid\n"
 			case "store":
-				f.config.Store = brokenStore{}
+				f.config.Store = eris.NewBlockCapabilityStore(brokenStore{})
 			case "internal":
 				// Cleanup can fail after all blocks have been written.
 				f.config.TempStorage = tempStorageFunc(func(context.Context) (fetch.TempData, error) {
 					return &testTempData{closeErr: errors.New("close failed")}, nil
 				})
 			case "cancelled":
-				f.config.Store = cancellingStore{cancel: cancel}
+				f.config.Store = eris.NewBlockCapabilityStore(cancellingStore{cancel: cancel})
 			}
 			got := f.Fetch(ctx, source(t, description+fields))
 			if got.Status != "fail" || got.Failure.Code != code || len(db.writes) != 0 {

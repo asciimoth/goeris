@@ -70,14 +70,15 @@ func TestPrefetchTraversal(t *testing.T) {
 		for i := range data {
 			data[i] = byte(i/1024 + i%251)
 		}
-		cap, blocks, err := Encode(data, Secret{}, BlockSize1KiB)
+		blocks := BlockSet{Blocks: make(map[Reference]Block)}
+		cap, err := NewBlockCapabilityStore(blocks).Encode(t.Context(), data, Secret{}, BlockSize1KiB, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, limit := range []int{-1, 0, 1, 3, 100} {
 			probe := &prefetchProbe{BlockSource: blocks, limit: limit}
 			options := BlockOptions{HighPriority: true, Root: true}
-			if err := Prefetch(context.Background(), cap, probe, 7, options); err != nil {
+			if err := NewBlockCapabilityStore(probe).Prefetch(context.Background(), cap, 7, options); err != nil {
 				t.Fatal(err)
 			}
 			hinted := map[Reference]bool{}
@@ -103,7 +104,9 @@ func TestPrefetchTraversal(t *testing.T) {
 
 func TestPrefetchErrors(t *testing.T) {
 	ctx := context.Background()
-	cap, blocks, _ := Encode(bytes.Repeat([]byte{3}, 2048), Secret{}, BlockSize1KiB)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	store := NewBlockCapabilityStore(blocks)
+	cap, _ := store.Encode(t.Context(), bytes.Repeat([]byte{3}, 2048), Secret{}, BlockSize1KiB, BlockOptions{})
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
 	for _, tc := range []struct {
@@ -116,21 +119,22 @@ func TestPrefetchErrors(t *testing.T) {
 		{cap, blocks, canceled, context.Canceled}, {cap, BlockSet{}, ctx, ErrMissingBlock},
 		{cap, malformedSource(make([]byte, 32768)), ctx, ErrInvalidBlockSize},
 	} {
-		if err := Prefetch(tc.ctx, tc.cap, tc.source, NoTTL, BlockOptions{}); !errors.Is(err, tc.want) {
+		if err := NewBlockCapabilityStore(tc.source).Prefetch(tc.ctx, tc.cap, NoTTL, BlockOptions{}); !errors.Is(err, tc.want) {
 			t.Fatalf("error %v want %v", err, tc.want)
 		}
 	}
 	bad := cap
 	bad.Root.Key[0] ^= 1
-	if err := Prefetch(ctx, bad, blocks, NoTTL, BlockOptions{}); !errors.Is(err, ErrInvalidRootKey) {
+	if err := store.Prefetch(ctx, bad, NoTTL, BlockOptions{}); !errors.Is(err, ErrInvalidRootKey) {
 		t.Fatal(err)
 	}
-	leaf, leafBlocks, _ := Encode(nil, Secret{}, BlockSize1KiB)
+	leafBlocks := BlockSet{Blocks: make(map[Reference]Block)}
+	leaf, _ := NewBlockCapabilityStore(leafBlocks).Encode(t.Context(), nil, Secret{}, BlockSize1KiB, BlockOptions{})
 	probe := &prefetchProbe{BlockSource: leafBlocks}
 	live, stop := context.WithCancel(ctx)
 	defer stop()
 	probe.onHint = stop
-	if err := Prefetch(live, leaf, probe, NoTTL, BlockOptions{}); !errors.Is(err, context.Canceled) {
+	if err := NewBlockCapabilityStore(probe).Prefetch(live, leaf, NoTTL, BlockOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 }
@@ -140,12 +144,14 @@ func TestReaderPrefetchAndSeek(t *testing.T) {
 	for i := range data {
 		data[i] = byte(i / 1024)
 	}
-	cap, blocks, _ := Encode(data, Secret{}, BlockSize1KiB)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	cap, _ := NewBlockCapabilityStore(blocks).Encode(t.Context(), data, Secret{}, BlockSize1KiB, BlockOptions{})
 	probe := &prefetchProbe{BlockSource: blocks, limit: 3}
-	reader, err := NewReaderWithSize(context.Background(), cap, probe, int64(len(data)), BlockOptions{})
+	opened, err := NewBlockCapabilityStore(probe).NewReaderWithSize(context.Background(), cap, int64(len(data)), BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	reader := opened.(*Reader)
 	if _, err = reader.Seek(20*1024, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
@@ -198,11 +204,14 @@ func TestPrefetchDoesNotRequireLeaves(t *testing.T) {
 	for i := range data {
 		data[i] = byte(i / 1024)
 	}
-	cap, blocks, _ := Encode(data, Secret{}, BlockSize1KiB)
-	reader, err := NewReader(context.Background(), cap, blocks, BlockOptions{})
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	store := NewBlockCapabilityStore(blocks)
+	cap, _ := store.Encode(t.Context(), data, Secret{}, BlockSize1KiB, BlockOptions{})
+	opened, err := store.NewReader(context.Background(), cap, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	reader := opened.(*Reader)
 	for i := int64(0); i < reader.leaves; i++ {
 		pair, err := reader.leafPair(i)
 		if err != nil {
@@ -210,7 +219,7 @@ func TestPrefetchDoesNotRequireLeaves(t *testing.T) {
 		}
 		delete(blocks.Blocks, pair.Reference)
 	}
-	if err := Prefetch(context.Background(), cap, blocks, NoTTL, BlockOptions{}); err != nil {
+	if err := store.Prefetch(context.Background(), cap, NoTTL, BlockOptions{}); err != nil {
 		t.Fatalf("read a leaf: %v", err)
 	}
 }
@@ -222,7 +231,8 @@ func FuzzPrefetchTree(f *testing.F) {
 		if len(data) > 1<<18 {
 			t.Skip()
 		}
-		cap, blocks, err := Encode(data, Secret{}, BlockSize1KiB)
+		blocks := BlockSet{Blocks: make(map[Reference]Block)}
+		cap, err := NewBlockCapabilityStore(blocks).Encode(t.Context(), data, Secret{}, BlockSize1KiB, BlockOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -230,7 +240,7 @@ func FuzzPrefetchTree(f *testing.F) {
 			cap.Root.Key[0] ^= 1
 		}
 		probe := &prefetchProbe{BlockSource: blocks, limit: int(limit % 65)}
-		err = Prefetch(context.Background(), cap, probe, NoTTL, BlockOptions{})
+		err = NewBlockCapabilityStore(probe).Prefetch(context.Background(), cap, NoTTL, BlockOptions{})
 		if corrupt && cap.Level > 0 {
 			if !errors.Is(err, ErrInvalidRootKey) {
 				t.Fatal(err)

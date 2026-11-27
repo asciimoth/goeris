@@ -36,7 +36,7 @@ func FuzzUnmarshal(f *testing.F) {
 }
 
 func FuzzUnmarshalSequence(f *testing.F) {
-	capability, _, _ := eris.Encode([]byte("fuzz"), eris.Secret{}, eris.BlockSize1KiB)
+	capability, _ := eris.NewBlockCapabilityStore(eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}).Encode(f.Context(), []byte("fuzz"), eris.Secret{}, eris.BlockSize1KiB, eris.BlockOptions{})
 	element, _ := NewCapability(capability)
 	valid, _ := MarshalSequence([]Element{element})
 	untagged, _ := MarshalUntaggedSequence([]Element{element})

@@ -195,7 +195,7 @@ func TestCapabilityRejectsInvalidEncoding(t *testing.T) {
 		t.Errorf("UnmarshalBinary(bad size) error = %v", err)
 	}
 
-	valid, _, err := Encode(nil, Secret{}, BlockSize1KiB)
+	valid, err := newTestStore().Encode(t.Context(), nil, Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,17 +334,18 @@ func TestOfficialVectors(t *testing.T) {
 		}
 		var secret Secret
 		copy(secret[:], secretBytes)
-		capability, blocks, err := Encode([]byte(hello), secret, vector.size)
+		store := newTestStore()
+		capability, err := store.Encode(t.Context(), []byte(hello), secret, vector.size, BlockOptions{})
 		if err != nil || capability.String() != vector.urn {
 			t.Errorf("Encode(%d) URN = %q, error = %v", vector.size, capability, err)
 		}
-		decoded, err := Decode(capability, blocks)
+		decoded, err := store.Decode(t.Context(), capability, BlockOptions{})
 		if err != nil || string(decoded) != hello {
 			t.Errorf("Decode(%d) = (%q, %v)", vector.size, decoded, err)
 		}
 	}
 
-	capability, _, err := Encode(make([]byte, 1024), Secret{}, BlockSize1KiB)
+	capability, err := newTestStore().Encode(t.Context(), make([]byte, 1024), Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,12 +365,13 @@ func TestOfficialVectors(t *testing.T) {
 		{32768, BlockSize32KiB, "urn:eris:B4A7DX6F54NI56VZX7RC6GTTYRMYXE7LKCXKOZEB5WVO6GEFRWVFRA5RAYNTGERPMX2HBFXBSHMBFZIB7BZYXWSVMI2WCCHZR7K7C5T2H4"},
 	}
 	for _, vector := range zeroVectors {
-		capability, blocks, encodeErr := Encode(make([]byte, vector.length), Secret{}, vector.size)
+		store := newTestStore()
+		capability, encodeErr := store.Encode(t.Context(), make([]byte, vector.length), Secret{}, vector.size, BlockOptions{})
 		if encodeErr != nil || capability.String() != vector.urn {
 			t.Errorf("zero vector (%d, %d) URN = %q, error = %v", vector.length, vector.size, capability, encodeErr)
 			continue
 		}
-		decoded, decodeErr := Decode(capability, blocks)
+		decoded, decodeErr := store.Decode(t.Context(), capability, BlockOptions{})
 		if decodeErr != nil || !bytes.Equal(decoded, make([]byte, vector.length)) {
 			t.Errorf("zero vector (%d, %d) decode error = %v", vector.length, vector.size, decodeErr)
 		}
@@ -384,27 +386,29 @@ func TestEncodeDecodeTrees(t *testing.T) {
 		for i := range content {
 			content[i] = byte(i * 31)
 		}
-		capability, blocks, err := Encode(content, Secret{9}, BlockSize1KiB)
+		store := newTestStore()
+		capability, err := store.Encode(t.Context(), content, Secret{9}, BlockSize1KiB, BlockOptions{})
 		if err != nil {
 			t.Fatalf("Encode(%d bytes) error = %v", length, err)
 		}
-		decoded, err := Decode(capability, blocks)
+		decoded, err := store.Decode(t.Context(), capability, BlockOptions{})
 		if err != nil || !bytes.Equal(decoded, content) {
 			t.Fatalf("Decode(Encode(%d bytes)) error = %v", length, err)
 		}
 	}
 
 	content := bytes.Repeat([]byte("recommended"), 2000)
-	capability, blocks, err := EncodeRecommended(content, Secret{})
+	store := newTestStore()
+	capability, err := store.EncodeRecommended(t.Context(), content, Secret{}, BlockOptions{})
 	if err != nil || capability.BlockSize != BlockSize32KiB {
 		t.Fatalf("EncodeRecommended() = (%v, %v)", capability, err)
 	}
-	decoded, err := Decode(capability, blocks)
+	decoded, err := store.Decode(t.Context(), capability, BlockOptions{})
 	if err != nil || !bytes.Equal(decoded, content) {
 		t.Fatalf("Decode(EncodeRecommended()) error = %v", err)
 	}
 
-	if _, _, err := Encode(nil, Secret{}, 7); !errors.Is(err, ErrInvalidBlockSize) {
+	if _, err := newTestStore().Encode(t.Context(), nil, Secret{}, 7, BlockOptions{}); !errors.Is(err, ErrInvalidBlockSize) {
 		t.Errorf("Encode(invalid size) error = %v", err)
 	}
 }
@@ -412,49 +416,84 @@ func TestEncodeDecodeTrees(t *testing.T) {
 func TestDecodeRejectsInvalidData(t *testing.T) {
 	t.Parallel()
 
-	if _, err := Decode(Capability{}, BlockSet{}); !errors.Is(err, ErrInvalidCapability) {
+	if _, err := NewBlockCapabilityStore(BlockSet{}).Decode(t.Context(), Capability{}, BlockOptions{}); !errors.Is(err, ErrInvalidCapability) {
 		t.Errorf("Decode(invalid capability) error = %v", err)
 	}
-	capability, blocks, err := Encode(bytes.Repeat([]byte{1}, 1024), Secret{}, BlockSize1KiB)
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	store := NewBlockCapabilityStore(blocks)
+	capability, err := store.Encode(t.Context(), bytes.Repeat([]byte{1}, 1024), Secret{}, BlockSize1KiB, BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Decode(capability, BlockSet{}); !errors.Is(err, ErrMissingBlock) {
+	if _, err := NewBlockCapabilityStore(BlockSet{}).Decode(t.Context(), capability, BlockOptions{}); !errors.Is(err, ErrMissingBlock) {
 		t.Errorf("Decode(missing root) error = %v", err)
 	}
 
 	badSize := cloneBlocks(blocks)
 	badSize.Blocks[capability.Root.Reference] = Block{Data: nil}
-	if _, err := Decode(capability, badSize); !errors.Is(err, ErrInvalidBlock) || !errors.Is(err, ErrInvalidBlockSize) {
+	if _, err := NewBlockCapabilityStore(badSize).Decode(t.Context(), capability, BlockOptions{}); !errors.Is(err, ErrInvalidBlock) || !errors.Is(err, ErrInvalidBlockSize) {
 		t.Errorf("Decode(bad block size) error = %v", err)
 	}
 
 	corrupt := cloneBlocks(blocks)
 	corrupt.Blocks[capability.Root.Reference].Data[0] ^= 1
-	if _, err := Decode(capability, corrupt); !errors.Is(err, ErrInvalidBlock) {
+	if _, err := NewBlockCapabilityStore(corrupt).Decode(t.Context(), capability, BlockOptions{}); !errors.Is(err, ErrInvalidBlock) {
 		t.Errorf("Decode(corrupt block) error = %v", err)
 	}
 
 	badKey := capability
 	badKey.Root.Key[0] ^= 1
-	if _, err := Decode(badKey, blocks); !errors.Is(err, ErrInvalidRootKey) {
+	if _, err := store.Decode(t.Context(), badKey, BlockOptions{}); !errors.Is(err, ErrInvalidRootKey) {
 		t.Errorf("Decode(bad root key) error = %v", err)
 	}
 
 	leafNode := make([]byte, BlockSize1KiB)
 	leafNode[len(leafNode)-1] = 1
 	leafBlock, leafPair, _ := EncryptNode(leafNode, Secret{}, 0)
-	if _, err := Decode(
-		Capability{BlockSize: BlockSize1KiB, Root: leafPair},
-		BlockSet{Blocks: map[Reference]Block{leafPair.Reference: {Data: leafBlock}}},
-	); !errors.Is(err, ErrInvalidPadding) {
+	blocks.Blocks[leafPair.Reference] = Block{Data: leafBlock}
+	leaf := Capability{BlockSize: BlockSize1KiB, Root: leafPair}
+	if _, err := store.Decode(t.Context(), leaf, BlockOptions{}); !errors.Is(err, ErrInvalidPadding) {
 		t.Errorf("Decode(bad padding) error = %v", err)
+	}
+}
+
+// Each block has a valid reference. A 32 KiB block still cannot belong to a
+// 1 KiB tree, whether the reader encounters it on open or while reading content.
+func TestDecodeRejectsMixedBlockSizes(t *testing.T) {
+	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	store := NewBlockCapabilityStore(blocks)
+	large, err := store.Encode(t.Context(), nil, Secret{}, BlockSize32KiB, BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	padding, err := store.Encode(t.Context(), nil, Secret{}, BlockSize1KiB, BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := storeTestNode(makeNode(large.Root, large.Root, padding.Root), Secret{}, 1, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name       string
+		capability Capability
+	}{
+		{"root", Capability{BlockSize: BlockSize1KiB, Root: large.Root}},
+		{"content leaves", Capability{BlockSize: BlockSize1KiB, Level: 1, Root: root}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := store.Decode(t.Context(), tc.capability, BlockOptions{})
+			if data != nil || !errors.Is(err, ErrInvalidBlock) || !errors.Is(err, ErrInvalidBlockSize) {
+				t.Fatalf("Decode returned %d bytes and %v, want both block errors", len(data), err)
+			}
+		})
 	}
 }
 
 func TestDecodeWithLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	t.Parallel()
 	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	store := NewBlockCapabilityStore(blocks)
 	leaf := make([]byte, BlockSize1KiB)
 	leaf[len(leaf)-1] = 0x80
 	leafBlock, leafPair, err := EncryptNode(leaf, Secret{}, 0)
@@ -484,14 +523,14 @@ func TestDecodeWithLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	blocks.Blocks[root.Reference] = Block{Data: block}
 	capability := Capability{BlockSize: BlockSize1KiB, Level: 2, Root: root}
 	const contentSize = 32*1024 - 1
-	if _, err := DecodeWithLimit(capability, blocks, contentSize-1); !errors.Is(err, ErrDecodedTooLarge) {
+	if _, err := store.DecodeWithLimit(t.Context(), capability, contentSize-1, BlockOptions{}); !errors.Is(err, ErrDecodedTooLarge) {
 		t.Fatalf("small limit error = %v", err)
 	}
-	decoded, err := DecodeWithLimit(capability, blocks, contentSize)
+	decoded, err := store.DecodeWithLimit(t.Context(), capability, contentSize, BlockOptions{})
 	if err != nil || len(decoded) != contentSize {
 		t.Fatalf("exact limit decode = (%d bytes, %v)", len(decoded), err)
 	}
-	if _, err := DecodeWithLimit(capability, blocks, -1); !errors.Is(err, ErrInvalidLimit) {
+	if _, err := store.DecodeWithLimit(t.Context(), capability, -1, BlockOptions{}); !errors.Is(err, ErrInvalidLimit) {
 		t.Fatalf("negative limit error = %v", err)
 	}
 	// Eight levels describe terabytes of output using only a few blocks.
@@ -509,7 +548,7 @@ func TestDecodeWithLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 		pair = next
 	}
 	large := Capability{BlockSize: BlockSize1KiB, Level: 8, Root: pair}
-	if _, err := DecodeWithLimit(large, blocks, 1<<20); !errors.Is(err, ErrDecodedTooLarge) {
+	if _, err := store.DecodeWithLimit(t.Context(), large, 1<<20, BlockOptions{}); !errors.Is(err, ErrDecodedTooLarge) {
 		t.Fatalf("amplified tree limit error = %v", err)
 	}
 	// The first full subtree already exceeds the limit. The decoder must
@@ -524,10 +563,10 @@ func TestDecodeWithLimitRejectsRepeatedTreeBeforeExpansion(t *testing.T) {
 	}
 	blocks.Blocks[root.Reference] = Block{Data: block}
 	partial := Capability{BlockSize: BlockSize1KiB, Level: 2, Root: root}
-	if _, err := DecodeWithLimit(partial, blocks, 1024); !errors.Is(err, ErrDecodedTooLarge) {
+	if _, err := store.DecodeWithLimit(t.Context(), partial, 1024, BlockOptions{}); !errors.Is(err, ErrDecodedTooLarge) {
 		t.Fatalf("early limit error = %v", err)
 	}
-	if _, err := Decode(partial, blocks); !errors.Is(err, ErrMissingBlock) {
+	if _, err := store.Decode(t.Context(), partial, BlockOptions{}); !errors.Is(err, ErrMissingBlock) {
 		t.Fatalf("missing sibling error = %v", err)
 	}
 }
@@ -550,10 +589,8 @@ func TestInvalidInternalNodes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = Decode(
-			Capability{BlockSize: BlockSize1KiB, Level: 1, Root: pair},
-			BlockSet{Blocks: map[Reference]Block{pair.Reference: {Data: block}}},
-		)
+		store := NewBlockCapabilityStore(BlockSet{Blocks: map[Reference]Block{pair.Reference: {Data: block}}})
+		_, err = store.Decode(t.Context(), Capability{BlockSize: BlockSize1KiB, Level: 1, Root: pair}, BlockOptions{})
 		if !errors.Is(err, ErrInvalidNode) {
 			t.Errorf("Decode(invalid internal node) error = %v", err)
 		}
@@ -566,10 +603,8 @@ func TestInvalidInternalNodes(t *testing.T) {
 		copy(node[offset+32:offset+PairSize], missingChild.Key[:])
 	}
 	block, root, _ := EncryptNode(node, Secret{}, 1)
-	_, err := Decode(
-		Capability{BlockSize: BlockSize1KiB, Level: 1, Root: root},
-		BlockSet{Blocks: map[Reference]Block{root.Reference: {Data: block}}},
-	)
+	store := NewBlockCapabilityStore(BlockSet{Blocks: map[Reference]Block{root.Reference: {Data: block}}})
+	_, err := store.Decode(t.Context(), Capability{BlockSize: BlockSize1KiB, Level: 1, Root: root}, BlockOptions{})
 	if !errors.Is(err, ErrMissingBlock) {
 		t.Errorf("Decode(missing child) error = %v", err)
 	}
@@ -578,6 +613,7 @@ func TestInvalidInternalNodes(t *testing.T) {
 func TestDecodeRejectsNoncanonicalTreeShape(t *testing.T) {
 	t.Parallel()
 	blocks := BlockSet{Blocks: make(map[Reference]Block)}
+	store := NewBlockCapabilityStore(blocks)
 	leaf := make([]byte, BlockSize1KiB)
 	leaf[0] = 0x80
 	leafBlock, leafPair, _ := EncryptNode(leaf, Secret{}, 0)
@@ -588,7 +624,7 @@ func TestDecodeRejectsNoncanonicalTreeShape(t *testing.T) {
 	copy(internal[32:PairSize], leafPair.Key[:])
 	oneBlock, onePair, _ := EncryptNode(internal, Secret{}, 1)
 	blocks.Blocks[onePair.Reference] = Block{Data: oneBlock}
-	if _, err := Decode(Capability{BlockSize: BlockSize1KiB, Level: 1, Root: onePair}, blocks); !errors.Is(err, ErrInvalidNode) {
+	if _, err := store.Decode(t.Context(), Capability{BlockSize: BlockSize1KiB, Level: 1, Root: onePair}, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("one-child root error = %v", err)
 	}
 
@@ -598,7 +634,7 @@ func TestDecodeRejectsNoncanonicalTreeShape(t *testing.T) {
 	copy(internal[PairSize+32:2*PairSize], onePair.Key[:])
 	twoBlock, twoPair, _ := EncryptNode(internal, Secret{}, 2)
 	blocks.Blocks[twoPair.Reference] = Block{Data: twoBlock}
-	if _, err := Decode(Capability{BlockSize: BlockSize1KiB, Level: 2, Root: twoPair}, blocks); !errors.Is(err, ErrInvalidNode) {
+	if _, err := store.Decode(t.Context(), Capability{BlockSize: BlockSize1KiB, Level: 2, Root: twoPair}, BlockOptions{}); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("short non-final subtree error = %v", err)
 	}
 }
