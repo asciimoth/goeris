@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/imagepath"
 	"github.com/asciimoth/goeris/internal/streamio"
 )
 
@@ -144,50 +145,57 @@ func withMountedRoot[T any](ctx context.Context, m *mountedImage, op, name strin
 	return result, nil
 }
 
+func mountedChildPath(dir, component string) (string, error) {
+	// A Windows lookup can trim dots and spaces from a component.
+	if filepath.Separator == '\\' && (strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ")) {
+		return "", stdfs.ErrInvalid
+	}
+	local, err := filepath.Localize(component)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, local), nil
+}
+
 // An expanded tree has no markers for nested indexes. Each directory can be
 // an image root. Resolve each link within the directory that contains it.
-func resolveMountedLinks(ctx context.Context, r *os.Root, p string, mode linkLookup) (string, string, error) {
-	return resolveLinks(".", filepath.ToSlash(p), mode, func(dir, component string) (string, EntryType, string, error) {
+func resolveMountedLinks(ctx context.Context, r *os.Root, p string, mode imagepath.Mode) (string, string, error) {
+	return imagepath.Resolve(".", filepath.ToSlash(p), mode, func(dir, component string) (string, imagepath.Kind, string, error) {
 		if err := ctx.Err(); err != nil {
 			return "", 0, "", err
 		}
-		// A Windows lookup can trim dots and spaces from a component.
-		if filepath.Separator == '\\' && (strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ")) {
-			return "", 0, "", stdfs.ErrInvalid
-		}
-		local, err := filepath.Localize(component)
+		next, err := mountedChildPath(dir, component)
 		if err != nil {
 			return "", 0, "", err
 		}
-		next := filepath.Join(dir, local)
 		info, err := r.Lstat(next)
 		if errors.Is(err, stdfs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-			return "", 0, "", errDangling
+			return "", 0, "", imagepath.ErrMissingEntry
 		}
 		if err != nil {
 			return "", 0, "", err
 		}
 		if info.Mode()&stdfs.ModeSymlink != 0 {
 			link, err := r.Readlink(next)
-			if mode != exportFinalLink {
+			if mode != imagepath.Export {
 				link = filepath.ToSlash(link)
 			}
-			return next, Symlink, link, err
+			return next, imagepath.Link, link, err
 		}
 		if filepath.Separator == '\\' && info.Mode()&stdfs.ModeIrregular != 0 {
 			// A Windows junction can redirect lookup like a symlink.
 			return "", 0, "", stdfs.ErrInvalid
 		}
 		if info.IsDir() {
-			return next, Subdirectory, "", nil
+			return next, imagepath.ImageRoot, "", nil
 		}
-		return next, Regular, "", nil
+		return next, imagepath.File, "", nil
 	})
 }
 
 func mountedCall[T any](ctx context.Context, m *mountedImage, op, name string, call func(*os.Root, string) (T, error)) (T, error) {
 	return withMountedRoot(ctx, m, op, name, func(r *os.Root, p string) (T, error) {
-		resolved, _, err := resolveMountedLinks(ctx, r, p, followLinks)
+		resolved, _, err := resolveMountedLinks(ctx, r, p, imagepath.Follow)
 		if err != nil {
 			var zero T
 			return zero, err
@@ -205,11 +213,15 @@ func (m *mountedImage) Lstat(ctx context.Context, name string) (stdfs.FileInfo, 
 		return mountedCall(ctx, m, "lstat", name, (*os.Root).Stat)
 	}
 	return withMountedRoot(ctx, m, "lstat", name, func(r *os.Root, p string) (stdfs.FileInfo, error) {
-		dir, _, err := resolveMountedLinks(ctx, r, filepath.Dir(p), followLinks)
+		dir, _, err := resolveMountedLinks(ctx, r, filepath.Dir(p), imagepath.Follow)
 		if err != nil {
 			return nil, err
 		}
-		return r.Lstat(filepath.Join(dir, filepath.Base(p)))
+		child, err := mountedChildPath(dir, filepath.Base(p))
+		if err != nil {
+			return nil, err
+		}
+		return r.Lstat(child)
 	})
 }
 
@@ -218,10 +230,10 @@ func (m *mountedImage) ReadLink(ctx context.Context, name string) (string, error
 		if name == "." {
 			return "", stdfs.ErrInvalid
 		}
-		if err := checkNativeLinkPath(name); err != nil {
+		if err := imagepath.CheckNative(name); err != nil {
 			return "", err
 		}
-		_, target, err := resolveMountedLinks(ctx, r, p, exportFinalLink)
+		_, target, err := resolveMountedLinks(ctx, r, p, imagepath.Export)
 		return target, err
 	})
 }

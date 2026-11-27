@@ -345,8 +345,10 @@ to read a link file itself.
 The default limit for an encoded link is 1 MiB. Use `link.NewFSWithLimit` to
 change it. The limit does not restrict decoded content. `fs.ReadFile` reads all
 content into memory; use `Open` and `io.LimitReader` for a content byte limit.
-The wrapper follows the base FS policy for symbolic links. Network timeouts and
-cancellation must be handled by the supplied capability store.
+The wrapper follows the base FS policy for symbolic links. When the base lacks
+`fs.SubFS`, the wrapper also checks that each target returned by `ReadLink`
+stays inside the selected subdirectory. The supplied capability store handles
+network timeouts and cancellation.
 
 The core `eris` package provides storage interfaces, an in-memory block set, and
 a combined store. It also provides raw content encoding and ERIS tree reading.

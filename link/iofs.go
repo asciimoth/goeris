@@ -45,7 +45,7 @@ func (f *IOFS) Sub(dir string) (fs.FS, error) {
 		}
 		sub.base = tree
 	} else {
-		// Keep the base's optional methods and use the same checks as the root view.
+		// Keep the base's optional methods. ReadLink checks the prefix boundary.
 		sub.prefix = baseDir
 	}
 	return NewIOFS(f.ctx, &sub), nil

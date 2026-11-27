@@ -191,7 +191,10 @@ func TestSubPreservesERISFSReadLinkBoundary(t *testing.T) {
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	store := eris.NewBlockCapabilityStore(blocks)
 	builder := erisfs.NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
-	for name, target := range map[string]string{"dir/parent": "..", "dir/self": "."} {
+	for name, target := range map[string]string{
+		"dir/parent": "..", "dir/self": ".", "dir/chain": "parent",
+		"dir/child/up": "..", "dir/alias": "child", "dir/broken": "absent",
+	} {
 		if err := builder.AddSymlink(name, target); err != nil {
 			t.Fatal(err)
 		}
@@ -204,19 +207,40 @@ func TestSubPreservesERISFSReadLinkBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view := link.NewIOFS(ctx, newLinkFS(t, erisfs.NewIOFS(ctx, image), blocks))
-	if target, err := fs.ReadLink(view, "dir/parent"); err != nil || target != ".." {
-		t.Fatalf("image ReadLink = %q, %v", target, err)
-	}
-	sub, err := fs.Sub(view, "dir")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target, err := fs.ReadLink(sub, "parent"); target != "" || !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("subdirectory parent link = %q, %v", target, err)
-	}
-	if target, err := fs.ReadLink(sub, "self"); err != nil || target != "." {
-		t.Errorf("subdirectory local link = %q, %v", target, err)
+	base := erisfs.NewIOFS(ctx, image)
+	for label, tree := range map[string]fs.FS{
+		"base Sub":    base,
+		"path prefix": struct{ fs.ReadLinkFS }{base},
+	} {
+		t.Run(label, func(t *testing.T) {
+			view := link.NewIOFS(ctx, newLinkFS(t, tree, blocks))
+			if target, err := fs.ReadLink(view, "dir/parent"); err != nil || target != ".." {
+				t.Fatalf("image ReadLink = %q, %v", target, err)
+			}
+			sub, err := fs.Sub(view, "dir")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"parent", "chain"} {
+				if target, err := fs.ReadLink(sub, name); target != "" || !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("ReadLink(%q) = %q, %v", name, target, err)
+				}
+			}
+			for name, want := range map[string]string{
+				"self": ".", "child/up": "..", "alias/up": "..", "broken": "absent",
+			} {
+				if target, err := fs.ReadLink(sub, name); err != nil || target != want {
+					t.Errorf("ReadLink(%q) = %q, %v, want %q", name, target, err, want)
+				}
+			}
+			selected, err := fs.Sub(sub, "alias")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if target, err := fs.ReadLink(selected, "up"); target != "" || !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("nested Sub ReadLink = %q, %v", target, err)
+			}
+		})
 	}
 }
 

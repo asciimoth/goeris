@@ -26,8 +26,10 @@
 // error. See the FS.Open example.
 //
 // Symbolic links use the base file system's policy. ReadLink and Lstat retain
-// base support for inspecting them. Directory entry Info uses the same Lstat
-// policy. These checks do not protect against concurrent path changes. Path
+// base support for inspecting them. If the base lacks fs.SubFS, ReadLink
+// checks each link against the selected subdirectory before returning the
+// target. Directory entry Info uses the same Lstat policy as the base.
+// These checks do not protect against concurrent path changes. Path
 // validation does not prevent a base symbolic link from reaching outside its
 // root. Use a confined base file system when paths or symbolic links come from
 // an untrusted source.

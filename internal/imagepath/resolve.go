@@ -1,4 +1,5 @@
-package fs
+// Package imagepath resolves symlinks within read-only image views.
+package imagepath
 
 import (
 	"errors"
@@ -7,20 +8,32 @@ import (
 	"strings"
 )
 
-// A missing image entry is distinct from a backend failure to load its index.
-var errDangling = errors.New("eris-fs: missing path component")
+// ErrMissingEntry marks a missing directory entry. A failure to load the
+// directory itself must retain its original error.
+var ErrMissingEntry = errors.New("eris-fs: missing path component")
 
-type linkLookup int
+// Kind describes how a component participates in path resolution.
+type Kind int
 
 const (
-	followLinks linkLookup = iota
-	keepFinalLink
-	exportFinalLink
+	File Kind = iota
+	Directory
+	Link
+	ImageRoot // A directory with its own boundary for links.
 )
 
-// resolveLinks walks slash-separated components in order. The child lookup
-// returns errDangling for a missing entry and preserves backend failures.
-func resolveLinks[T comparable](root T, name string, mode linkLookup, child func(T, string) (T, EntryType, string, error)) (T, string, error) {
+// Mode selects how Resolve handles the final link.
+type Mode int
+
+const (
+	Follow Mode = iota
+	KeepFinal
+	Export
+)
+
+// Resolve walks slash-separated components in order. The child lookup
+// returns ErrMissingEntry for a missing entry and preserves backend failures.
+func Resolve[T comparable](root T, name string, mode Mode, child func(T, string) (T, Kind, string, error)) (T, string, error) {
 	// Keep one unprocessed string per followed link. Splitting and copying
 	// all target components can multiply memory use when a link points to
 	// itself followed by a long suffix, even with the 40-link limit.
@@ -53,15 +66,15 @@ func resolveLinks[T comparable](root T, name string, mode linkLookup, child func
 	}
 	type step struct {
 		value T
-		kind  EntryType
+		kind  Kind
 		root  int
 	}
-	ancestors := []step{{root, directoryType, 0}}
+	ancestors := []step{{root, Directory, 0}}
 	links := 0
 	exportFloor := 0
 	for len(pending) > 0 {
 		current := ancestors[len(ancestors)-1]
-		if current.kind != directoryType && current.kind != Subdirectory {
+		if current.kind != Directory && current.kind != ImageRoot {
 			return missing()
 		}
 		last := len(pending) - 1
@@ -93,15 +106,15 @@ func resolveLinks[T comparable](root T, name string, mode linkLookup, child func
 			continue
 		}
 		next, kind, target, err := child(current.value, component)
-		if err == errDangling {
+		if err == ErrMissingEntry {
 			return missing()
 		}
 		if err != nil {
 			return zero, "", err
 		}
-		if kind != Symlink || (len(pending) == 0 && mode == keepFinalLink) {
+		if kind != Link || (len(pending) == 0 && mode == KeepFinal) {
 			boundary := current.root
-			if kind == Subdirectory {
+			if kind == ImageRoot {
 				boundary = len(ancestors)
 			}
 			ancestors = append(ancestors, step{next, kind, boundary})
@@ -111,7 +124,7 @@ func resolveLinks[T comparable](root T, name string, mode linkLookup, child func
 			return zero, "", stdfs.ErrInvalid
 		}
 		links++
-		if mode == exportFinalLink && len(pending) == 0 && !haveTarget {
+		if mode == Export && len(pending) == 0 && !haveTarget {
 			exported, haveTarget = target, true
 		}
 		if target == "" {
@@ -120,7 +133,7 @@ func resolveLinks[T comparable](root T, name string, mode linkLookup, child func
 		if strings.HasPrefix(target, "/") {
 			return zero, "", stdfs.ErrNotExist
 		}
-		if mode == exportFinalLink {
+		if mode == Export {
 			// Cleaning the rest of this target could erase this directory
 			// link and make the client continue in a different directory.
 			if more {
@@ -132,7 +145,7 @@ func resolveLinks[T comparable](root T, name string, mode linkLookup, child func
 			if climbsAbove(target, len(ancestors)-1-max(current.root, exportFloor)) {
 				return zero, "", stdfs.ErrNotExist
 			}
-			if err := checkNativeLinkPath(target); err != nil {
+			if err := CheckNative(target); err != nil {
 				return zero, "", err
 			}
 		}
@@ -142,15 +155,15 @@ func resolveLinks[T comparable](root T, name string, mode linkLookup, child func
 		// here as when the index is opened by its own capability.
 		pending = append(pending, linkPath{path: target, root: current.root})
 	}
-	if mode == exportFinalLink && !haveTarget {
+	if mode == Export && !haveTarget {
 		return zero, "", stdfs.ErrInvalid
 	}
 	return ancestors[len(ancestors)-1].value, exported, nil
 }
 
-// A mount can serve clients on a different operating system. Both the link
-// name and its target must have the same path components on native clients.
-func checkNativeLinkPath(name string) error {
+// CheckNative checks that a path has the same components on native clients.
+// A mount can serve clients on a different operating system.
+func CheckNative(name string) error {
 	// Plan 9 treats a leading '#' as a device path. A client can remove
 	// leading parent steps when it joins the target to the link's directory.
 	if strings.Contains(name, "#") {

@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/imagepath"
 )
 
 // DefaultMaxLinkSize limits each encoded link file to 1 MiB.
@@ -49,7 +50,8 @@ var (
 // Concurrent FS calls require a base and store that support concurrent calls.
 // Separate Open calls have separate file positions. Calls on an open base file
 // or directory must be serialized unless the base permits concurrent use.
-// Symbolic links follow the base FS policy; this wrapper adds no confinement.
+// File access follows the base FS policy for symbolic links. ReadLink also
+// checks the export boundary in a subdirectory selected by a path prefix.
 type FS struct {
 	base        fs.FS
 	prefix      string // Subdirectory path for a base without fs.SubFS.
@@ -255,8 +257,9 @@ func (fileSystem *FS) Lstat(ctx context.Context, name string) (fs.FileInfo, erro
 	return info, linkPathError("lstat", name, err)
 }
 
-// ReadLink returns the base symbolic link target without following it.
-// The target is unchanged and can be absolute or contain parent components.
+// ReadLink returns the original target text under the base's link policy.
+// When Sub must use a path prefix, it also checks the selected directory
+// boundary before it returns a target.
 // It returns fs.ErrInvalid if base does not implement fs.ReadLinkFS.
 func (fileSystem *FS) ReadLink(ctx context.Context, name string) (string, error) {
 	baseName, err := fileSystem.basePath(name)
@@ -264,10 +267,59 @@ func (fileSystem *FS) ReadLink(ctx context.Context, name string) (string, error)
 		return "", linkPathError("readlink", name, err)
 	}
 	target, err := fs.ReadLink(fileSystem.base, baseName)
+	if err == nil && fileSystem.prefix != "" {
+		err = fileSystem.checkSubLink(name, baseName, target)
+	}
 	if err != nil {
 		return "", linkPathError("readlink", name, err)
 	}
 	return target, nil
+}
+
+// The base checked the caller's full path. Check the same target from the
+// directory an adapter can export as a separate mount.
+func (fileSystem *FS) checkSubLink(name, baseName, target string) error {
+	if err := imagepath.CheckNative(name); err != nil {
+		return err
+	}
+	_, checked, err := imagepath.Resolve(fileSystem.prefix, name, imagepath.Export, func(dir, component string) (string, imagepath.Kind, string, error) {
+		child := path.Join(dir, component)
+		if child == baseName {
+			return child, imagepath.Link, target, nil
+		}
+		info, err := fs.Lstat(fileSystem.base, child)
+		if errors.Is(err, fs.ErrNotExist) {
+			// An unavailable nested index can also report ErrNotExist.
+			entries, listErr := fileSystem.readDir(dir)
+			if listErr != nil {
+				return "", 0, "", listErr
+			}
+			for _, entry := range entries {
+				if entry == nil || entry.Name() == component {
+					return "", 0, "", err
+				}
+			}
+			return "", 0, "", imagepath.ErrMissingEntry
+		}
+		if err != nil {
+			return "", 0, "", err
+		}
+		if info == nil {
+			return "", 0, "", fs.ErrInvalid
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			link, err := fs.ReadLink(fileSystem.base, child)
+			return child, imagepath.Link, link, err
+		}
+		if info.IsDir() {
+			return child, imagepath.Directory, "", nil
+		}
+		return child, imagepath.File, "", nil
+	})
+	if err == nil && checked != target {
+		return fs.ErrInvalid
+	}
+	return err
 }
 
 // ReadFile reads resolved content without allocating from an untrusted size.

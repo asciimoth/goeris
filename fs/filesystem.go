@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/internal/imagepath"
 )
 
 const directoryType EntryType = 255
@@ -171,16 +172,16 @@ func (item *node) load(ctx context.Context) error {
 }
 
 func (fileSystem *FS) find(ctx context.Context, name string, followFinal bool) (*node, error) {
-	mode := keepFinalLink
+	mode := imagepath.KeepFinal
 	if followFinal {
-		mode = followLinks
+		mode = imagepath.Follow
 	}
 	item, _, err := fileSystem.lookup(ctx, name, mode)
 	return item, err
 }
 
 // lookup resolves a path from the root of the selected image or view.
-func (fileSystem *FS) lookup(ctx context.Context, name string, mode linkLookup) (*node, string, error) {
+func (fileSystem *FS) lookup(ctx context.Context, name string, mode imagepath.Mode) (*node, string, error) {
 	if ctx == nil {
 		return nil, "", stdfs.ErrInvalid
 	}
@@ -197,10 +198,10 @@ func (fileSystem *FS) lookup(ctx context.Context, name string, mode linkLookup) 
 		// directory, even when the prefix ends in a symlink. Lstat and
 		// ReadLink must not expose the prefix's final link as the new root.
 		if name == "." {
-			mode = followLinks
+			mode = imagepath.Follow
 		}
 	}
-	return resolveLinks(fileSystem.root, currentPath, mode, func(dir *node, name string) (*node, EntryType, string, error) {
+	return imagepath.Resolve(fileSystem.root, currentPath, mode, func(dir *node, name string) (*node, imagepath.Kind, string, error) {
 		if err := dir.load(ctx); err != nil {
 			return nil, 0, "", err
 		}
@@ -208,9 +209,18 @@ func (fileSystem *FS) lookup(ctx context.Context, name string, mode linkLookup) 
 		next := dir.children[name]
 		dir.mu.Unlock()
 		if next == nil {
-			return nil, 0, "", errDangling
+			return nil, 0, "", imagepath.ErrMissingEntry
 		}
-		return next, next.kind, next.target, nil
+		switch next.kind {
+		case directoryType:
+			return next, imagepath.Directory, "", nil
+		case Subdirectory:
+			return next, imagepath.ImageRoot, "", nil
+		case Symlink:
+			return next, imagepath.Link, next.target, nil
+		default:
+			return next, imagepath.File, "", nil
+		}
 	})
 }
 
@@ -356,9 +366,9 @@ func (fileSystem *FS) ReadLink(ctx context.Context, path string) (string, error)
 		// A native adapter can export a Sub view as its own mount.
 		fileSystem = &FS{root: fileSystem.subRoot, prefix: "."}
 	}
-	_, target, err := fileSystem.lookup(ctx, path, exportFinalLink)
+	_, target, err := fileSystem.lookup(ctx, path, imagepath.Export)
 	if err == nil {
-		err = checkNativeLinkPath(path)
+		err = imagepath.CheckNative(path)
 	}
 	if err != nil {
 		return "", pathError("readlink", path, err)

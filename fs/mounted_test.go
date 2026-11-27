@@ -311,6 +311,27 @@ func TestMountedHandleCancellation(t *testing.T) {
 	}
 }
 
+func TestMountedLstatFinalComponent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dir"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	image := &mountedImage{root: root, prefix: "."}
+	const name = "dir/.. "
+	if filepath.Separator == '\\' {
+		if info, err := image.Lstat(t.Context(), name); info != nil || !errors.Is(err, stdfs.ErrInvalid) {
+			t.Fatalf("Lstat(%q) = %v, %v", name, info, err)
+		}
+		return
+	}
+	if err := os.WriteFile(filepath.Join(root, name), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := image.Lstat(t.Context(), name); err != nil || info.Name() != ".. " || !info.Mode().IsRegular() {
+		t.Fatalf("Lstat(%q) = %v, %v", name, info, err)
+	}
+}
+
 func TestMountStoreRejectsSymlinkImageRoot(t *testing.T) {
 	ctx := t.Context()
 	cap := pathTestCapability(t)
