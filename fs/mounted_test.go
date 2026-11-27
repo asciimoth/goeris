@@ -85,6 +85,10 @@ func TestMountedOperations(t *testing.T) {
 		"deep/dir/up":   "../../hello.txt",
 		"via-shortcut":  "shortcut/up",
 		"docs/up":       "../hello.txt",
+		"docs/local":    "readme.txt",
+		"docs/here":     ".",
+		"docs/via-here": "here/../hello.txt",
+		"round-trip":    "docs/../hello.txt",
 		"escape":        "../outside",
 		"broken":        "missing",
 		"broken-child":  "hello.txt/child",
@@ -120,21 +124,21 @@ func TestMountedOperations(t *testing.T) {
 	if target, err := sub.ReadLink(ctx, "up"); err == nil || target != "" {
 		t.Fatalf("Sub exposed link outside the selected directory: %q, %v", target, err)
 	}
-	if target, err := image.ReadLink(ctx, "alias/up"); err != nil || target != "../hello.txt" {
-		t.Fatalf("image ReadLink = %q, %v", target, err)
+	if target, err := sub.ReadLink(ctx, "local"); err != nil || target != "readme.txt" {
+		t.Fatalf("sub ReadLink = %q, %v", target, err)
 	}
-	if target, err := image.ReadLink(ctx, "deep/dir/up"); err != nil || target != links["deep/dir/up"] {
-		t.Fatalf("ReadLink at original path = %q, %v", target, err)
-	}
-	if data, err := image.ReadFile(ctx, "via-shortcut"); err != nil || string(data) != "Hello, ERIS!\n" {
-		t.Fatalf("ReadFile through directory alias = %q, %v", data, err)
-	}
-	if data, err := sub.ReadFile(ctx, "up"); err != nil || string(data) != "Hello, ERIS!\n" {
+	if data, err := sub.ReadFile(ctx, "local"); err != nil || string(data) != "ERIS-FS example\n" {
 		t.Fatal(string(data), err)
 	}
-	for _, name := range []string{".", "alias", "docs/readme.txt", "docs/up"} {
+	if data, err := image.ReadFile(ctx, "round-trip"); err != nil || string(data) != "Hello, ERIS!\n" {
+		t.Fatalf("ReadFile through contained parent step = %q, %v", data, err)
+	}
+	for name, resolved := range map[string]string{
+		".": ".", "alias": "docs", "docs/readme.txt": "docs/readme.txt",
+		"alias/local": "docs/readme.txt", "round-trip": "hello.txt",
+	} {
 		got, err := image.ResolvePath(ctx, name)
-		if err != nil || got != filepath.Join(root, name) {
+		if err != nil || got != filepath.Join(root, resolved) {
 			t.Fatal(got, err)
 		}
 	}
@@ -143,12 +147,12 @@ func TestMountedOperations(t *testing.T) {
 			t.Fatal(name, got, err)
 		}
 	}
-	for _, name := range []string{"escape", "unsafe", "unsafe-chain", "device", ".", "missing", "broken-escape", "broken-chain", "shortcut/up", "via-shortcut"} {
+	for _, name := range []string{"escape", "unsafe", "unsafe-chain", "device", ".", "missing", "broken-escape", "broken-chain"} {
 		if target, err := image.ReadLink(ctx, name); err == nil || target != "" {
 			t.Errorf("ReadLink(%q) = %q, %v", name, target, err)
 		}
 	}
-	for _, name := range []string{"sibling", "host", "indirect"} {
+	for _, name := range []string{"sibling", "host", "indirect", "docs/up", "docs/via-here", "alias/up", "deep/dir/up", "shortcut/up", "via-shortcut"} {
 		if data, err := image.ReadFile(ctx, name); err == nil || data != nil {
 			t.Errorf("ReadFile(%q) = %q, %v", name, data, err)
 		}
@@ -195,7 +199,7 @@ func TestMountedOperations(t *testing.T) {
 	}
 	defer func() { _ = dir.Close() }()
 	rd := dir.(stdfs.ReadDirFile)
-	if entries, err := rd.ReadDir(-1); err != nil || len(entries) != 2 {
+	if entries, err := rd.ReadDir(-1); err != nil || len(entries) != 5 {
 		t.Fatal(entries, err)
 	}
 	cancel()
@@ -225,6 +229,64 @@ func TestMountedOperations(t *testing.T) {
 	}
 	if _, err := image.ReadDir(ctx, "."); !errors.Is(err, stdfs.ErrNotExist) {
 		t.Fatal(err)
+	}
+}
+
+// The mount supplies the same directory metadata for an implicit directory
+// and a nested image. Check all operations that could follow a nested link.
+func TestMountedNestedImageBoundary(t *testing.T) {
+	ctx := t.Context()
+	cap := pathTestCapability(t)
+	base := t.TempDir()
+	root := makePathTestTree(t, base, cap)
+	if err := os.Symlink("..", filepath.Join(root, "docs", "parent")); err != nil {
+		t.Skip(err)
+	}
+	image, err := NewMountStore(base).OpenFS(ctx, cap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const link = "docs/parent"
+	const child = link + "/hello.txt"
+	if info, err := image.Lstat(ctx, link); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
+		t.Fatalf("Lstat of the link = %v, %v", info, err)
+	}
+	sub, err := image.Sub(ctx, "docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target, err := image.ReadLink(ctx, link); target != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ReadLink = %q, %v", target, err)
+	}
+	if p, err := sub.ResolvePath(ctx, "parent/hello.txt"); p != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("Sub ResolvePath = %q, %v", p, err)
+	}
+	if file, err := image.Open(ctx, child); err == nil {
+		_ = file.Close()
+		t.Error("Open followed the link into the parent image")
+	} else if !errors.Is(err, stdfs.ErrNotExist) {
+		t.Error(err)
+	}
+	if file, err := image.OpenFile(ctx, child); err == nil {
+		_ = file.Close()
+		t.Error("OpenFile followed the link into the parent image")
+	} else if !errors.Is(err, stdfs.ErrNotExist) {
+		t.Error(err)
+	}
+	if info, err := image.Stat(ctx, link); info != nil || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("Stat = %v, %v", info, err)
+	}
+	if info, err := image.Lstat(ctx, child); info != nil || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("Lstat through the link = %v, %v", info, err)
+	}
+	if entries, err := image.ReadDir(ctx, link); entries != nil || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ReadDir = %v, %v", entries, err)
+	}
+	if view, err := image.Sub(ctx, link); view != nil || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("Sub = %v, %v", view, err)
+	}
+	if err := image.Prefetch(ctx, link); !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("Prefetch = %v", err)
 	}
 }
 

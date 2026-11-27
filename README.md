@@ -197,8 +197,11 @@ To migrate from `fs.ResolveRoot` or `fs.ResolvePath`, open the image with
 `ResolvePath` returns an absolute host path. A capability-backed image can
 resolve an uncompressed file if its content store supports host paths. A mounted
 image can also resolve directories and decoded compressed files. Use a trusted,
-immutable mount that verifies content, enforces nested image boundaries, and
-preserves case-sensitive names. Each capability entry must be a directory.
+immutable mount that verifies content and preserves case-sensitive names. Each
+capability entry must be a directory. The expanded tree has no nested index
+markers, so `MountStore` confines each link to the directory that contains it.
+For links to siblings of that directory, use a capability-backed image, which
+knows the index boundaries. Mounted `ResolvePath` returns the resolved path.
 MountStore write operations return `eris.ErrReadOnly`. Mounted trees report
 `errors.ErrUnsupported` for raw-index reads and for positive explicit index
 limits. A mounted prefetch asks the host for file metadata throughout the

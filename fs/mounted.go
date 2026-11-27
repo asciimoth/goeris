@@ -7,6 +7,7 @@ import (
 	stdfs "io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/asciimoth/goeris"
@@ -15,7 +16,8 @@ import (
 
 // MountStore reads the decoded trees of a trusted, immutable ERIS-FS mount.
 // The mount handles verification and decompression. It exposes neither the raw
-// index bytes nor the limits used to decode them.
+// index bytes nor the limits used to decode them. Each link must stay within
+// its containing directory because the mount does not identify nested indexes.
 type MountStore struct{ mount string }
 
 // NewMountStore selects the directory containing the capability trees, e.g.
@@ -106,9 +108,8 @@ func mountedRootInfo(name string) (stdfs.FileInfo, error) {
 	return info, nil
 }
 
-// Keep the original image root for Sub views. This permits a relative link to
-// reach a sibling directory while os.Root confines lookup to the image.
-func mountedCall[T any](ctx context.Context, m *mountedImage, op, name string, call func(*os.Root, string) (T, error)) (T, error) {
+// Use the capability directory as the host root, including for Sub views.
+func withMountedRoot[T any](ctx context.Context, m *mountedImage, op, name string, call func(*os.Root, string) (T, error)) (T, error) {
 	var zero T
 	if err := checkContext(ctx); err != nil {
 		return zero, pathError(op, name, err)
@@ -143,53 +144,81 @@ func mountedCall[T any](ctx context.Context, m *mountedImage, op, name string, c
 	return result, nil
 }
 
+// An expanded tree has no markers for nested indexes. Each directory can be
+// an image root. Resolve each link within the directory that contains it.
+func resolveMountedLinks(ctx context.Context, r *os.Root, p string, mode linkLookup) (string, string, error) {
+	return resolveLinks(".", filepath.ToSlash(p), mode, func(dir, component string) (string, EntryType, string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", 0, "", err
+		}
+		// A Windows lookup can trim dots and spaces from a component.
+		if filepath.Separator == '\\' && (strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ")) {
+			return "", 0, "", stdfs.ErrInvalid
+		}
+		local, err := filepath.Localize(component)
+		if err != nil {
+			return "", 0, "", err
+		}
+		next := filepath.Join(dir, local)
+		info, err := r.Lstat(next)
+		if errors.Is(err, stdfs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return "", 0, "", errDangling
+		}
+		if err != nil {
+			return "", 0, "", err
+		}
+		if info.Mode()&stdfs.ModeSymlink != 0 {
+			link, err := r.Readlink(next)
+			if mode != exportFinalLink {
+				link = filepath.ToSlash(link)
+			}
+			return next, Symlink, link, err
+		}
+		if filepath.Separator == '\\' && info.Mode()&stdfs.ModeIrregular != 0 {
+			// A Windows junction can redirect lookup like a symlink.
+			return "", 0, "", stdfs.ErrInvalid
+		}
+		if info.IsDir() {
+			return next, Subdirectory, "", nil
+		}
+		return next, Regular, "", nil
+	})
+}
+
+func mountedCall[T any](ctx context.Context, m *mountedImage, op, name string, call func(*os.Root, string) (T, error)) (T, error) {
+	return withMountedRoot(ctx, m, op, name, func(r *os.Root, p string) (T, error) {
+		resolved, _, err := resolveMountedLinks(ctx, r, p, followLinks)
+		if err != nil {
+			var zero T
+			return zero, err
+		}
+		return call(r, resolved)
+	})
+}
+
 func (m *mountedImage) Stat(ctx context.Context, name string) (stdfs.FileInfo, error) {
 	return mountedCall(ctx, m, "stat", name, (*os.Root).Stat)
 }
 
 func (m *mountedImage) Lstat(ctx context.Context, name string) (stdfs.FileInfo, error) {
-	stat := (*os.Root).Lstat
 	if name == "." {
-		stat = (*os.Root).Stat // A Sub view can start at a link to a directory.
+		return mountedCall(ctx, m, "lstat", name, (*os.Root).Stat)
 	}
-	return mountedCall(ctx, m, "lstat", name, stat)
+	return withMountedRoot(ctx, m, "lstat", name, func(r *os.Root, p string) (stdfs.FileInfo, error) {
+		dir, _, err := resolveMountedLinks(ctx, r, filepath.Dir(p), followLinks)
+		if err != nil {
+			return nil, err
+		}
+		return r.Lstat(filepath.Join(dir, filepath.Base(p)))
+	})
 }
 
 func (m *mountedImage) ReadLink(ctx context.Context, name string) (string, error) {
-	return mountedCall(ctx, m, "readlink", name, func(r *os.Root, p string) (string, error) {
+	return withMountedRoot(ctx, m, "readlink", name, func(r *os.Root, p string) (string, error) {
 		if name == "." {
 			return "", stdfs.ErrInvalid
 		}
-		if m.prefix != "." {
-			// An adapter can expose this directory as a separate mount.
-			sub, err := r.OpenRoot(m.prefix)
-			if err != nil {
-				return "", err
-			}
-			defer func() { _ = sub.Close() }()
-			r, p = sub, filepath.FromSlash(name)
-		}
-		_, target, err := resolveLinks(".", filepath.ToSlash(p), exportFinalLink, func(dir, component string) (string, EntryType, string, error) {
-			if err := ctx.Err(); err != nil {
-				return "", 0, "", err
-			}
-			next := filepath.Join(dir, component)
-			info, err := r.Lstat(next)
-			if errors.Is(err, stdfs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-				return "", 0, "", errDangling
-			}
-			if err != nil {
-				return "", 0, "", err
-			}
-			if info.Mode()&stdfs.ModeSymlink != 0 {
-				link, err := r.Readlink(next)
-				return next, Symlink, link, err
-			}
-			if info.IsDir() {
-				return next, directoryType, "", nil
-			}
-			return next, Regular, "", nil
-		})
+		_, target, err := resolveMountedLinks(ctx, r, p, exportFinalLink)
 		return target, err
 	})
 }

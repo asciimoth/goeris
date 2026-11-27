@@ -101,14 +101,17 @@
 // native paths and rejects names the host cannot represent.
 // A link in a decoded index can reach entries in that image, including nested
 // entries. A link in a nested index cannot climb into its parent image.
-// A host mount supplies an expanded tree and must enforce its nested index
-// boundaries. MountStore checks the capability directory and confines lookups
-// to that directory.
+// A host mount supplies an expanded tree without nested index markers.
+// MountStore therefore treats each directory as a possible image root.
+// A mounted link can descend into a directory and return, but it cannot
+// climb above the directory that contains the link. ResolvePath returns the
+// resolved host path. Use a capability-backed image for links that need the
+// boundaries recorded in the index.
 // ReadLink checks each target in the chain before exporting the link. It rejects
 // targets that can leave the view when a client cleans the path, and parent
 // steps that would remove a directory link. It also rejects native device names,
 // backslashes, colons, NUL bytes, and names ending in a dot or space.
-// In a Sub view, Open can follow an in-image link outside
+// In a capability-backed Sub view, Open can follow an in-image link outside
 // the selected directory. ReadLink rejects such a target so an adapter can
 // mount the subdirectory on its own. Applications that extract an image must
 // still check native paths before writing them.
