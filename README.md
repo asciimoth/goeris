@@ -134,8 +134,10 @@ the index is nested in another image. `ReadLink` returns the original target for
 safe links. In a `Sub` view it also checks the selected directory boundary. With
 multiple backends for the same capability, it rejects targets that contain `..`
 after a named component because fallback can change where that component leads.
-A view that combines independently opened images rejects link export because the
-client could resolve the target in a different image. Missing blocks match both
+It permits leading `..` steps only if each directory they leave is known to be
+inside the same image in every backend that supplies that directory. A view that
+combines independently opened images rejects link export because the client
+could resolve the target in a different image. Missing blocks match both
 `io/fs.ErrNotExist` and `eris.ErrMissingBlock` in errors returned by `Mount`
 methods.
 

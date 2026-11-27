@@ -81,6 +81,7 @@ func TestMountedOperations(t *testing.T) {
 	}
 	links := map[string]string{
 		"alias":         "docs",
+		`alias\..`:      "docs",
 		"shortcut":      "deep/dir",
 		"deep/dir/up":   "../../hello.txt",
 		"via-shortcut":  "shortcut/up",
@@ -147,7 +148,7 @@ func TestMountedOperations(t *testing.T) {
 			t.Fatal(name, got, err)
 		}
 	}
-	for _, name := range []string{"escape", "unsafe", "unsafe-chain", "device", ".", "missing", "broken-escape", "broken-chain"} {
+	for _, name := range []string{"escape", "unsafe", "unsafe-chain", "device", ".", "missing", "broken-escape", "broken-chain", `alias\../local`} {
 		if target, err := image.ReadLink(ctx, name); err == nil || target != "" {
 			t.Errorf("ReadLink(%q) = %q, %v", name, target, err)
 		}

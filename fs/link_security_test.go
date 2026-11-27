@@ -49,6 +49,8 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 		"device-alias":     "device",
 		"trimmed-parent":   ".. /outside",
 		"plan9-device":     "#c/cons",
+		"dir/plan9-device": "../#c/cons",
+		`dir\../up`:        "..",
 		"missing":          "absent",
 		"missing-safe":     "dir/../absent",
 		"missing-escape":   "absent/../../outside",
@@ -115,7 +117,10 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	if got, err := image.ReadFile(ctx, "device-alias"); err != nil || string(got) != "image file" {
 		t.Errorf("in-image read of literal file name = %q, %v", got, err)
 	}
-	for _, name := range []string{"backslash", "drive", "nul", "device", "device-alias", "trimmed-parent", "plan9-device"} {
+	if info, err := image.Stat(ctx, `dir\../up`); err != nil || !info.IsDir() {
+		t.Errorf("in-image lookup from literal directory name = %v, %v", info, err)
+	}
+	for _, name := range []string{"backslash", "drive", "nul", "device", "device-alias", "trimmed-parent", "plan9-device", "dir/plan9-device", `dir\../up`} {
 		if got, err := mount.ReadLink(root + name); got != "" || !errors.Is(err, stdfs.ErrInvalid) {
 			t.Errorf("ReadLink(%q) = %q, %v", name, got, err)
 		}
@@ -286,6 +291,38 @@ func TestCombinedReadLinkChecksUnavailableParent(t *testing.T) {
 	}
 	if got, err := view.ReadLink(ctx, "nested/dir/up"); got != "" || !errors.Is(err, eris.ErrMissingBlock) {
 		t.Errorf("ReadLink with unavailable parent index = %q, %v", got, err)
+	}
+}
+
+func TestCombinedReadLinkRespectsNestedRootsInEveryBackend(t *testing.T) {
+	ctx := t.Context()
+	store := NewStore(newTestStore(), eris.BlockOptions{})
+	child, err := store.EncodeIndex(ctx, Index{Entries: []Entry{
+		{Path: []string{"dir", "file"}, Type: Regular, Capability: pathTestCapability(t)},
+	}}, eris.Secret{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested := &FS{root: buildTree(Index{Entries: []Entry{
+		{Path: []string{"child"}, Type: Subdirectory, Capability: child},
+	}}, store, ".", DefaultMaxIndexSize), prefix: "."}
+	flat := linkTestImage(
+		Entry{Path: []string{"child", "dir", "local"}, Type: Symlink, Target: ".."},
+		Entry{Path: []string{"child", "dir", "up"}, Type: Symlink, Target: "../.."},
+	)
+	for _, images := range [][]*FS{{flat, nested}, {nested, flat}} {
+		view, err := openImages(ctx, images, func(_ context.Context, image *FS) (FileSystem, error) {
+			return image, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := view.ReadLink(ctx, "child/dir/up"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+			t.Errorf("ReadLink across nested image root = %q, %v", got, err)
+		}
+		if got, err := view.ReadLink(ctx, "child/dir/local"); got != ".." || err != nil {
+			t.Errorf("ReadLink within nested image = %q, %v", got, err)
+		}
 	}
 }
 

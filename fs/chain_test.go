@@ -41,6 +41,9 @@ func TestCombinedStore(t *testing.T) {
 	if err := builder.AddSymlink("link", "dir/file"); err != nil {
 		t.Fatal(err)
 	}
+	if err := builder.AddSymlink("dir/parent", ".."); err != nil {
+		t.Fatal(err)
+	}
 	cap, err := builder.Finish(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +51,7 @@ func TestCombinedStore(t *testing.T) {
 	if got, err := chain.EncodeIndex(ctx, builder.Index(), secret); err != nil || got != cap {
 		t.Fatal(got, err)
 	}
-	if index, err := chain.DecodeIndex(ctx, cap); err != nil || len(index.Entries) != 2 {
+	if index, err := chain.DecodeIndex(ctx, cap); err != nil || len(index.Entries) != 3 {
 		t.Fatal(index, err)
 	}
 	if _, err := chain.DecodeIndexWithLimit(ctx, cap, 1); !errors.Is(err, ErrIndexTooLarge) {
@@ -106,6 +109,10 @@ func TestCombinedStore(t *testing.T) {
 	}
 	if target, err := view.ReadLink(ctx, "link"); err != nil || target != "dir/file" {
 		t.Fatal(target, err)
+	}
+	// The mount has no index boundary markers for dir.
+	if target, err := view.ReadLink(ctx, "dir/parent"); target != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Fatalf("ReadLink across a mounted directory = %q, %v", target, err)
 	}
 	if info, err := view.Lstat(ctx, "link"); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
 		t.Fatal(info, err)

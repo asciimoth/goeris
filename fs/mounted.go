@@ -218,6 +218,9 @@ func (m *mountedImage) ReadLink(ctx context.Context, name string) (string, error
 		if name == "." {
 			return "", stdfs.ErrInvalid
 		}
+		if err := checkNativeLinkPath(name); err != nil {
+			return "", err
+		}
 		_, target, err := resolveMountedLinks(ctx, r, p, exportFinalLink)
 		return target, err
 	})

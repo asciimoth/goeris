@@ -160,16 +160,19 @@ multiple backends for the same capability rejects `..` after a named component
 because that component can resolve differently during fallback. For a target
 with leading parent steps, the view also checks the directories that contain the
 link. A directory alias in any backend can change where a parent step leads.
-When a view combines independently opened images, `ReadLink` rejects link export
+Each directory that a parent step leaves must be an ordinary directory in every
+backend where it exists. A nested index or a directory with unknown image
+boundaries prevents export. Host mounts have no nested index markers. When a
+view combines independently opened images, `ReadLink` rejects link export
 because the client could resolve the target in a different image. Safe targets
 keep their original spelling. Each target must also stay in the image if a
 client removes dot segments before it follows links. A parent step that would
 remove a directory link from the target is rejected. If the lookup path contains
 a directory alias, the target can climb past that alias only when the alias and
-its destination have the same parent. Targets with native device names, a
-backslash, a colon, a NUL byte, or a name ending in a dot or space are rejected
-because a native client can interpret them as a different path. The dot segments
-`.` and `..` retain their usual meaning.
+its destination have the same parent. Both the lookup path and the target must
+be safe for native clients. A native device name, a backslash, a colon, a NUL
+byte, or a name ending in a dot or space prevents export. The dot segments `.`
+and `..` retain their usual meaning.
 
 Callers can explicitly enable recent listings with
 `Mount.WithListingCache(capabilityLimit, blockLimit)`. Both categories are

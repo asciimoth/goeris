@@ -241,23 +241,23 @@ func (s *CombinedFileSystem) ReadLink(ctx context.Context, name string) (string,
 	// An adapter resolves each component in a separate lookup. After a
 	// named component, another backend could supply a link to the root.
 	// Leading parent steps also depend on how the client reached this link.
-	depth := strings.Count(name, "/")
-	usesParent := false
+	parentDepth := strings.Count(name, "/")
+	remainingDepth := parentDepth
+	seenName := false
 	for part := range strings.SplitSeq(target, "/") {
 		switch part {
 		case "", ".":
 		case "..":
-			if depth == 0 {
+			if seenName || remainingDepth == 0 {
 				return "", pathError("readlink", name, stdfs.ErrNotExist)
 			}
-			depth--
-			usesParent = true
+			remainingDepth--
 		default:
-			depth = 0
+			seenName = true
 		}
 	}
-	if usesParent {
-		if err := s.checkLinkParents(ctx, name); err != nil {
+	if remainingDepth < parentDepth {
+		if err := s.checkLinkParents(ctx, name, remainingDepth); err != nil {
 			return "", pathError("readlink", name, err)
 		}
 	}
@@ -267,7 +267,8 @@ func (s *CombinedFileSystem) ReadLink(ctx context.Context, name string) (string,
 // A client can get a directory alias from one backend and its child's link
 // from another. The depth of the link in either backend alone is insufficient.
 // Check each prefix from the root so Lstat never follows an unchecked alias.
-func (s *CombinedFileSystem) checkLinkParents(ctx context.Context, name string) error {
+// Each directory left by a parent step must also be inside the same index.
+func (s *CombinedFileSystem) checkLinkParents(ctx context.Context, name string, remainingDepth int) error {
 	for _, open := range s.images {
 		image, err := open(ctx)
 		if err != nil {
@@ -275,11 +276,12 @@ func (s *CombinedFileSystem) checkLinkParents(ctx context.Context, name string) 
 		}
 		if combined, ok := image.(*CombinedFileSystem); ok {
 			// Lstat on a chain only reports the first successful lookup.
-			if err := combined.checkLinkParents(ctx, name); err != nil {
+			if err := combined.checkLinkParents(ctx, name, remainingDepth); err != nil {
 				return err
 			}
 			continue
 		}
+		depth := 0
 		for i := range name {
 			if name[i] != '/' {
 				continue
@@ -306,6 +308,15 @@ func (s *CombinedFileSystem) checkLinkParents(ctx context.Context, name string) 
 			}
 			if !info.IsDir() {
 				break
+			}
+			depth++
+			if depth > remainingDepth {
+				// Only a decoded index identifies an ordinary directory.
+				// A mounted tree can have an image root at any directory.
+				dir, ok := info.(*node)
+				if !ok || dir.kind != directoryType {
+					return stdfs.ErrNotExist
+				}
 			}
 		}
 	}

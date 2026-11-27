@@ -109,8 +109,9 @@
 // boundaries recorded in the index.
 // ReadLink checks each target in the chain before exporting the link. It rejects
 // targets that can leave the view when a client cleans the path, and parent
-// steps that would remove a directory link. It also rejects native device names,
-// backslashes, colons, NUL bytes, and names ending in a dot or space.
+// steps that would remove a directory link. In both the lookup path and the
+// target it rejects native device names, backslashes, colons, NUL bytes, and
+// names ending in a dot or space.
 // In a capability-backed Sub view, Open can follow an in-image link outside
 // the selected directory. ReadLink rejects such a target so an adapter can
 // mount the subdirectory on its own. Applications that extract an image must

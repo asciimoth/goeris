@@ -357,6 +357,9 @@ func (fileSystem *FS) ReadLink(ctx context.Context, path string) (string, error)
 		fileSystem = &FS{root: fileSystem.subRoot, prefix: "."}
 	}
 	_, target, err := fileSystem.lookup(ctx, path, exportFinalLink)
+	if err == nil {
+		err = checkNativeLinkPath(path)
+	}
 	if err != nil {
 		return "", pathError("readlink", path, err)
 	}

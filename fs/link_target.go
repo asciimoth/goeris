@@ -129,7 +129,10 @@ func resolveLinks[T comparable](root T, name string, mode linkLookup, child func
 				}
 				pending[last].via = &directoryLink{current.value, exportFloor}
 			}
-			if err := checkNativeLinkTarget(target, len(ancestors)-1-max(current.root, exportFloor)); err != nil {
+			if climbsAbove(target, len(ancestors)-1-max(current.root, exportFloor)) {
+				return zero, "", stdfs.ErrNotExist
+			}
+			if err := checkNativeLinkPath(target); err != nil {
 				return zero, "", err
 			}
 		}
@@ -145,17 +148,21 @@ func resolveLinks[T comparable](root T, name string, mode linkLookup, child func
 	return ancestors[len(ancestors)-1].value, exported, nil
 }
 
-// A mount can serve clients on a different operating system. Check the target
-// before exporting it, even when the serving host treats these names literally.
-func checkNativeLinkTarget(target string, depth int) error {
-	if climbsAbove(target, depth) {
-		return stdfs.ErrNotExist
+// A mount can serve clients on a different operating system. Both the link
+// name and its target must have the same path components on native clients.
+func checkNativeLinkPath(name string) error {
+	// Plan 9 treats a leading '#' as a device path. A client can remove
+	// leading parent steps when it joins the target to the link's directory.
+	if strings.Contains(name, "#") {
+		clean := path.Clean(name)
+		for strings.HasPrefix(clean, "../") {
+			clean = clean[3:]
+		}
+		if name[0] == '#' || strings.HasPrefix(clean, "#") {
+			return stdfs.ErrInvalid
+		}
 	}
-	// Plan 9 treats a leading '#' as a device path.
-	if strings.Contains(target, "#") && (target[0] == '#' || strings.HasPrefix(path.Clean(target), "#")) {
-		return stdfs.ErrInvalid
-	}
-	for part := range strings.SplitSeq(target, "/") {
+	for part := range strings.SplitSeq(name, "/") {
 		switch part {
 		case "", ".", "..":
 			continue
