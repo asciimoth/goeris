@@ -445,7 +445,7 @@ func TestFileSystemConformance(t *testing.T) {
 
 func TestDirectoryReadDirLargeCountAfterOffset(t *testing.T) {
 	t.Parallel()
-	file := &directoryFile{node: &node{children: map[string]*node{
+	file := &directoryFile{ctx: t.Context(), node: &node{children: map[string]*node{
 		"a": {name: "a"}, "b": {name: "b"}, "c": {name: "c"},
 	}}}
 	first, err := file.ReadDir(1)

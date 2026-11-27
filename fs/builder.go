@@ -7,7 +7,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/asciimoth/goeris"
 )
@@ -195,7 +194,7 @@ func (builder *Builder) Finish(ctx context.Context) (eris.Capability, error) {
 	if builder == nil || builder.store.content == nil {
 		return eris.Capability{}, ErrInvalidEntry
 	}
-	return builder.store.EncodeIndex(ctx, builder.Index(), builder.secret)
+	return builder.store.EncodeIndex(ctx, Index{Entries: builder.entries}, builder.secret)
 }
 
 func (builder *Builder) add(entry Entry) error {
@@ -245,7 +244,7 @@ func (builder *Builder) recordPath(components []string) {
 }
 
 func splitPath(path string) ([]string, error) {
-	if !stdfs.ValidPath(path) || path == "." || !utf8.ValidString(path) {
+	if !stdfs.ValidPath(path) || path == "." {
 		return nil, ErrInvalidPath
 	}
 	return strings.Split(path, "/"), nil

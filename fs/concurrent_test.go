@@ -10,6 +10,32 @@ import (
 	"github.com/asciimoth/goeris"
 )
 
+func TestEmptyNestedIndexStaysLoaded(t *testing.T) {
+	ctx := t.Context()
+	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
+	store := NewStore(eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+	empty, err := store.EncodeIndex(ctx, Index{}, eris.Secret{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := Index{Entries: []Entry{{Path: []string{"empty"}, Type: Subdirectory, Capability: empty}}}
+	root, err := store.EncodeIndex(ctx, index, eris.Secret{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := store.OpenFS(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		entries, err := image.ReadDir(ctx, "empty")
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("ReadDir(empty) returned %v, %v", entries, err)
+		}
+		delete(blocks.Blocks, empty.Root.Reference)
+	}
+}
+
 func TestConcurrentImageReads(t *testing.T) {
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	store := eris.NewBlockCapabilityStore(blocks)

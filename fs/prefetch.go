@@ -47,11 +47,9 @@ func (fileSystem *FS) Prefetch(ctx context.Context, name string) error {
 			if err := item.load(ctx); err != nil {
 				return pathError("prefetch", name, err)
 			}
-			item.mu.Lock()
 			for _, child := range item.children {
 				pending = append(pending, child)
 			}
-			item.mu.Unlock()
 		} else if err := item.prefetchFile(ctx); err != nil {
 			return pathError("prefetch", name, err)
 		}

@@ -42,8 +42,9 @@ type node struct {
 	kind        EntryType
 	capability  eris.Capability
 	target      string
+	// A nested index has nil children until load succeeds. After that the
+	// map is immutable, including when the index is empty.
 	children    map[string]*node
-	loaded      bool
 	loading     chan struct{}
 	indexLimit  int64
 	size        int64
@@ -97,7 +98,7 @@ func (s *Store) openFS(ctx context.Context, capability eris.Capability, limit in
 func buildTree(index Index, s *Store, rootName string, indexLimit int64) *node {
 	root := &node{
 		name: rootName, kind: directoryType, store: s, children: make(map[string]*node),
-		loaded: true, indexLimit: indexLimit,
+		indexLimit: indexLimit,
 	}
 	for _, entry := range index.Entries {
 		parent := root
@@ -106,7 +107,7 @@ func buildTree(index Index, s *Store, rootName string, indexLimit int64) *node {
 			if child == nil {
 				child = &node{
 					name: component, kind: directoryType, store: s, children: make(map[string]*node),
-					loaded: true, indexLimit: indexLimit,
+					indexLimit: indexLimit,
 				}
 				parent.children[component] = child
 			}
@@ -115,11 +116,8 @@ func buildTree(index Index, s *Store, rootName string, indexLimit int64) *node {
 		name := entry.Path[len(entry.Path)-1]
 		child := &node{
 			name: name, kind: entry.Type, store: s, capability: entry.Capability,
-			target: entry.Target, loaded: entry.Type != Subdirectory, indexLimit: indexLimit,
+			target: entry.Target, indexLimit: indexLimit,
 			size: entry.Size, sizeKnown: entry.Size >= 0, compression: entry.Compression,
-		}
-		if entry.Type == Subdirectory {
-			child.children = make(map[string]*node)
 		}
 		parent.children[name] = child
 	}
@@ -135,7 +133,7 @@ func (item *node) load(ctx context.Context) error {
 	}
 	for {
 		item.mu.Lock()
-		if item.loaded {
+		if item.children != nil {
 			item.mu.Unlock()
 			return ctx.Err()
 		}
@@ -167,7 +165,6 @@ func (item *node) load(ctx context.Context) error {
 	root := buildTree(index, item.store, item.name, item.indexLimit)
 	item.mu.Lock()
 	item.children = root.children
-	item.loaded = true
 	item.mu.Unlock()
 	return nil
 }
@@ -200,9 +197,7 @@ func (fileSystem *FS) lookup(ctx context.Context, name string, mode imagepath.Mo
 		if err := dir.load(ctx); err != nil {
 			return nil, 0, "", err
 		}
-		dir.mu.Lock()
 		next := dir.children[name]
-		dir.mu.Unlock()
 		if next == nil {
 			return nil, 0, "", imagepath.ErrMissingEntry
 		}
@@ -390,8 +385,6 @@ func (fileSystem *FS) Sub(ctx context.Context, name string) (FileSystem, error) 
 }
 
 func (node *node) dirEntries(ctx context.Context) []stdfs.DirEntry {
-	node.mu.Lock()
-	defer node.mu.Unlock()
 	entries := make([]stdfs.DirEntry, 0, len(node.children))
 	for _, child := range node.children {
 		entries = append(entries, dirEntry{node: child, ctx: ctx})
@@ -433,6 +426,9 @@ func (node *node) recordSize(size int64) error {
 }
 
 func (node *node) info(ctx context.Context) (stdfs.FileInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if node.listedImage != nil {
 		view, err := node.listedImage.openImage(ctx, node.capability)
 		if err != nil {
@@ -488,6 +484,16 @@ func (file *regularFile) Close() error {
 	return file.CapabilityReader.Close()
 }
 
+func (file *regularFile) Seek(offset int64, whence int) (int64, error) {
+	if file.IsClosed() {
+		return 0, ErrClosed
+	}
+	if err := file.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return file.CapabilityReader.Seek(offset, whence)
+}
+
 // IsClosed and CacheSize preserve diagnostics previously provided by the
 // embedded block reader. An opaque capability reader reports no cache count.
 func (file *regularFile) IsClosed() bool { return file.closed.Load() }
@@ -525,12 +531,18 @@ func (file *directoryFile) Read([]byte) (int, error) {
 	if file.closed {
 		return 0, ErrClosed
 	}
+	if err := file.ctx.Err(); err != nil {
+		return 0, err
+	}
 	return 0, stdfs.ErrInvalid
 }
 
 func (file *directoryFile) ReadDir(count int) ([]stdfs.DirEntry, error) {
 	if file.closed {
 		return nil, ErrClosed
+	}
+	if err := file.ctx.Err(); err != nil {
+		return nil, err
 	}
 	if file.entries == nil {
 		file.entries = file.node.dirEntries(file.ctx)

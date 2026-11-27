@@ -27,7 +27,7 @@ func (index Index) MarshalBinary() ([]byte, error) {
 	}
 	type encodedEntry struct {
 		key   []byte
-		value []byte
+		entry *Entry
 	}
 	encoded := make([]encodedEntry, len(index.Entries))
 	for i, entry := range index.Entries {
@@ -35,33 +35,7 @@ func (index Index) MarshalBinary() ([]byte, error) {
 		for _, component := range entry.Path {
 			key = appendText(key, component)
 		}
-		fields := uint64(2)
-		if entry.Type == Regular || entry.Type == Executable {
-			if entry.Size < 0 {
-				return nil, ErrUnknownSize
-			}
-			fields = 3
-		}
-		value := cborwire.AppendHead(nil, 4, fields)
-		value = cborwire.AppendHead(value, 0, uint64(entry.Type))
-		if entry.Type == Symlink {
-			parts := strings.Split(entry.Target, "/")
-			value = cborwire.AppendHead(value, 4, uint64(len(parts)))
-			for _, part := range parts {
-				value = appendText(value, part)
-			}
-		} else {
-			capability, _ := entry.Capability.MarshalBinary()
-			value = cborwire.AppendHead(value, 6, eris.CapabilityCBORTag)
-			value = appendBytes(value, capability)
-			if fields == 3 {
-				if entry.Compression == Lzip {
-					value = cborwire.AppendHead(value, 6, LzipLengthTag)
-				}
-				value = cborwire.AppendHead(value, 0, uint64(entry.Size))
-			}
-		}
-		encoded[i] = encodedEntry{key: key, value: value}
+		encoded[i] = encodedEntry{key: key, entry: &index.Entries[i]}
 	}
 	slices.SortFunc(encoded, func(a, b encodedEntry) int {
 		return bytes.Compare(a.key, b.key)
@@ -72,7 +46,33 @@ func (index Index) MarshalBinary() ([]byte, error) {
 	out = cborwire.AppendHead(out, 5, uint64(len(encoded)))
 	for _, item := range encoded {
 		out = append(out, item.key...)
-		out = append(out, item.value...)
+		entry := item.entry
+		fields := uint64(2)
+		if entry.Type == Regular || entry.Type == Executable {
+			if entry.Size < 0 {
+				return nil, ErrUnknownSize
+			}
+			fields = 3
+		}
+		out = cborwire.AppendHead(out, 4, fields)
+		out = cborwire.AppendHead(out, 0, uint64(entry.Type))
+		if entry.Type == Symlink {
+			parts := uint64(strings.Count(entry.Target, "/")) + 1
+			out = cborwire.AppendHead(out, 4, parts)
+			for part := range strings.SplitSeq(entry.Target, "/") {
+				out = appendText(out, part)
+			}
+		} else {
+			capability, _ := entry.Capability.MarshalBinary()
+			out = cborwire.AppendHead(out, 6, eris.CapabilityCBORTag)
+			out = appendBytes(out, capability)
+			if fields == 3 {
+				if entry.Compression == Lzip {
+					out = cborwire.AppendHead(out, 6, LzipLengthTag)
+				}
+				out = cborwire.AppendHead(out, 0, uint64(entry.Size))
+			}
+		}
 	}
 	return out, nil
 }

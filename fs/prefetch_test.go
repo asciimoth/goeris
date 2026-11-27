@@ -205,7 +205,6 @@ func TestPrefetchImageMissingContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	image.root.children["file"].kind = Subdirectory
-	image.root.children["file"].loaded = false
 	if err := image.Prefetch(ctx, "."); !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatal(err)
 	}

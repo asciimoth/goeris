@@ -341,8 +341,33 @@ func (m *mountedImage) ReadDir(ctx context.Context, name string) ([]stdfs.DirEnt
 		if !info.IsDir() {
 			return nil, stdfs.ErrInvalid
 		}
-		return stdfs.ReadDir(r.FS(), filepath.ToSlash(p))
+		entries, err := stdfs.ReadDir(r.FS(), filepath.ToSlash(p))
+		return bindMountedEntries(ctx, entries), err
 	})
+}
+
+type mountedDirEntry struct {
+	stdfs.DirEntry
+	ctx context.Context
+}
+
+func (entry mountedDirEntry) String() string { return stdfs.FormatDirEntry(entry) }
+
+func (entry mountedDirEntry) Info() (stdfs.FileInfo, error) {
+	if err := entry.ctx.Err(); err != nil {
+		return nil, err
+	}
+	return entry.DirEntry.Info()
+}
+
+func bindMountedEntries(ctx context.Context, entries []stdfs.DirEntry) []stdfs.DirEntry {
+	if ctx.Done() == nil {
+		return entries
+	}
+	for i, entry := range entries {
+		entries[i] = mountedDirEntry{DirEntry: entry, ctx: ctx}
+	}
+	return entries
 }
 
 // Expose only read operations. An os.File would also expose Chmod and Chown.
@@ -369,7 +394,8 @@ func (f *mountedFile) ReadDir(n int) ([]stdfs.DirEntry, error) {
 	if err := f.ctx.Err(); err != nil {
 		return nil, err
 	}
-	return f.file.ReadDir(n)
+	entries, err := f.file.ReadDir(n)
+	return bindMountedEntries(f.ctx, entries), err
 }
 
 func (f *mountedFile) Seek(off int64, whence int) (int64, error) {

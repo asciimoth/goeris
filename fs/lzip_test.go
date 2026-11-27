@@ -131,7 +131,8 @@ func TestLzipRejectsMalformedStreams(t *testing.T) {
 			t.Fatalf("accepted malformed stream %x: %v; want %v", data, err, want)
 		}
 	}
-	for i := range valid {
+	check(t, nil, 0, io.ErrUnexpectedEOF)
+	for i := 1; i < len(valid); i++ {
 		t.Run("truncated-"+string(rune('A'+i)), func(t *testing.T) { check(t, valid[:i], int64(len(content)), nil) })
 	}
 	for _, offset := range []int{0, 4, len(valid) - 20, len(valid) - 16, len(valid) - 8} {

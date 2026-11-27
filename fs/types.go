@@ -110,23 +110,16 @@ type Index struct {
 // Validate checks all entries and path relationships. It permits Size -1 on
 // uncompressed files read from v1; MarshalBinary requires known file sizes.
 func (index Index) Validate() error {
-	entries := slices.Clone(index.Entries)
-	for _, entry := range index.Entries {
+	paths := make([][]string, len(index.Entries))
+	for i, entry := range index.Entries {
 		if err := validateEntry(entry); err != nil {
 			return err
 		}
+		paths[i] = entry.Path
 	}
-	slices.SortFunc(entries, func(a, b Entry) int {
-		for i := 0; i < min(len(a.Path), len(b.Path)); i++ {
-			if order := strings.Compare(a.Path[i], b.Path[i]); order != 0 {
-				return order
-			}
-		}
-		return len(a.Path) - len(b.Path)
-	})
-	for i := 1; i < len(entries); i++ {
-		previous := entries[i-1].Path
-		current := entries[i].Path
+	slices.SortFunc(paths, slices.Compare[[]string])
+	for i := 1; i < len(paths); i++ {
+		previous, current := paths[i-1], paths[i]
 		if len(previous) <= len(current) && slices.Equal(previous, current[:len(previous)]) {
 			return ErrPathConflict
 		}

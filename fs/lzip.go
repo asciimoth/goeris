@@ -54,6 +54,10 @@ func openLzipFile(ctx context.Context, item *node) (*lzipFile, error) {
 	file := &lzipFile{ctx: ctx, node: item, raw: raw, input: countReader{reader: bufio.NewReader(raw)}}
 	if err := file.nextMember(); err != nil {
 		_ = raw.Close()
+		// A Lzip stream must contain at least one member.
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
 		return nil, err
 	}
 	return file, nil

@@ -153,6 +153,9 @@ func TestIOFSContextAndSub(t *testing.T) {
 	if _, err := io.ReadAll(file); !errors.Is(err, context.Canceled) {
 		t.Fatalf("late read: %v", err)
 	}
+	if _, err := file.(io.Seeker).Seek(1, io.SeekStart); !errors.Is(err, context.Canceled) {
+		t.Errorf("Seek after cancellation returned %v", err)
+	}
 	if _, err := stdfs.ReadFile(sub, "file"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("sub read: %v", err)
 	}
@@ -399,3 +402,59 @@ func (s sourceWithContext) GetBlock(ctx context.Context, requests []eris.BlockRe
 }
 
 func (sourceWithContext) PrefetchBlock(context.Context, []eris.BlockRequest) {}
+
+func TestCanceledDirectoryHandlesAndEntries(t *testing.T) {
+	check := func(t *testing.T, view FileSystem) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		image := NewIOFS(ctx, view)
+		listed, err := image.ReadDir(".")
+		if err != nil || len(listed) == 0 {
+			t.Fatalf("ReadDir returned %d entries, %v", len(listed), err)
+		}
+		dir, err := image.Open(".")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = dir.Close() }()
+		reader := dir.(stdfs.ReadDirFile)
+		entries, err := reader.ReadDir(1)
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("ReadDir(1) returned %d entries, %v", len(entries), err)
+		}
+		cancel()
+		for _, entry := range []stdfs.DirEntry{listed[0], entries[0]} {
+			if _, err := entry.Info(); !errors.Is(err, context.Canceled) {
+				t.Errorf("Info after cancellation returned %v", err)
+			}
+		}
+		if _, err := dir.Read(nil); !errors.Is(err, context.Canceled) {
+			t.Errorf("Read after cancellation returned %v", err)
+		}
+		if _, err := dir.Stat(); !errors.Is(err, context.Canceled) {
+			t.Errorf("Stat after cancellation returned %v", err)
+		}
+		if _, err := reader.ReadDir(1); !errors.Is(err, context.Canceled) {
+			t.Errorf("ReadDir after cancellation returned %v", err)
+		}
+	}
+	t.Run("decoded", func(t *testing.T) {
+		capability, blocks := contextImage(t)
+		view, err := OpenFS(t.Context(), capability, eris.NewBlockCapabilityStore(blocks), eris.BlockOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(t, view)
+	})
+	t.Run("mounted", func(t *testing.T) {
+		mount := t.TempDir()
+		capability := pathTestCapability(t)
+		makePathTestTree(t, mount, capability)
+		view, err := NewMountStore(mount).OpenFS(t.Context(), capability)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(t, view)
+	})
+}
