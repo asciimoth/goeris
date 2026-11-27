@@ -71,13 +71,23 @@ func TestMountedOperations(t *testing.T) {
 	cap := pathTestCapability(t)
 	mount := t.TempDir()
 	root := makePathTestTree(t, mount, cap)
+	other := cap
+	other.Root.Reference[0] ^= 1
+	makePathTestTree(t, mount, other)
+	host := t.TempDir()
+	writePathTestTree(t, host)
 	links := map[string]string{
-		"alias":        "docs",
-		"docs/up":      "../hello.txt",
-		"escape":       "../outside",
-		"broken":       "missing",
-		"broken-child": "hello.txt/child",
-		"unsafe":       "C:/file",
+		"alias":         "docs",
+		"docs/up":       "../hello.txt",
+		"escape":        "../outside",
+		"broken":        "missing",
+		"broken-child":  "hello.txt/child",
+		"broken-safe":   "docs/../missing",
+		"broken-escape": "missing/../../outside",
+		"unsafe":        "C:/file",
+		"sibling":       "../" + other.String() + "/hello.txt",
+		"host":          filepath.Join(host, "hello.txt"),
+		"indirect":      "alias/../sibling",
 	}
 	for name, target := range links {
 		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
@@ -97,8 +107,11 @@ func TestMountedOperations(t *testing.T) {
 	if info, err := sub.Lstat(ctx, "."); err != nil || !info.IsDir() {
 		t.Fatal(info, err)
 	}
-	if target, err := sub.ReadLink(ctx, "up"); err != nil || target != "../hello.txt" {
-		t.Fatal(target, err)
+	if target, err := sub.ReadLink(ctx, "up"); err == nil || target != "" {
+		t.Fatalf("Sub exposed link outside the selected directory: %q, %v", target, err)
+	}
+	if target, err := image.ReadLink(ctx, "alias/up"); err != nil || target != "../hello.txt" {
+		t.Fatalf("image ReadLink = %q, %v", target, err)
 	}
 	if data, err := sub.ReadFile(ctx, "up"); err != nil || string(data) != "Hello, ERIS!\n" {
 		t.Fatal(string(data), err)
@@ -114,12 +127,23 @@ func TestMountedOperations(t *testing.T) {
 			t.Fatal(name, got, err)
 		}
 	}
-	for _, name := range []string{"escape", "unsafe", ".", "missing"} {
+	for _, name := range []string{"escape", "unsafe", ".", "missing", "broken-escape"} {
 		if _, err := image.ReadLink(ctx, name); err == nil {
 			t.Fatal(name)
 		}
 	}
-	for _, name := range []string{"broken", "broken-child"} {
+	for _, name := range []string{"sibling", "host", "indirect"} {
+		if data, err := image.ReadFile(ctx, name); err == nil || data != nil {
+			t.Errorf("ReadFile(%q) = %q, %v", name, data, err)
+		}
+		if target, err := image.ReadLink(ctx, name); err == nil || target != "" {
+			t.Errorf("ReadLink(%q) = %q, %v", name, target, err)
+		}
+		if path, err := image.ResolvePath(ctx, name); err == nil || path != "" {
+			t.Errorf("ResolvePath(%q) = %q, %v", name, path, err)
+		}
+	}
+	for _, name := range []string{"broken", "broken-child", "broken-safe"} {
 		want := links[name]
 		if target, err := image.ReadLink(ctx, name); err != nil || target != want {
 			t.Errorf("ReadLink(%q) = %q, %v, want %q", name, target, err, want)
@@ -205,6 +229,47 @@ func TestMountedHandleCancellation(t *testing.T) {
 	}
 	if _, err := file.Seek(1, io.SeekStart); !errors.Is(err, context.Canceled) {
 		t.Errorf("Seek after cancellation = %v", err)
+	}
+}
+
+func TestMountStoreRejectsSymlinkImageRoot(t *testing.T) {
+	ctx := t.Context()
+	cap := pathTestCapability(t)
+	mount := t.TempDir()
+	root := makePathTestTree(t, mount, cap)
+	store := NewMountStore(mount)
+	image, err := store.OpenFS(ctx, cap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := image.Sub(ctx, "docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := cap
+	other.Root.Reference[0] ^= 1
+	makePathTestTree(t, mount, other)
+	host := t.TempDir()
+	writePathTestTree(t, host)
+	if err := os.Rename(root, root+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{other.String(), host} {
+		if err := os.Symlink(target, root); err != nil {
+			t.Skipf("cannot create directory symlink: %v", err)
+		}
+		if _, err := store.OpenFS(ctx, cap); !errors.Is(err, stdfs.ErrInvalid) {
+			t.Errorf("OpenFS on linked root = %v", err)
+		}
+		if data, err := image.ReadFile(ctx, "hello.txt"); err == nil || data != nil {
+			t.Errorf("ReadFile on replaced root = %q, %v", data, err)
+		}
+		if path, err := sub.ResolvePath(ctx, "readme.txt"); err == nil || path != "" {
+			t.Errorf("ResolvePath on replaced root = %q, %v", path, err)
+		}
+		if err := os.Remove(root); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

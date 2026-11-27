@@ -40,6 +40,8 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 		"drive":          "C:/outside",
 		"nul":            "dir/\x00outside",
 		"missing":        "absent",
+		"missing-safe":   "dir/../absent",
+		"missing-escape": "absent/../../outside",
 		"cycle":          "cycle",
 	} {
 		if err := builder.AddSymlink(name, target); err != nil {
@@ -68,7 +70,7 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	mount := NewMount(ctx, blocks, eris.BlockOptions{})
 	view := NewIOFS(ctx, image)
 	root := "fs/" + capability.String() + "/"
-	for _, name := range []string{"dir/safe", "dir/up", "missing", "root-alias", "safe-via-alias"} {
+	for _, name := range []string{"dir/safe", "dir/up", "missing", "missing-safe", "root-alias", "safe-via-alias"} {
 		for label, read := range map[string]func(string) (string, error){
 			"image": imageReadLink(ctx, image),
 			"mount": func(path string) (string, error) { return mount.ReadLink(root + path) },
@@ -79,7 +81,7 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"dir/escape", "through-alias", "chain", "root-escape", "absolute"} {
+	for _, name := range []string{"dir/escape", "through-alias", "chain", "root-escape", "absolute", "missing-escape"} {
 		if info, err := mount.Lstat(root + name); err != nil || info.Mode()&stdfs.ModeSymlink == 0 {
 			t.Fatalf("Lstat(%q) = %v, %v", name, info, err)
 		}
@@ -108,8 +110,8 @@ func TestReadLinkCannotEscapeImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := stdfs.ReadLink(sub, "up"); err != nil || got != ".." {
-		t.Errorf("sub safe link = %q, %v", got, err)
+	if got, err := stdfs.ReadLink(sub, "up"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("link above exported subdirectory = %q, %v", got, err)
 	}
 	if got, err := stdfs.ReadLink(sub, "escape"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
 		t.Errorf("sub escaping link = %q, %v", got, err)
@@ -120,6 +122,16 @@ func imageReadLink(ctx context.Context, image *FS) func(string) (string, error) 
 	return func(path string) (string, error) { return image.ReadLink(ctx, path) }
 }
 
+type missingIndexStore struct{ eris.CapabilityStore }
+
+func (s missingIndexStore) DecodeWithLimit(ctx context.Context, cap eris.Capability, limit int64, options eris.BlockOptions) ([]byte, error) {
+	data, err := s.CapabilityStore.DecodeWithLimit(ctx, cap, limit, options)
+	if errors.Is(err, eris.ErrMissingBlock) {
+		err = errors.Join(err, stdfs.ErrNotExist)
+	}
+	return data, err
+}
+
 // An unavailable nested index cannot be assumed safe. ReadLink must return the
 // storage error before a mount adapter receives the target.
 func TestReadLinkChecksNestedTarget(t *testing.T) {
@@ -127,15 +139,25 @@ func TestReadLinkChecksNestedTarget(t *testing.T) {
 	ctx := context.Background()
 	blocks := eris.BlockSet{Blocks: make(map[eris.Reference]eris.Block)}
 	store := eris.NewBlockCapabilityStore(blocks)
-	nested, err := EncodeIndex(ctx, Index{Entries: []Entry{{Path: []string{"file"}, Type: Symlink, Target: "../../outside"}}}, eris.Secret{}, store, eris.BlockOptions{})
+	nested, err := EncodeIndex(ctx, Index{Entries: []Entry{
+		{Path: []string{"file"}, Type: Symlink, Target: "../outside"},
+		{Path: []string{"dir", "up"}, Type: Symlink, Target: ".."},
+		{Path: []string{"indirect"}, Type: Symlink, Target: "dir/up/../outside"},
+	}}, eris.Secret{}, store, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	builder := NewBuilder(store, eris.Secret{}, eris.BlockOptions{})
+	if err := builder.AddFile(ctx, "outside", strings.NewReader("parent image"), false); err != nil {
+		t.Fatal(err)
+	}
 	if err := builder.AddSubdirectory("nested", nested); err != nil {
 		t.Fatal(err)
 	}
 	if err := builder.AddSymlink("link", "nested/file"); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.AddSymlink("local", "nested/dir/up/../outside"); err != nil {
 		t.Fatal(err)
 	}
 	outer, err := builder.Finish(ctx)
@@ -146,15 +168,42 @@ func TestReadLinkChecksNestedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := image.ReadLink(ctx, "link"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
-		t.Fatalf("link to escaping nested link = %q, %v", got, err)
+	for _, name := range []string{"link", "nested/file", "nested/indirect"} {
+		if got, err := image.ReadLink(ctx, name); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+			t.Errorf("ReadLink(%q) = %q, %v", name, got, err)
+		}
+		if got, err := image.ReadFile(ctx, name); got != nil || !errors.Is(err, stdfs.ErrNotExist) {
+			t.Errorf("ReadFile(%q) = %q, %v", name, got, err)
+		}
+	}
+	if got, err := image.ReadFile(ctx, "local"); string(got) != "parent image" || err != nil {
+		t.Errorf("link in parent image = %q, %v", got, err)
 	}
 	delete(blocks.Blocks, nested.Root.Reference)
-	image, err = OpenFS(ctx, outer, store, eris.BlockOptions{})
+	image, err = OpenFS(ctx, outer, missingIndexStore{store}, eris.BlockOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, err := image.ReadLink(ctx, "link"); got != "" || !errors.Is(err, eris.ErrMissingBlock) {
 		t.Fatalf("link to unavailable nested index = %q, %v", got, err)
+	}
+}
+
+func TestCombinedReadLinkWithDifferentDirectoryTargets(t *testing.T) {
+	ctx := t.Context()
+	image := func(entries ...Entry) *FS {
+		return &FS{root: buildTree(Index{Entries: entries}, nil, ".", DefaultMaxIndexSize), prefix: "."}
+	}
+	first := image(
+		Entry{Path: []string{"link"}, Type: Symlink, Target: "dir/../file"},
+		Entry{Path: []string{"sub", "link"}, Type: Symlink, Target: "../file"},
+	)
+	second := image(Entry{Path: []string{"dir"}, Type: Symlink, Target: "."})
+	view := NewCombinedFileSystem(first, second)
+	if got, err := view.ReadLink(ctx, "link"); got != "" || !errors.Is(err, stdfs.ErrNotExist) {
+		t.Errorf("ReadLink across backends = %q, %v", got, err)
+	}
+	if got, err := view.ReadLink(ctx, "sub/link"); got != "../file" || err != nil {
+		t.Errorf("ReadLink within image = %q, %v", got, err)
 	}
 }

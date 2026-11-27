@@ -6,6 +6,7 @@ import (
 	stdfs "io/fs"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/asciimoth/goeris"
 )
@@ -219,8 +220,31 @@ func (s *CombinedFileSystem) Sub(ctx context.Context, name string) (FileSystem, 
 	return firstImageResult(ctx, s, func(b FileSystem) (FileSystem, error) { return b.Sub(ctx, name) })
 }
 
+// ReadLink preserves the selected target. With multiple backends, it rejects
+// a parent step after a named component because fallback can change the
+// directory where an adapter would take that step.
 func (s *CombinedFileSystem) ReadLink(ctx context.Context, name string) (string, error) {
-	return firstImageResult(ctx, s, func(b FileSystem) (string, error) { return b.ReadLink(ctx, name) })
+	target, err := firstImageResult(ctx, s, func(b FileSystem) (string, error) { return b.ReadLink(ctx, name) })
+	if err != nil || len(s.images) == 1 {
+		return target, err
+	}
+	// An adapter resolves each component in a separate lookup. After a
+	// named component, another backend could supply a link to the root.
+	// Only leading parent steps have a guaranteed depth in a combined view.
+	depth := strings.Count(name, "/")
+	for part := range strings.SplitSeq(target, "/") {
+		switch part {
+		case "", ".":
+		case "..":
+			if depth == 0 {
+				return "", pathError("readlink", name, stdfs.ErrNotExist)
+			}
+			depth--
+		default:
+			depth = 0
+		}
+	}
+	return target, nil
 }
 
 func (s *CombinedFileSystem) ResolvePath(ctx context.Context, name string) (string, error) {

@@ -64,6 +64,8 @@ type FileSystem interface {
 	ReadDir(ctx context.Context, name string) ([]stdfs.DirEntry, error)
 	Stat(ctx context.Context, name string) (stdfs.FileInfo, error)
 	Lstat(ctx context.Context, name string) (stdfs.FileInfo, error)
+	// ReadLink returns target text for a native mount adapter. It must return
+	// an empty string and an error if following the target can leave the view.
 	ReadLink(ctx context.Context, name string) (string, error)
 	// ResolvePath returns an absolute host path. A backend can return ErrNoHostPath.
 	ResolvePath(ctx context.Context, name string) (string, error)

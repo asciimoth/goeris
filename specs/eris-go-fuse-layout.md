@@ -153,9 +153,13 @@ distinct.
 
 `ReadLink` checks each target with link expansion before returning it. A link
 that can leave its ERIS-FS image returns an error, including a link that crosses
-the boundary through another link. Safe targets keep their original spelling.
-Targets with a backslash, colon, or NUL byte are rejected because a native
-adapter can interpret them as a host path.
+the boundary through another link. Each decoded nested index confines its own
+links. A `Sub` view also checks targets against the directory it exposes.
+Dangling targets must resolve through their last `..` component. A view with
+multiple backends rejects `..` after a named component because that component
+can resolve differently during fallback. Safe targets keep their original
+spelling. Targets with a backslash, colon, or NUL byte are rejected because a
+native adapter can interpret them as a host path.
 
 Callers can explicitly enable recent listings with
 `Mount.WithListingCache(capabilityLimit, blockLimit)`. Both categories are

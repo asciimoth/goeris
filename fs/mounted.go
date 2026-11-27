@@ -58,12 +58,8 @@ func openMountedTrees(ctx context.Context, cap eris.Capability, roots []string) 
 		if err != nil {
 			return nil, err
 		}
-		info, err := os.Stat(name)
-		if err != nil {
+		if _, err := mountedRootInfo(name); err != nil {
 			return nil, err
-		}
-		if !info.IsDir() {
-			return nil, pathError("open", name, stdfs.ErrInvalid)
 		}
 		return &mountedImage{root: name, prefix: "."}, nil
 	})
@@ -100,6 +96,17 @@ func (s *MountStore) NewBuilder(eris.Secret) (ImageBuilder, error) { return nil,
 
 type mountedImage struct{ root, prefix string }
 
+func mountedRootInfo(name string) (stdfs.FileInfo, error) {
+	info, err := os.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, pathError("open", name, stdfs.ErrInvalid)
+	}
+	return info, nil
+}
+
 // Keep the original image root for Sub views. This permits a relative link to
 // reach a sibling directory while os.Root confines lookup to the image.
 func mountedCall[T any](ctx context.Context, m *mountedImage, op, name string, call func(*os.Root, string) (T, error)) (T, error) {
@@ -111,11 +118,24 @@ func mountedCall[T any](ctx context.Context, m *mountedImage, op, name string, c
 	if err != nil {
 		return zero, pathError(op, name, stdfs.ErrInvalid)
 	}
-	r, err := os.OpenRoot(m.root)
+	dir, err := mountedRootInfo(m.root)
+	if err != nil {
+		return zero, pathError(op, name, err)
+	}
+	// Keep the final dot so the open requires a directory. Check its identity
+	// before use in case the capability entry changed after Lstat.
+	r, err := os.OpenRoot(m.root + string(filepath.Separator) + ".")
 	if err != nil {
 		return zero, pathError(op, name, err)
 	}
 	defer func() { _ = r.Close() }()
+	opened, err := r.Stat(".")
+	if err != nil {
+		return zero, pathError(op, name, err)
+	}
+	if !os.SameFile(dir, opened) {
+		return zero, pathError(op, name, stdfs.ErrInvalid)
+	}
 	// Both components use native path syntax. Localize validated the caller input.
 	result, err := call(r, filepath.Join(m.prefix, local))
 	if err != nil {
@@ -141,17 +161,35 @@ func (m *mountedImage) ReadLink(ctx context.Context, name string) (string, error
 		if name == "." {
 			return "", stdfs.ErrInvalid
 		}
+		if m.prefix != "." {
+			// An adapter can expose this directory as a separate mount.
+			sub, err := r.OpenRoot(m.prefix)
+			if err != nil {
+				return "", err
+			}
+			defer func() { _ = sub.Close() }()
+			r, p = sub, filepath.FromSlash(name)
+		}
 		target, err := r.Readlink(p)
 		if err != nil {
 			return "", err
 		}
-		if strings.ContainsAny(target, "\\:\x00") {
+		if strings.HasPrefix(target, "/") || strings.ContainsAny(target, "\\:\x00") {
 			return "", stdfs.ErrInvalid
 		}
-		// Check the entire target chain before passing link text to a host adapter.
-		// A missing component or a regular file used as a directory leaves
-		// the link dangling. Both permit returning its original text.
-		if _, err = r.Stat(p); err != nil && !errors.Is(err, stdfs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+		// Validate the text we read. Looking up p again could check a
+		// replacement link. Keep ".." so the host resolves it in order.
+		parent, _ := filepath.Split(p)
+		_, err = r.Stat(parent + target)
+		if errors.Is(err, stdfs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			// A dangling suffix is safe only after all parent steps are known.
+			if prefix := linkParentPrefix(target); prefix != "" {
+				_, err = r.Stat(parent + prefix)
+			} else {
+				err = nil
+			}
+		}
+		if err != nil {
 			return "", err
 		}
 		return target, nil

@@ -17,9 +17,25 @@ import (
 
 const directoryType EntryType = 255
 
-// errLinkEscape distinguishes a link that leaves the image from a missing
-// entry. Public lookup methods still report fs.ErrNotExist for both cases.
-var errLinkEscape = errors.New("eris-fs: symbolic link leaves image")
+// Keep a dangling path distinct from a store failure. A store can also
+// report fs.ErrNotExist when it cannot supply a nested index.
+var (
+	errDangling   = errors.New("eris-fs: missing path component")
+	errLinkEscape = errors.New("eris-fs: symbolic link leaves image")
+)
+
+// linkParentPrefix returns the part of a target through its last parent step.
+// An adapter must be able to resolve this prefix even when the link dangles.
+func linkParentPrefix(target string) string {
+	for end := len(target); end > 0; {
+		start := strings.LastIndexByte(target[:end], '/') + 1
+		if target[start:end] == ".." {
+			return target[:end]
+		}
+		end = start - 1
+	}
+	return ""
+}
 
 // FS provides context-aware access to an ERIS-FS image. Use NewIOFS to
 // use the standard library file-system interfaces. Nested ERIS-FS indexes are
@@ -29,8 +45,9 @@ var errLinkEscape = errors.New("eris-fs: symbolic link leaves image")
 // concurrent calls. Each Open call returns a separate file position. Calls on
 // the same open directory must be serialized by the caller.
 type FS struct {
-	root   *node
-	prefix string
+	root    *node
+	prefix  string
+	subRoot *node // The directory exposed to consumers of ReadLink.
 }
 
 type node struct {
@@ -176,7 +193,7 @@ func (item *node) load(ctx context.Context) error {
 
 func (fileSystem *FS) find(ctx context.Context, name string, followFinal bool) (*node, error) {
 	item, err := fileSystem.findWithEscape(ctx, name, followFinal)
-	if errors.Is(err, errLinkEscape) {
+	if err == errLinkEscape || err == errDangling {
 		return nil, stdfs.ErrNotExist
 	}
 	return item, err
@@ -210,18 +227,31 @@ func (fileSystem *FS) findWithEscape(ctx context.Context, name string, followFin
 	// Keep one unprocessed string per followed link. Splitting and copying
 	// all target components can multiply memory use when a link points to
 	// itself followed by a long suffix, even with the 40-link limit.
-	pending := []string{currentPath}
+	type linkPath struct {
+		path string
+		root *node // The image that contains this link.
+	}
+	pending := []linkPath{{currentPath, fileSystem.root}}
+	missing := func() error {
+		for _, frame := range pending {
+			if linkParentPrefix(frame.path) != "" {
+				return errLinkEscape
+			}
+		}
+		return errDangling
+	}
 	ancestors := []*node{fileSystem.root}
 	links := 0
 	for len(pending) > 0 {
 		current := ancestors[len(ancestors)-1]
 		if !current.isDir() {
-			return nil, stdfs.ErrNotExist
+			return nil, missing()
 		}
 		last := len(pending) - 1
-		component, rest, more := strings.Cut(pending[last], "/")
+		frame := pending[last]
+		component, rest, more := strings.Cut(frame.path, "/")
 		if more {
-			pending[last] = rest
+			pending[last].path = rest
 		} else {
 			pending = pending[:last]
 		}
@@ -229,7 +259,7 @@ func (fileSystem *FS) findWithEscape(ctx context.Context, name string, followFin
 		case "", ".":
 			continue
 		case "..":
-			if len(ancestors) == 1 {
+			if current == frame.root {
 				return nil, errLinkEscape
 			}
 			ancestors = ancestors[:len(ancestors)-1]
@@ -242,7 +272,7 @@ func (fileSystem *FS) findWithEscape(ctx context.Context, name string, followFin
 		next := current.children[component]
 		current.mu.Unlock()
 		if next == nil {
-			return nil, stdfs.ErrNotExist
+			return nil, missing()
 		}
 		if next.kind != Symlink || (len(pending) == 0 && !followFinal) {
 			ancestors = append(ancestors, next)
@@ -253,14 +283,23 @@ func (fileSystem *FS) findWithEscape(ctx context.Context, name string, followFin
 		}
 		links++
 		if next.target == "" {
-			return nil, stdfs.ErrNotExist
+			return nil, missing()
 		}
 		if strings.HasPrefix(next.target, "/") {
 			return nil, errLinkEscape
 		}
 		// Resolve each target component before processing its parent segments.
 		// Cleaning the text first can select a different file through a link.
-		pending = append(pending, next.target)
+		// Each nested index is an image. Its links have the same boundary
+		// here as when the index is opened by its own capability.
+		root := fileSystem.root
+		for _, dir := range slices.Backward(ancestors) {
+			if dir.kind == Subdirectory {
+				root = dir
+				break
+			}
+		}
+		pending = append(pending, linkPath{next.target, root})
 	}
 	return ancestors[len(ancestors)-1], nil
 }
@@ -397,11 +436,16 @@ func (fileSystem *FS) ReadDir(ctx context.Context, path string) ([]stdfs.DirEntr
 }
 
 // ReadLink reads a symbolic link only when following it cannot leave this
-// image. It preserves the target text. A dangling link can still be read.
+// image and the exposed view. It preserves the target text. A dangling link
+// can still be read if all of its parent steps have been resolved.
 // A cycle or a chain past the expansion limit returns fs.ErrInvalid because
 // safety cannot be proved. An escaping or absolute link returns fs.ErrNotExist,
 // as it does when opened.
 func (fileSystem *FS) ReadLink(ctx context.Context, path string) (string, error) {
+	if fileSystem != nil && fileSystem.subRoot != nil {
+		// A native adapter can export a Sub view as its own mount.
+		fileSystem = &FS{root: fileSystem.subRoot, prefix: "."}
+	}
 	item, err := fileSystem.find(ctx, path, false)
 	if err != nil {
 		return "", pathError("readlink", path, err)
@@ -421,14 +465,15 @@ func (fileSystem *FS) ReadLink(ctx context.Context, path string) (string, error)
 	if strings.ContainsAny(item.target, "\\:\x00") {
 		return "", pathError("readlink", path, stdfs.ErrInvalid)
 	}
-	if err != nil && !errors.Is(err, stdfs.ErrNotExist) {
+	if err != nil && err != errDangling {
 		return "", pathError("readlink", path, err)
 	}
 	return item.target, nil
 }
 
 // Sub selects a directory. Links in the result can resolve to paths outside
-// the selected directory but remain inside the same image.
+// the selected directory but remain inside the same image. ReadLink only
+// exports targets that also stay inside the selected directory.
 func (fileSystem *FS) Sub(ctx context.Context, name string) (FileSystem, error) {
 	item, err := fileSystem.find(ctx, name, true)
 	if err != nil {
@@ -444,7 +489,7 @@ func (fileSystem *FS) Sub(ctx context.Context, name string) (FileSystem, error) 
 	if fileSystem.prefix != "." {
 		prefix = path.Join(fileSystem.prefix, name)
 	}
-	return &FS{root: fileSystem.root, prefix: prefix}, nil
+	return &FS{root: fileSystem.root, prefix: prefix, subRoot: item}, nil
 }
 
 func (node *node) dirEntries(ctx context.Context) []stdfs.DirEntry {

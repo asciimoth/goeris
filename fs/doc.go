@@ -99,11 +99,16 @@
 // Image paths use io/fs rules. A capability-backed image treats backslashes
 // and host-specific names literally. A mounted image converts io/fs names to
 // native paths and rejects names the host cannot represent.
-// ReadLink rejects targets that can leave the image
-// or contain a backslash, colon, or NUL byte. Applications that extract an
-// image must still check native paths before writing them. Open follows links
-// only inside the image, but Sub does not confine links to the selected
-// subdirectory.
+// A link in a decoded index can reach entries in that image, including nested
+// entries. A link in a nested index cannot climb into its parent image.
+// A host mount supplies an expanded tree and must enforce its nested index
+// boundaries. MountStore checks the capability directory and confines lookups
+// to that directory.
+// ReadLink rejects targets that escape the exposed view or contain a backslash,
+// colon, or NUL byte. In a Sub view, Open can follow an in-image link outside
+// the selected directory. ReadLink rejects such a target so an adapter can
+// mount the subdirectory on its own. Applications that extract an image must
+// still check native paths before writing them.
 //
 // [ERIS-FS recommendation]: https://github.com/asciimoth/goeris/blob/master/specs/eer/eris-fs/index.md
 // [deterministic encoding procedures]: https://github.com/asciimoth/goeris/blob/master/specs/eris-fs-encoding.md

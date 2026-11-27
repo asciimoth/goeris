@@ -129,10 +129,13 @@ mount mechanism.
 including nested indexes. A capability-backed store uses 64 MiB by default. A
 host mount controls its own index limits. Image reads use the image store’s
 options. Raw-block reads use the options supplied to the mount constructor. Both
-use the mount context. Image links resolve only within their image; `ReadLink`
-returns the original target for safe links and rejects escaping targets. Missing
-blocks match both `io/fs.ErrNotExist` and `eris.ErrMissingBlock` in errors
-returned by `Mount` methods.
+use the mount context. Each decoded index confines its own links, including when
+the index is nested in another image. `ReadLink` returns the original target for
+safe links. In a `Sub` view it also checks the selected directory boundary. With
+multiple backends, it rejects targets that contain `..` after a named component
+because fallback can change where that component leads. Missing blocks match
+both `io/fs.ErrNotExist` and `eris.ErrMissingBlock` in errors returned by
+`Mount` methods.
 
 For a base32 block hash `H`, the mount also exposes the complete encrypted block
 at `H[:3]/H[3:6]/H[6:9]/H[9:]`, as specified by `volume.BlockPath`, and at the
@@ -192,8 +195,9 @@ To migrate from `fs.ResolveRoot` or `fs.ResolvePath`, open the image with
 `ResolvePath` returns an absolute host path. A capability-backed image can
 resolve an uncompressed file if its content store supports host paths. A mounted
 image can also resolve directories and decoded compressed files. Use a trusted,
-immutable mount that verifies content and preserves case-sensitive names. Its
-write operations return `eris.ErrReadOnly`. Mounted trees report
+immutable mount that verifies content, enforces nested image boundaries, and
+preserves case-sensitive names. Each capability entry must be a directory.
+MountStore write operations return `eris.ErrReadOnly`. Mounted trees report
 `errors.ErrUnsupported` for raw-index reads and for positive explicit index
 limits. A mounted prefetch asks the host for file metadata throughout the
 selected tree.
