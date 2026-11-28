@@ -20,7 +20,7 @@ const globalUsage = `Usage: goeris [storage flags] COMMAND [options] [arguments]
 Commands:
   block  Read, write, and manage blocks.
   cap    Encode, decode, and look up content by capability.
-  fs     Build, browse, and unpack ERIS-FS images.
+  fs     Build, browse, pack, and unpack ERIS-FS images.
   dump   Show environment settings and storage setup.
   help   Show this help. You can also use -h or --help.
 

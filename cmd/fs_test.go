@@ -460,7 +460,14 @@ func TestImageCommandArguments(t *testing.T) {
 			t.Fatalf("help %v: exit %d, stderr %s", args, code, diag)
 		}
 	}
-	for _, args := range [][]string{{"unknown"}, {"build"}, {"build", ""}, {"build", "--compression=x", "dir"}, {"unpack", urn}, {"ls", "invalid"}, {"ls", "--index-limit=0", urn}, {"ls", urn, ".."}, {"cat", urn}, {"repl", urn, "extra"}} {
+	for _, args := range [][]string{
+		{"unknown"},
+		{"build"}, {"build", ""}, {"build", "--compression=x", "dir"},
+		{"build", "--archive", "input.unknown"}, {"build", "--archive", "--preserve-root", ".tar"},
+		{"pack", urn}, {"pack", urn, "out.xz"}, {"pack", urn, "out.bz2"},
+		{"unpack", urn}, {"ls", "invalid"}, {"ls", "--index-limit=0", urn},
+		{"ls", urn, ".."}, {"cat", urn}, {"repl", urn, "extra"},
+	} {
 		code, _, diag := runCommand(t, nil, append([]string{"fs"}, args...)...)
 		if code != 2 || diag == "" {
 			t.Fatalf("%v exit %d stderr %q", args, code, diag)

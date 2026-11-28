@@ -20,9 +20,11 @@ import (
 
 const fsUsage = `Usage: goeris fs COMMAND [options] ARGUMENTS
 
-  build [--preserve-root] [--compression none|auto|lzip] [--secret-file FILE] SOURCE
-      Print the new image URN. A directory supplies the image contents.
-      Use --preserve-root to keep its name. A file always keeps its name.
+  build [--archive] [--preserve-root] [--compression none|auto|lzip] [--secret-file FILE] SOURCE
+      Print the new image URN. Supply a file or directory, or use --archive
+      to read archive entries. A single file keeps its name. --preserve-root
+      keeps the directory name or the archive name without its format suffix.
+  pack IMAGE NEW-ARCHIVE        Write the image contents to a new archive.
   unpack IMAGE NEW-DIRECTORY    Extract the whole image into a new directory.
   ls IMAGE [PATH]               List names in one directory.
   tree IMAGE [PATH]             Show a directory tree. Skip link targets.
@@ -40,6 +42,10 @@ IMAGE accepts a capability URN or an ERIS Magnet URI. On read commands,
 mounts use their own limits and cannot accept this option. Paths use / and start
 at the image root. The default path is ".". Build uses no compression by
 default. File modes preserve the executable flag.
+Archive suffixes are .zip, .tar, .gz, .zlib, .deflate, and .lzw (LSB, 8 bits).
+Compressed tar also accepts .tar before the compression suffix. The .tgz alias
+selects gzip. The .zz alias selects zlib. Build also reads .bz2, .tar.bz2,
+.tbz, and .tbz2. The full suffixes .gzip and .bzip2 also work.
 ` + storageHelp
 
 type imageOptions struct {
@@ -47,6 +53,7 @@ type imageOptions struct {
 	meter                                       *imageMeter
 	op, source, dest, path, compression, secret string
 	preserve                                    bool
+	archive                                     imageArchive
 	root                                        eris.Capability
 }
 
@@ -63,10 +70,12 @@ func parseImageCommand(flags *flag.FlagSet, args []string) (commandOptions, erro
 	o := &c.image
 	o.op = args[0]
 	c.name += " " + o.op
+	var fromArchive bool
 	minArgs, maxArgs := 1, 1
 	switch o.op {
 	case "build":
-		flags.BoolVar(&o.preserve, "preserve-root", false, "keep the source directory name")
+		flags.BoolVar(&fromArchive, "archive", false, "build from archive entries")
+		flags.BoolVar(&o.preserve, "preserve-root", false, "keep the directory or archive name")
 		flags.StringVar(&o.compression, "compression", "none", "none, auto, or lzip")
 		flags.Func("secret-file", "32-byte convergence secret", func(value string) error {
 			if value == "" {
@@ -77,7 +86,7 @@ func parseImageCommand(flags *flag.FlagSet, args []string) (commandOptions, erro
 		})
 	case "decode":
 		minArgs, maxArgs = 2, 3
-	case "cat", "readlink", "unpack":
+	case "cat", "readlink", "unpack", "pack":
 		minArgs, maxArgs = 2, 2
 	case "ls", "tree", "stat", "resolve", "prefetch":
 		maxArgs = 2
@@ -112,6 +121,16 @@ func parseImageCommand(flags *flag.FlagSet, args []string) (commandOptions, erro
 			return c, errors.New("fs build: empty source path")
 		}
 		o.source = args[0]
+		if fromArchive {
+			archive, err := parseImageArchive(o.source)
+			if err != nil {
+				return c, fmt.Errorf("%s: %w", c.name, err)
+			}
+			if o.preserve && (archive.stem == "." || !stdfs.ValidPath(archive.stem)) {
+				return c, fmt.Errorf("%s: cannot preserve archive name %q", c.name, archive.stem)
+			}
+			o.archive = archive
+		}
 		return c, nil
 	}
 	var err error
@@ -127,11 +146,20 @@ func parseImageCommand(flags *flag.FlagSet, args []string) (commandOptions, erro
 		return c, fmt.Errorf("%s: invalid image URI: %w", c.name, err)
 	}
 	o.path = "."
-	if o.op == "unpack" {
+	if o.op == "unpack" || o.op == "pack" {
 		if args[1] == "" {
-			return c, errors.New("fs unpack: empty destination")
+			return c, fmt.Errorf("%s: empty destination", c.name)
 		}
 		o.dest = args[1]
+		if o.op == "pack" {
+			o.archive, err = parseImageArchive(o.dest)
+			if err != nil {
+				return c, fmt.Errorf("%s: %w", c.name, err)
+			}
+			if o.archive.format == "bz2" {
+				return c, fmt.Errorf("%s: bzip2 archives are supported for input only", c.name)
+			}
+		}
 	} else if len(args) > 1 {
 		o.path = args[1]
 		if !stdfs.ValidPath(o.path) {
@@ -191,6 +219,8 @@ func (o imageOptions) run(p *zpgo.Progress, store erisfs.ImageStore, input *os.F
 	}
 	b := imageBrowser{ctx: ctx, view: view, p: p, meter: o.meter}
 	switch o.op {
+	case "pack":
+		return b.pack(o.dest, o.archive.format)
 	case "unpack":
 		return b.unpack(o.dest)
 	case "decode":

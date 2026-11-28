@@ -202,7 +202,29 @@ goeris fs stat "$image" docs/manual.txt
 goeris fs cat "$image" docs/manual.txt
 goeris fs decode "$image" docs/manual.txt ./manual-copy.txt
 goeris fs unpack "$image" ./project-copy
+goeris fs pack "$image" ./project.tar.gz
+goeris fs build --archive ./project.tar.gz
 ```
+
+Use `fs build --archive SOURCE` to put archive entries at the image root. With
+`--preserve-root`, they appear under the archive name with its format suffix
+removed. Use `fs pack IMAGE NEW-ARCHIVE` to write the image contents to a new
+archive. Both commands use the filename suffix to select the format.
+
+| Format                                  | Filename suffixes                                           | Operations     |
+| --------------------------------------- | ----------------------------------------------------------- | -------------- |
+| ZIP                                     | `.zip`                                                      | Build and pack |
+| Tar                                     | `.tar`                                                      | Build and pack |
+| Gzip tar                                | `.tar.gz`, `.gz`, `.tgz`, `.tar.gzip`, `.gzip`              | Build and pack |
+| Zlib tar                                | `.tar.zlib`, `.zlib`, `.tar.zz`, `.zz`                      | Build and pack |
+| Raw DEFLATE tar                         | `.tar.deflate`, `.deflate`                                  | Build and pack |
+| Raw LZW tar (LSB first, 8-bit literals) | `.tar.lzw`, `.lzw`                                          | Build and pack |
+| Bzip2 tar                               | `.tar.bz2`, `.bz2`, `.tbz2`, `.tbz`, `.tar.bzip2`, `.bzip2` | Build          |
+
+Archive transfers preserve file contents, executable flags, empty directories,
+and symbolic links. Packed files have mode `0644`, or `0755` if executable.
+Packing checks each link target as for `unpack`. Building rejects unsupported
+entry types such as tar hard links and devices.
 
 Each read command accepts either the root URN or an ERIS Magnet URI. Use
 `--index-limit BYTES` before the URI to bound the decoded size of each index. An

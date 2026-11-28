@@ -35,7 +35,12 @@ func (o imageOptions) build(ctx context.Context, store erisfs.ImageStore, node z
 	// redirect reads outside the selected host tree.
 	hostDir, name := filepath.Split(o.source)
 	base := name
-	if info.IsDir() {
+	if o.archive.format != "" {
+		if !info.Mode().IsRegular() {
+			return zero, fmt.Errorf("expected a regular archive file at %q", o.source)
+		}
+		base = o.archive.stem
+	} else if info.IsDir() {
 		hostDir, name = o.source, "."
 		if o.preserve {
 			base, err = sourceDirectoryName(o.source)
@@ -66,13 +71,19 @@ func (o imageOptions) build(ctx context.Context, store erisfs.ImageStore, node z
 		return zero, err
 	}
 	tree := imageBuild{ctx: ctx, host: host, store: store, builder: b, secret: secret, compression: o.compression, node: node}
-	if err := tree.visit(name, info.Mode()); err != nil {
+	if o.archive.format != "" {
+		err = tree.readArchive(name, info, o.archive.format)
+	} else {
+		err = tree.visit(name, info.Mode())
+	}
+	if err != nil {
 		return zero, err
 	}
 	finishing := node.Start("Writing image index", 0)
 	defer finishing.End()
 	root, err := b.Finish(ctx)
-	if err != nil || !o.preserve || !info.IsDir() {
+	wrap := o.preserve && (info.IsDir() || o.archive.format != "")
+	if err != nil || !wrap {
 		return root, err
 	}
 	wrapper, err := store.NewBuilder(secret)
@@ -132,17 +143,7 @@ func (tree *imageBuild) visit(name string, mode stdfs.FileMode) error {
 			return err
 		}
 		if len(entries) == 0 && name != "." {
-			if tree.empty == (eris.Capability{}) {
-				eb, err := tree.store.NewBuilder(tree.secret)
-				if err != nil {
-					return err
-				}
-				tree.empty, err = eb.Finish(tree.ctx)
-				if err != nil {
-					return err
-				}
-			}
-			return tree.builder.AddSubdirectory(name, tree.empty)
+			return tree.addEmptyDirectory(name)
 		}
 		for _, entry := range entries {
 			info, err := entry.Info()
@@ -167,6 +168,20 @@ func (tree *imageBuild) visit(name string, mode stdfs.FileMode) error {
 	}
 }
 
+func (tree *imageBuild) addEmptyDirectory(name string) error {
+	if tree.empty == (eris.Capability{}) {
+		eb, err := tree.store.NewBuilder(tree.secret)
+		if err != nil {
+			return err
+		}
+		tree.empty, err = eb.Finish(tree.ctx)
+		if err != nil {
+			return err
+		}
+	}
+	return tree.builder.AddSubdirectory(name, tree.empty)
+}
+
 func (tree *imageBuild) file(name string) error {
 	f, err := tree.host.OpenFile(filepath.FromSlash(name), streamio.ReadFileFlags, 0)
 	if err != nil {
@@ -180,7 +195,11 @@ func (tree *imageBuild) file(name string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("%s: expected a regular file", name)
 	}
-	task := tree.node.Start("Encoding KiB: "+displayImagePath(name), kib(info.Size()))
+	return tree.addFile(name, info.Mode(), info.Size(), f)
+}
+
+func (tree *imageBuild) addFile(name string, mode stdfs.FileMode, size int64, r io.Reader) error {
+	task := tree.node.Start("Encoding KiB: "+displayImagePath(name), kib(size))
 	defer task.End()
 	add := tree.builder.AddFile
 	switch tree.compression {
@@ -189,7 +208,7 @@ func (tree *imageBuild) file(name string) error {
 	case "lzip":
 		add = tree.builder.AddCompressedFile
 	}
-	if err := add(tree.ctx, name, &imageReader{Reader: f, node: task}, info.Mode().Perm()&0111 != 0); err != nil {
+	if err := add(tree.ctx, name, &imageReader{Reader: r, node: task}, mode.Perm()&0111 != 0); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
@@ -197,7 +216,7 @@ func (tree *imageBuild) file(name string) error {
 
 // transferFile gets the contents and mode from the same open file. Sequential
 // reads support compression and let the decoder verify the stream at EOF.
-func (b imageBrowser) transferFile(name string, write func(stdfs.FileMode, io.Reader) error) (err error) {
+func (b imageBrowser) transferFile(name string, write func(stdfs.FileInfo, io.Reader) error) (err error) {
 	task := b.p.Root().Start("Reading KiB: "+displayImagePath(name), 0)
 	defer task.End()
 	f, err := b.view.Open(b.ctx, name)
@@ -213,14 +232,14 @@ func (b imageBrowser) transferFile(name string, write func(stdfs.FileMode, io.Re
 		return fmt.Errorf("%q: expected a regular file", name)
 	}
 	task.SetEstimatedTotalItems(kib(info.Size()))
-	if err := write(info.Mode(), &imageReader{Reader: f, node: task}); err != nil {
+	if err := write(info, &imageReader{Reader: f, node: task}); err != nil {
 		return fmt.Errorf("copy image file %q: %w", name, err)
 	}
 	return nil
 }
 
 func (b imageBrowser) copyToStdout(name string) error {
-	return b.transferFile(name, func(_ stdfs.FileMode, r io.Reader) error {
+	return b.transferFile(name, func(_ stdfs.FileInfo, r io.Reader) error {
 		_, err := io.Copy(stdoutWriter{b.p}, r)
 		return err
 	})
@@ -230,9 +249,9 @@ func (b imageBrowser) copyToStdout(name string) error {
 // both invalidate the file, so remove it before returning the error.
 func (b imageBrowser) writeNewFile(root *os.Root, name, local string) (stdfs.FileInfo, error) {
 	var created stdfs.FileInfo
-	err := b.transferFile(name, func(mode stdfs.FileMode, r io.Reader) error {
+	err := b.transferFile(name, func(info stdfs.FileInfo, r io.Reader) error {
 		perm := stdfs.FileMode(0666)
-		if mode&0111 != 0 {
+		if info.Mode()&0111 != 0 {
 			perm = 0777
 		}
 		f, err := root.OpenFile(local, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
