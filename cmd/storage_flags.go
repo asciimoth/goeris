@@ -78,9 +78,8 @@ type commandStores struct {
 
 // open applies the common flags through auto.Open. Explicit volumes must
 // exist. If setup fails, Close releases any volumes already opened.
-func (paths storageFlags) open() (*commandStores, error) {
+func (paths storageFlags) open(options ...auto.Option) (*commandStores, error) {
 	stores := &commandStores{}
-	var options []auto.Option
 	for _, group := range []struct {
 		flag   string
 		paths  []string

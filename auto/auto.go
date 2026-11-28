@@ -96,6 +96,9 @@ func Open(options ...Option) (*Stores, error) {
 	}
 	blocks := cfg.blocks.entries(defaults...)
 	stores.Blocks = eris.NewCombinedBlockStore(blocks...)
+	if cfg.wrapBlocks != nil {
+		stores.Blocks = cfg.wrapBlocks(stores.Blocks)
+	}
 
 	var capabilityDefaults []eris.CapabilityStore
 	if source := capabilityBlocks(stores.Blocks, blocks); source != nil {

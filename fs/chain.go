@@ -16,7 +16,9 @@ import (
 var ErrNoBackend = errors.New("eris-fs: no backend")
 
 // CombinedStore tries each image store in order until one succeeds. If all
-// stores fail, it returns the last error. Cancellation stops fallback.
+// stores fail, it returns the last error. Read operations give priority to
+// index size-limit errors. Use WithReadDiagnostics to prefer errors from
+// available read backends. Cancellation stops fallback.
 // NewBuilder returns the selected builder. OpenFS retains the first image
 // that opens. Its view opens other backends on demand for fallback and
 // Prefetch. Each operation uses the context supplied to that call.
@@ -64,8 +66,11 @@ func NewCombinedStore(stores ...ImageStore) *CombinedStore {
 }
 
 // CombinedFileSystem tries each complete file operation in order. It returns
-// the first success or the last error. Cancellation stops fallback. Open
-// files and Sub views belong to the selected backend.
+// the first success. If all operations fail, it reports an index size-limit
+// error if one occurred, or the last error otherwise. WithReadDiagnostics
+// prefers errors from available read backends. Cancellation stops fallback
+// for operations other than Prefetch. Open files and Sub views belong to
+// the selected backend.
 type CombinedFileSystem struct {
 	images     []imageOpener
 	linkImages []imageOpener // Openers that can supply a view for this operation.
@@ -148,23 +153,63 @@ func checkContext(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func firstResult[B, T any](ctx context.Context, backends []B, call func(B) (T, error)) (T, error) {
+type readDiagnosticsKey struct{}
+
+// WithReadDiagnostics returns a context that asks image chains to prefer
+// errors from backends that could attempt the read. For example, ReadDir on
+// a file reports an invalid path even if an alternate mount lacks the image.
+// Every backend still has a chance to succeed.
+func WithReadDiagnostics(ctx context.Context) context.Context {
+	return context.WithValue(ctx, readDiagnosticsKey{}, true)
+}
+
+type imageReadErrors struct {
+	last, available, size error
+}
+
+func (e *imageReadErrors) record(err error, absent bool) {
+	e.last = err
+	if !absent && !errors.Is(err, errors.ErrUnsupported) {
+		e.available = err
+	}
+	if errors.Is(err, ErrIndexTooLarge) {
+		e.size = err
+	}
+}
+
+func (e imageReadErrors) result(ctx context.Context) error {
+	if ctx.Err() == nil {
+		if e.size != nil {
+			return e.size
+		}
+		if e.available != nil && ctx.Value(readDiagnosticsKey{}) == true {
+			return e.available
+		}
+	}
+	if e.last != nil {
+		return e.last
+	}
+	return ErrNoBackend
+}
+
+// The third result marks failures from an unavailable backend.
+func firstImageRead[B, T any](ctx context.Context, backends []B, call func(B) (value T, err error, absent bool)) (T, error) {
 	var zero T
 	if err := checkContext(ctx); err != nil {
 		return zero, err
 	}
-	last := ErrNoBackend
+	var failures imageReadErrors
 	for _, b := range backends {
-		v, err := call(b)
+		v, err, absent := call(b)
 		if err == nil {
 			return v, nil
 		}
 		if err := ctx.Err(); err != nil {
 			return zero, err
 		}
-		last = err
+		failures.record(err, absent)
 	}
-	return zero, last
+	return zero, failures.result(ctx)
 }
 
 // EncodeIndex stops if a failed backend changed its input. Give it private
@@ -196,7 +241,6 @@ func (s *CombinedStore) EncodeIndex(ctx context.Context, index Index, secret eri
 }
 
 // Prefetch calls every backend in order. One successful hint is sufficient.
-// If all hints fail it returns the last error.
 func (s *CombinedFileSystem) Prefetch(ctx context.Context, name string) error {
 	if ctx == nil {
 		return stdfs.ErrInvalid
@@ -204,26 +248,36 @@ func (s *CombinedFileSystem) Prefetch(ctx context.Context, name string) error {
 	if len(s.images) == 0 && ctx.Err() != nil {
 		return ctx.Err()
 	}
-	last := ErrNoBackend
+	var failures imageReadErrors
 	success := false
 	for _, open := range s.images {
 		result := open(ctx)
-		last = result.err
-		if last == nil {
-			last = result.view.Prefetch(ctx, name)
+		err := result.err
+		if err == nil {
+			err = result.view.Prefetch(ctx, name)
 		}
-		if last == nil {
+		if err == nil {
 			success = true
+		} else {
+			failures.record(err, result.err != nil)
 		}
 	}
 	if success {
 		return nil
 	}
-	return last
+	return failures.result(ctx)
 }
 
 func (s *CombinedStore) NewBuilder(secret eris.Secret) (ImageBuilder, error) {
-	return firstResult(context.Background(), s.stores, func(b ImageStore) (ImageBuilder, error) { return b.NewBuilder(secret) })
+	last := ErrNoBackend
+	for _, store := range s.stores {
+		builder, err := store.NewBuilder(secret)
+		if err == nil {
+			return builder, nil
+		}
+		last = err
+	}
+	return nil, last
 }
 
 // openImages retains the first successful lookup. Lazy openers use the same
@@ -232,11 +286,11 @@ func (s *CombinedStore) NewBuilder(secret eris.Secret) (ImageBuilder, error) {
 func openImages[B any](ctx context.Context, backends []B, kindOf func(B) imageViewKind, open func(context.Context, B) openedImage) openedImage {
 	selected := -1
 	allAbsent := len(backends) > 0
-	image, err := firstResult(ctx, backends, func(b B) (FileSystem, error) {
+	image, err := firstImageRead(ctx, backends, func(b B) (FileSystem, error, bool) {
 		selected++
 		result := open(ctx, b)
 		allAbsent = allAbsent && result.absentTree
-		return result.result()
+		return result.view, result.err, result.absentTree
 	})
 	if err != nil || len(backends) == 1 {
 		absentTree := allAbsent && selected == len(backends)-1 && checkContext(ctx) == nil
@@ -316,22 +370,29 @@ func openedDecodedImage(view FileSystem, err error) openedImage {
 }
 
 func firstImageResult[T any](ctx context.Context, s *CombinedFileSystem, call func(FileSystem) (T, error)) (T, error) {
-	return firstResult(ctx, s.images, func(open imageOpener) (T, error) {
-		image, err := open(ctx).result()
-		if err != nil {
+	return firstImageRead(ctx, s.images, func(open imageOpener) (T, error, bool) {
+		result := open(ctx)
+		if result.err != nil {
 			var zero T
-			return zero, err
+			return zero, result.err, true
 		}
-		return call(image)
+		value, err := call(result.view)
+		return value, err, false
 	})
 }
 
 func (s *CombinedStore) DecodeIndex(ctx context.Context, cap eris.Capability) (Index, error) {
-	return firstResult(ctx, s.stores, func(b ImageStore) (Index, error) { return b.DecodeIndex(ctx, cap) })
+	return firstImageRead(ctx, s.stores, func(b ImageStore) (Index, error, bool) {
+		index, err := b.DecodeIndex(ctx, cap)
+		return index, err, errors.Is(err, eris.ErrMissingBlock)
+	})
 }
 
 func (s *CombinedStore) DecodeIndexWithLimit(ctx context.Context, cap eris.Capability, limit int64) (Index, error) {
-	return firstResult(ctx, s.stores, func(b ImageStore) (Index, error) { return b.DecodeIndexWithLimit(ctx, cap, limit) })
+	return firstImageRead(ctx, s.stores, func(b ImageStore) (Index, error, bool) {
+		index, err := b.DecodeIndexWithLimit(ctx, cap, limit)
+		return index, err, errors.Is(err, eris.ErrMissingBlock)
+	})
 }
 
 func (s *CombinedFileSystem) Open(ctx context.Context, name string) (stdfs.File, error) {

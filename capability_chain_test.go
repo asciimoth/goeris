@@ -27,6 +27,28 @@ func TestCombinedCapabilityStorePrefetch(t *testing.T) {
 	}
 }
 
+type oversizedCapabilityStore struct{ CapabilityStore }
+
+func (oversizedCapabilityStore) DecodeWithLimit(context.Context, Capability, int64, BlockOptions) ([]byte, error) {
+	return nil, ErrDecodedTooLarge
+}
+
+func TestCombinedCapabilityStoreDecodeWithLimitFallback(t *testing.T) {
+	ctx := t.Context()
+	stored := newTestStore()
+	content := []byte("within the limit")
+	capability, err := stored.EncodeRecommended(ctx, content, Secret{}, BlockOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := NewMountCapabilityStore(t.TempDir())
+	chain := NewCombinedCapabilityStore(oversizedCapabilityStore{}, missing, stored)
+	decoded, err := chain.DecodeWithLimit(ctx, capability, int64(len(content)), BlockOptions{})
+	if err != nil || !bytes.Equal(decoded, content) {
+		t.Fatalf("fallback returned %q, %v", decoded, err)
+	}
+}
+
 type failingStreamStore struct {
 	CapabilityStore
 	err   error

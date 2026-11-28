@@ -6,14 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"slices"
-	"strings"
 
 	"github.com/asciimoth/goeris"
 	"github.com/asciimoth/goeris/internal/batch"
 	"github.com/asciimoth/zpgo"
-	"golang.org/x/term"
 )
 
 // parseBlockCommand accepts storage flags before and after the subcommand.
@@ -85,17 +82,7 @@ func blockProgress(total int) (*zpgo.Progress, error) {
 	if total < 2 {
 		return &zpgo.Progress{}, nil
 	}
-	opts := zpgo.Options{RootName: "Blocks written", EstimatedTotalItems: uint64(total)}
-	if descriptor, inherited := os.LookupEnv("ZIG_PROGRESS"); inherited {
-		// The binary progress protocol needs a pipe separate from the standard streams.
-		switch strings.TrimLeft(descriptor, "0") {
-		case "", "1", "2":
-			return &zpgo.Progress{}, nil
-		}
-	} else if os.Getenv("ZPG_NO_PROGRESS") != "1" && term.IsTerminal(int(os.Stderr.Fd())) {
-		opts.Renderer = &zpgo.RendererOptions{Writer: os.Stderr}
-	}
-	return zpgo.New(opts)
+	return commandProgress(zpgo.Options{RootName: "Blocks written", EstimatedTotalItems: uint64(total)})
 }
 
 // blockPut reads at most one byte beyond the largest block to detect excess

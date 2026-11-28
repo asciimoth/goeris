@@ -2,6 +2,7 @@ package eris
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync/atomic"
 )
@@ -9,7 +10,8 @@ import (
 // CombinedCapabilityStore tries stores in order. Read and write operations
 // return the first successful result and stop on cancellation. Prefetch calls
 // every store. If all attempts fail, the chain returns the last error unless
-// cancellation stopped the attempts.
+// cancellation stopped the attempts. DecodeWithLimit preserves a size-limit
+// error if no store succeeds.
 //
 // Retry a failed write only while the caller's input is intact. Return the
 // failing store's error if it changes the input bytes or reads the stream.
@@ -124,9 +126,18 @@ func (s *CombinedCapabilityStore) Decode(ctx context.Context, capability Capabil
 }
 
 func (s *CombinedCapabilityStore) DecodeWithLimit(ctx context.Context, capability Capability, limit int64, options BlockOptions) ([]byte, error) {
-	return tryCapabilityStores(ctx, s.stores, nil, func(store CapabilityStore) ([]byte, error) {
-		return store.DecodeWithLimit(ctx, capability, limit, options)
+	var sizeErr error
+	data, err := tryCapabilityStores(ctx, s.stores, nil, func(store CapabilityStore) ([]byte, error) {
+		data, err := store.DecodeWithLimit(ctx, capability, limit, options)
+		if errors.Is(err, ErrDecodedTooLarge) {
+			sizeErr = err
+		}
+		return data, err
 	})
+	if err != nil && sizeErr != nil && ctx.Err() == nil {
+		return nil, sizeErr
+	}
+	return data, err
 }
 
 func (s *CombinedCapabilityStore) NewReader(ctx context.Context, capability Capability, options BlockOptions) (CapabilityReader, error) {

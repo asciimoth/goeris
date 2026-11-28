@@ -13,9 +13,18 @@ import (
 type Option func(*config)
 
 type config struct {
+	wrapBlocks   func(eris.BlockStore) eris.BlockStore
 	blocks       chainOptions[any]
 	capabilities chainOptions[eris.CapabilityStore]
 	images       chainOptions[fs.ImageStore]
+}
+
+// WrapBlocks installs middleware around the assembled block chain before Open
+// constructs the capability and image stores. The last wrapper wins. Pass nil
+// to clear it. The wrapper must return a non-nil store and forward calls that
+// it does not handle. Open retains ownership of the default volumes.
+func WrapBlocks(wrap func(eris.BlockStore) eris.BlockStore) Option {
+	return func(c *config) { c.wrapBlocks = wrap }
 }
 
 type chainOptions[T any] struct {

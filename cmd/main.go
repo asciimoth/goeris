@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/asciimoth/goeris"
+	"github.com/asciimoth/goeris/auto"
 	"github.com/asciimoth/zpgo"
+	"golang.org/x/term"
 )
 
 const globalUsage = `Usage: goeris [storage flags] COMMAND [options] [arguments]
@@ -18,6 +20,7 @@ const globalUsage = `Usage: goeris [storage flags] COMMAND [options] [arguments]
 Commands:
   block  Read, write, and manage blocks.
   cap    Encode, decode, and look up content by capability.
+  fs     Build, browse, and unpack ERIS-FS images.
   dump   Show environment settings and storage setup.
   help   Show this help. You can also use -h or --help.
 
@@ -47,12 +50,32 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+// commandProgress keeps standard streams available for command input and output.
+func commandProgress(opts zpgo.Options) (*zpgo.Progress, error) {
+	if descriptor, inherited := os.LookupEnv("ZIG_PROGRESS"); inherited {
+		// The binary progress protocol needs a separate pipe.
+		switch strings.TrimLeft(descriptor, "0") {
+		case "", "1", "2":
+			return &zpgo.Progress{}, nil
+		}
+	} else if os.Getenv("ZPG_NO_PROGRESS") != "1" && term.IsTerminal(int(os.Stderr.Fd())) {
+		opts.Renderer = &zpgo.RendererOptions{Writer: os.Stderr}
+	}
+	return zpgo.New(opts)
+}
+
 func run(args []string) (code int) {
 	command, paths, parseErr := parseCommand(args)
 	group, _, _ := strings.Cut(command.name, " ")
 	var progress *zpgo.Progress
 	var err error
 	switch {
+	case group == "fs":
+		// The REPL requests updates while a command runs. An automatic
+		// reporter would keep drawing over its input prompt.
+		progress, err = commandProgress(zpgo.Options{
+			RootName: command.name, InitialDelay: imageProgressInterval, Manual: command.image.op == "repl",
+		})
 	case command.name == "block get":
 		progress, err = blockProgress(len(command.hashes))
 	case group == "block" && command.name != "block", group == "cap":
@@ -90,7 +113,12 @@ func run(args []string) (code int) {
 		return 0
 	}
 
-	stores, err := paths.open()
+	var setup []auto.Option
+	if group == "fs" && progress.Enabled() {
+		command.image.meter = new(imageMeter)
+		setup = append(setup, auto.WrapBlocks(command.image.meter.wrap))
+	}
+	stores, err := paths.open(setup...)
 	if err != nil {
 		_, _ = progress.PrintfStderr("goeris: %v\n", err)
 		return 1
@@ -105,6 +133,8 @@ func run(args []string) (code int) {
 	}()
 
 	switch group {
+	case "fs":
+		err = command.image.run(progress, stores.Images, os.Stdin)
 	case "dump":
 		err = dump(progress, stores.DefaultSetup(), paths)
 	case "cap":
@@ -126,6 +156,7 @@ type commandOptions struct {
 	batchSize    int
 	blockOptions eris.BlockOptions
 	capability   capabilityOptions
+	image        imageOptions
 }
 
 // parseCommand reads common flags before and after each command name, up to
@@ -145,6 +176,9 @@ func parseCommand(args []string) (commandOptions, storageFlags, error) {
 		return command, paths, flag.ErrHelp
 	}
 	switch args[0] {
+	case "fs":
+		command, err := parseImageCommand(flags, args[1:])
+		return command, paths, err
 	case "block":
 		command, err := parseBlockCommand(flags, args[1:])
 		return command, paths, err

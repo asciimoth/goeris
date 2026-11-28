@@ -61,9 +61,9 @@ to give a custom builder priority.
 ### Command-line storage flags
 
 Run `goeris dump` to show the environment and the storage lookup order. Set
-storage flags before or after the command name. For `goeris block` and
-`goeris cap`, you can also set them between the command and the subcommand. Set
-all flags before block hashes or capability URNs.
+storage flags before or after the command name. For `goeris block`,
+`goeris cap`, and `goeris fs`, you can also set them between the command and the
+subcommand. Set all flags before positional arguments.
 
 | Chain             | Prepend                  | Append                  | Replace                  |
 | ----------------- | ------------------------ | ----------------------- | ------------------------ |
@@ -183,6 +183,74 @@ Use `goeris cap prefetch URN [URN...]` to send prefetch requests in argument
 order. The store can read internal nodes before it sends best-effort hints for
 the content blocks. Use `goeris cap resolve-path URN [URN...]` to print the
 absolute path to each decoded file on a mount, one per line.
+
+### Build and read ERIS-FS images
+
+`goeris fs build SOURCE` stores the image and prints its root capability URN.
+For a directory, its children appear at the image root. With `--preserve-root`,
+the root contains one child image with the source directory's name. A single
+file keeps its base name. Empty directories, executable flags, and symbolic link
+targets are part of the image. Use `--compression lzip` to compress all files or
+`--compression auto` to let the builder choose per file. The default is `none`.
+Use `--secret-file FILE` to supply a 32-byte convergence secret.
+
+```sh
+image=$(goeris fs build ./project)
+goeris fs ls "$image"
+goeris fs tree "$image" docs
+goeris fs stat "$image" docs/manual.txt
+goeris fs cat "$image" docs/manual.txt
+goeris fs decode "$image" docs/manual.txt ./manual-copy.txt
+goeris fs unpack "$image" ./project-copy
+```
+
+Each read command accepts either the root URN or an ERIS Magnet URI. Use
+`--index-limit BYTES` before the URI to bound the decoded size of each index. An
+expanded mount enforces its own limits and cannot take an explicit limit.
+
+Image paths are relative to the root. Use `.` for the root. The `ls` and `tree`
+commands read directory listings. They quote names with leading or trailing
+spaces, nonprinting characters, or an initial double quote. The `index` command
+requires access to the encoded index. It prints the root entries, including file
+capabilities and compression settings. It shows `size=unknown` for files in a
+version 1 index. For a nested image, pass its directory capability to `index` to
+see its entries.
+
+`decode` streams a single file to stdout when you omit the output path. Supply a
+new file path to save it. `unpack` requires a new directory path and checks each
+symbolic link before creating it. Both commands report an error if the transfer
+fails or the destination changes during the transfer. They try to remove the
+output they created.
+
+Use `goeris fs prefetch IMAGE [PATH]` to send best-effort hints for a file or
+subtree. Use `goeris fs resolve IMAGE [PATH]` when a backend can supply an
+absolute host path. For repeated reads, run `goeris fs repl IMAGE`. Enter one
+command per line, such as `cat docs/user guide.txt`. The rest of the line is the
+path. Enter quoted names as shown, including the double quotes and escapes. For
+example, `cat "line\nbreak"` reads a file with a newline in its name. Enter
+`help` to list commands and `quit` to close the image.
+
+The REPL starts at `/`, the root of the open image. The prompt shows the working
+directory, for example `/docs>`. Use `pwd` to print the working directory and
+`cd PATH` to change it. A path that starts with `/` uses the image root. Other
+paths start in the working directory. For example, after `cd /docs`,
+`cat ./guide.txt` reads `/docs/guide.txt` and `cat ../README` reads `/README`.
+Directory names in `pwd` keep the spelling used by `cd`, including symbolic link
+names. Each `..` removes one name. At the image root, `..` stays at `/`. Use
+`cd` with no argument to return to the image root.
+
+In the REPL, `ls` and `tree` print a type code before each name. The codes are
+`f` for a file, `d` for a directory, `l` for a symbolic link, and `x` for an
+executable. Mounted images can also show `p` for a pipe, `s` for a socket, `b`
+for a block device, and `c` for a character device. The code `u` means unknown.
+Use `stat PATH` for mode and size or `readlink PATH` for a symbolic link target.
+
+All image commands support the inherited Zig progress pipe or a local display on
+a stderr terminal. Transfers show the current file and KiB processed. Long
+operations show elapsed time and, for block-backed reads, completed block reads
+and issued hints. Expanded mounts provide progress at the file level. The REPL
+shows progress after a command runs for one second and clears the terminal
+display before each prompt.
 
 ## Packages
 
