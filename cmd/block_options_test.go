@@ -42,7 +42,7 @@ func TestBlockOptionCommandsWithVolume(t *testing.T) {
 		{"update without storage", []string{"update", "--replace-blocks=", hash}, 1, "", eris.ErrNoBlockStorage.Error()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			code, out, errout := runBlockCommand(t, nil, append([]string{"block", "--replace-blocks", root}, tc.args...)...)
+			code, out, errout := runCommand(t, nil, append([]string{"block", "--replace-blocks", root}, tc.args...)...)
 			if code != tc.code || out != tc.stdout || tc.stderr == "" && errout != "" || !strings.Contains(errout, tc.stderr) {
 				t.Fatalf("exit code = %d, stdout = %q, stderr = %q", code, out, errout)
 			}

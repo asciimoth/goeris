@@ -134,6 +134,27 @@ func TestRunOutputFailure(t *testing.T) {
 	}
 }
 
+// runCommand runs the CLI with temporary files for output and optional input.
+// Call it from serial tests because it replaces process streams.
+func runCommand(t *testing.T, input []byte, args ...string) (int, string, string) {
+	t.Helper()
+	stdout, stderr := captureOutput(t)
+	if input != nil {
+		stdin := createOutputFile(t, filepath.Join(t.TempDir(), "stdin"))
+		if _, err := stdin.Write(input); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := stdin.Seek(0, 0); err != nil {
+			t.Fatal(err)
+		}
+		original := os.Stdin
+		os.Stdin = stdin
+		defer func() { os.Stdin = original }()
+	}
+	code := run(args)
+	return code, readOutput(t, stdout), readOutput(t, stderr)
+}
+
 // captureOutput replaces the process streams for a serial test of run.
 func captureOutput(t *testing.T) (stdout, stderr *os.File) {
 	t.Helper()

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/asciimoth/goeris"
 	"github.com/asciimoth/zpgo"
@@ -16,6 +17,7 @@ const globalUsage = `Usage: goeris [storage flags] COMMAND [options] [arguments]
 
 Commands:
   block  Read, write, and manage blocks.
+  cap    Encode, decode, and look up content by capability.
   dump   Show environment settings and storage setup.
   help   Show this help. You can also use -h or --help.
 
@@ -47,12 +49,13 @@ func main() {
 
 func run(args []string) (code int) {
 	command, paths, parseErr := parseCommand(args)
+	group, _, _ := strings.Cut(command.name, " ")
 	var progress *zpgo.Progress
 	var err error
-	switch command.name {
-	case "block get":
+	switch {
+	case command.name == "block get":
 		progress, err = blockProgress(len(command.hashes))
-	case "block put", "block prefetch", "block check", "block update":
+	case group == "block" && command.name != "block", group == "cap":
 		progress = &zpgo.Progress{}
 	default:
 		progress, err = zpgo.NewAuto()
@@ -101,9 +104,12 @@ func run(args []string) (code int) {
 		}
 	}()
 
-	if command.name == "dump" {
+	switch group {
+	case "dump":
 		err = dump(progress, stores.DefaultSetup(), paths)
-	} else {
+	case "cap":
+		err = command.capability.run(progress, stores.Capabilities, os.Stdin)
+	case "block":
 		err = command.runBlock(progress, stores.Blocks, os.Stdin)
 	}
 	if err != nil {
@@ -119,6 +125,7 @@ type commandOptions struct {
 	hashes       []string
 	batchSize    int
 	blockOptions eris.BlockOptions
+	capability   capabilityOptions
 }
 
 // parseCommand reads common flags before and after each command name, up to
@@ -140,6 +147,9 @@ func parseCommand(args []string) (commandOptions, storageFlags, error) {
 	switch args[0] {
 	case "block":
 		command, err := parseBlockCommand(flags, args[1:])
+		return command, paths, err
+	case "cap":
+		command, err := parseCapCommand(flags, args[1:])
 		return command, paths, err
 	case "dump":
 		command = commandOptions{name: "dump", usage: dumpUsage}

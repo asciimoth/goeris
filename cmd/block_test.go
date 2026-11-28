@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -23,7 +22,7 @@ func TestBlockRoundTrip(t *testing.T) {
 			volume := t.TempDir()
 			data := blockTestData(size, byte(i))
 			hash := putTestBlock(t, data, "--replace-blocks", volume, "block", "put")
-			code, out, errout := runBlockCommand(t, nil, "block", "get", "--replace-blocks", volume, hash)
+			code, out, errout := runCommand(t, nil, "block", "get", "--replace-blocks", volume, hash)
 			if code != 0 || out != string(data) || errout != "" {
 				t.Fatalf("get exit code = %d, stdout = %d bytes (match: %t), stderr = %q",
 					code, len(out), out == string(data), errout)
@@ -42,7 +41,7 @@ func TestBlockGetMultiple(t *testing.T) {
 	hashB := putTestBlock(t, b, "block", "put", "--replace-blocks", second)
 	hashC := putTestBlock(t, c, "block", "put", "--replace-blocks", first)
 	want := string(a) + string(b) + string(c) + string(b)
-	code, out, errout := runBlockCommand(t, nil,
+	code, out, errout := runCommand(t, nil,
 		"block", "--replace-blocks="+first, "get", "--append-blocks="+second, "--batch-size=4", hashA, hashB, hashC, hashB)
 	if code != 0 || out != want || errout != "" {
 		t.Fatalf("get exit code = %d, stdout = %d bytes (match: %t), stderr = %q", code, len(out), out == want, errout)
@@ -54,7 +53,7 @@ func TestBlockPutInvalidSize(t *testing.T) {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("ERIS_BLOCK_PATH", root)
-			code, out, errout := runBlockCommand(t, make([]byte, size), "block", "put")
+			code, out, errout := runCommand(t, make([]byte, size), "block", "put")
 			if code != 1 || out != "" || !strings.Contains(errout, eris.ErrInvalidBlockSize.Error()) {
 				t.Errorf("put exit code = %d, stdout = %q, stderr = %q", code, out, errout)
 			}
@@ -67,7 +66,7 @@ func TestBlockPutInvalidSize(t *testing.T) {
 }
 
 func TestBlockPutStorageFailure(t *testing.T) {
-	code, out, errout := runBlockCommand(t, blockTestData(eris.BlockSize1KiB, 1),
+	code, out, errout := runCommand(t, blockTestData(eris.BlockSize1KiB, 1),
 		"block", "put", "--replace-blocks=")
 	if code != 1 || out != "" || !strings.Contains(errout, eris.ErrNoBlockStorage.Error()) {
 		t.Fatalf("put exit code = %d, stdout = %q, stderr = %q", code, out, errout)
@@ -80,7 +79,7 @@ func TestBlockGetMissing(t *testing.T) {
 	hashA := putTestBlock(t, first, "block", "put")
 	hashB := putTestBlock(t, blockTestData(eris.BlockSize32KiB, 2), "block", "put")
 	missing := eris.Reference{}.String()
-	code, out, errout := runBlockCommand(t, nil, "block", "get", hashA, missing, hashB)
+	code, out, errout := runCommand(t, nil, "block", "get", hashA, missing, hashB)
 	if code != 1 || out != string(first) || !strings.Contains(errout, missing) || !strings.Contains(errout, eris.ErrMissingBlock.Error()) {
 		t.Fatalf("get exit code = %d, stdout = %d bytes (match: %t), stderr = %q", code, len(out), out == string(first), errout)
 	}
@@ -120,7 +119,7 @@ func TestBlockArguments(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ERIS_BLOCK_PATH", ";")
-			code, out, errout := runBlockCommand(t, nil, tc.args...)
+			code, out, errout := runCommand(t, nil, tc.args...)
 			if code != tc.code || out != tc.stdout || tc.stderr == "" && errout != "" || !strings.Contains(errout, tc.stderr) {
 				t.Fatalf("exit code = %d, stdout = %q, stderr = %q", code, out, errout)
 			}
@@ -222,31 +221,11 @@ func putTestBlock(t *testing.T, data []byte, args ...string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, out, errout := runBlockCommand(t, data, args...)
+	code, out, errout := runCommand(t, data, args...)
 	if code != 0 || out != ref.String()+"\n" || errout != "" {
 		t.Fatalf("put exit code = %d, stdout = %q, stderr = %q, want hash %s", code, out, errout, ref)
 	}
 	return strings.TrimSuffix(out, "\n")
-}
-
-// runBlockCommand replaces the process streams for a serial CLI test.
-func runBlockCommand(t *testing.T, input []byte, args ...string) (int, string, string) {
-	t.Helper()
-	stdout, stderr := captureOutput(t)
-	if input != nil {
-		stdin := createOutputFile(t, filepath.Join(t.TempDir(), "stdin"))
-		if _, err := stdin.Write(input); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := stdin.Seek(0, 0); err != nil {
-			t.Fatal(err)
-		}
-		original := os.Stdin
-		os.Stdin = stdin
-		defer func() { os.Stdin = original }()
-	}
-	code := run(args)
-	return code, readOutput(t, stdout), readOutput(t, stderr)
 }
 
 // recordingBlockSource records requests while using BlockSet's batch behavior.

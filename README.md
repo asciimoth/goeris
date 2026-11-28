@@ -61,9 +61,9 @@ to give a custom builder priority.
 ### Command-line storage flags
 
 Run `goeris dump` to show the environment and the storage lookup order. Set
-storage flags before or after the command name. For `goeris block`, you can also
-set them between `block` and the subcommand name. Set all flags before any block
-hashes.
+storage flags before or after the command name. For `goeris block` and
+`goeris cap`, you can also set them between the command and the subcommand. Set
+all flags before block hashes or capability URNs.
 
 | Chain             | Prepend                  | Append                  | Replace                  |
 | ----------------- | ------------------------ | ----------------------- | ------------------------ |
@@ -148,6 +148,41 @@ goeris block prefetch --high-priority "$hash"
 goeris block check "$hash"
 goeris block update --root --high-priority=false "$hash"
 ```
+
+### Encode and decode content
+
+Use `goeris cap encode` to read a byte stream from stdin, store its ERIS blocks,
+and print one canonical capability URN. Pass that URN to `goeris cap decode` to
+write the original bytes to stdout. Decode accepts one URN per invocation. It
+uses the configured capability chain, which can read from block volumes or
+mounts. If a read fails during decoding, stdout can contain part of the content.
+
+```sh
+urn=$(goeris cap encode --replace-blocks /var/eris < input.bin)
+goeris cap decode --replace-blocks /var/eris "$urn" > restored.bin
+```
+
+Encode selects 1024-byte blocks for input shorter than 16 KiB and 32768-byte
+blocks for input of 16 KiB or more. Use `--block-size 1024` or
+`--block-size 32768` to select a size. Use `--secret-file PATH` to supply a
+32-byte convergence secret. Encode uses the null secret by default. The URN and
+stored blocks are sufficient to decode the content.
+
+Encode marks the capability's root block by default. Use `--root=true` or
+`--root=false` to pass that value for every block write. Encode, decode, and
+prefetch accept `--high-priority` to request priority handling.
+
+Use `goeris cap decode --limit N URN` to set a maximum decoded size in bytes.
+Use `--size N` to supply a known decoded size. If you set both, the size must
+fit within the limit. Decode and prefetch accept `--ttl N` to set the network
+forwarding budget. Use the default TTL with `--size`. Directory and CBOR volumes
+ignore block options and TTL. If every backend fails to open content, decode
+reports the error from the last backend it tried.
+
+Use `goeris cap prefetch URN [URN...]` to send prefetch requests in argument
+order. The store can read internal nodes before it sends best-effort hints for
+the content blocks. Use `goeris cap resolve-path URN [URN...]` to print the
+absolute path to each decoded file on a mount, one per line.
 
 ## Packages
 
